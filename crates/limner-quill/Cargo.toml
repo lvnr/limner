@@ -1,0 +1,23 @@
+[package]
+name = "limner-quill"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+# Exposes helpers that build small Quill projects for tests.
+testing = []
+
+[dependencies]
+bytemuck = "1.25.2"
+limner-core = { version = "0.1.0", path = "../limner-core" }
+memmap2 = "0.9.11"
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+limner-quill = { path = ".", features = ["testing"] }
+bytemuck = "1.25.2"
+tempfile = "3.27.0"

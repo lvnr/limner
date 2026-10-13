@@ -1,0 +1,12 @@
+[package]
+name = "limner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+limner-core = { version = "0.1.0", path = "../limner-core" }
+limner-quill = { version = "0.1.0", path = "../limner-quill" }
+thiserror = "2.0.21"
