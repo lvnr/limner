@@ -123,7 +123,7 @@ impl MeshCache {
     /// Drops meshes whose chunk no longer exists anywhere else, and the least recently
     /// used ones when the cache is over budget.
     pub fn end_frame(&mut self) {
-        if self.frame % 120 != 0 {
+        if !self.frame.is_multiple_of(120) {
             return;
         }
         let frame = self.frame;

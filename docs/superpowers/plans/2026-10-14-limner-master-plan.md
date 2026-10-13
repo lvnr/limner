@@ -71,24 +71,24 @@ scripts/{fetch-godot.sh,fetch-godot.ps1,godot.sh,shot.sh,build.sh,test.sh,export
 
 ## M0: Foundations
 
-- [ ] **0.1 Workspace and core scaffolding.** Crates `limner-core`, `limner-quill`, `limner`, `limner-cli` created; `time.rs`, `model/ids.rs`. Test: `cargo test -p limner-core time` (flick conversions exact for 12, 24, 25, 30, 60, 90 fps and Quill ticks).
-- [ ] **0.2 `Xform`.** `math/xform.rs` with `IDENTITY`, `transform_point`, `transform_vector`, `to_affine`, `from_affine`, `mul`, `inverse`, `interpolate`, `interpolate_about_pivot`. Tests: random transforms with every flip agree with `DAffine3` composition and inversion to 1e-9; `interpolate` takes the shortest arc; flip comes from the earlier key.
-- [ ] **0.3 Document model.** `model/*`: `Document`, `Layer`, `LayerKind`, `LayerAnim`, `Key<T>`, `Interp`, `Drawing` rope with `push_stroke`, `stroke_mut`, `retain_strokes`, `strokes()`, chunk splitting at 60,000 expanded vertices, `Stroke`, `Point` (56 bytes, `bytemuck::Pod`), `Brush`, bounds. Tests: rope invariants; clone is shallow (`Arc::ptr_eq`); editing one stroke leaves other chunks pointer-equal.
-- [ ] **0.4 Quill importer.** `limner-quill`: `import_project(dir) -> Result<Imported, ImportError>` with `Imported { document, state, warnings }`. Covers Group, Sequence, Paint, Viewpoint, Camera layers, all key channels, string or numeric times, hex offsets, shared drawings, 16-float transforms, single-drawing paint layers. Picture, Model and Sound layers are imported as layers with raw media records in this task and decoded in M2. Tests: a synthetic project written by test support code; local test on the sample: 94 layers (37 Group, 55 Paint, 1 Viewpoint, 1 Camera), 70 drawings, 2,198 strokes, 82,524 points.
-- [ ] **0.5 CLI inspect.** `limner inspect <dir> [--json]` prints the layer tree, counts and warnings. Test: snapshot of the synthetic project's output.
-- [ ] **0.6 Hierarchy parity.** `Document::world_from_layer(id) -> DAffine3`. Local test: baked points of every paint layer of the sample match Quill's Alembic export within 1e-5 (`scripts/verify/alembic_points.py` extracts the reference).
+- [x] **0.1 Workspace and core scaffolding.** Crates `limner-core`, `limner-quill`, `limner`, `limner-cli` created; `time.rs`, `model/ids.rs`. Test: `cargo test -p limner-core time` (flick conversions exact for 12, 24, 25, 30, 60, 90 fps and Quill ticks).
+- [x] **0.2 `Xform`.** `math/xform.rs` with `IDENTITY`, `transform_point`, `transform_vector`, `to_affine`, `from_affine`, `mul`, `inverse`, `interpolate`, `interpolate_about_pivot`. Tests: random transforms with every flip agree with `DAffine3` composition and inversion to 1e-9; `interpolate` takes the shortest arc; flip comes from the earlier key.
+- [x] **0.3 Document model.** `model/*`: `Document`, `Layer`, `LayerKind`, `LayerAnim`, `Key<T>`, `Interp`, `Drawing` rope with `push_stroke`, `stroke_mut`, `retain_strokes`, `strokes()`, chunk splitting at 60,000 expanded vertices, `Stroke`, `Point` (56 bytes, `bytemuck::Pod`), `Brush`, bounds. Tests: rope invariants; clone is shallow (`Arc::ptr_eq`); editing one stroke leaves other chunks pointer-equal.
+- [x] **0.4 Quill importer.** `limner-quill`: `import_project(dir) -> Result<Imported, ImportError>` with `Imported { document, state, warnings }`. Covers Group, Sequence, Paint, Viewpoint, Camera layers, all key channels, string or numeric times, hex offsets, shared drawings, 16-float transforms, single-drawing paint layers. Picture, Model and Sound layers are imported as layers with raw media records in this task and decoded in M2. Tests: a synthetic project written by test support code; local test on the sample: 94 layers (37 Group, 55 Paint, 1 Viewpoint, 1 Camera), 70 drawings, 2,198 strokes, 82,524 points.
+- [x] **0.5 CLI inspect.** `limner inspect <dir> [--json]` prints the layer tree, counts and warnings. Test: snapshot of the synthetic project's output.
+- [x] **0.6 Hierarchy parity.** `Document::world_from_layer(id) -> DAffine3`. Local test: baked points of every paint layer of the sample match Quill's Alembic export within 1e-5 (`scripts/verify/alembic_points.py` extracts the reference).
 
 ## M1: Desktop viewer
 
-- [ ] **1.1 Tessellation.** `tess`: `tessellate_chunk(&StrokeChunk, ...) -> ChunkMesh` with four surfaces, chunk-centre-relative positions, normals, sRGB8 colour + opacity, `CUSTOM0` direction + seed. Tests: vertex counts 2/7/7/4 per point; ring radii and ellipse axes; zero-width ends; local parity with Alembic ring geometry.
-- [ ] **1.2 Evaluation skeleton.** `eval`: `evaluate(&Document, time, &view) -> RenderFrame` with static visibility, opacity and transforms (animation arrives in M2).
-- [ ] **1.3 Bridge.** `LimnerScene` node: `import_quill(path)`, `set_view/get_view`, per-frame reconcile of layer nodes and chunk meshes from the `RenderFrame`; mesh cache keyed by chunk pointer.
-- [ ] **1.4 Stroke shaders.** Opaque and see-through variants, cull back and cull disabled, blue-noise dither texture generated by `scripts/gen_blue_noise.py`, per-instance layer opacity and seed, directional opacity.
-- [ ] **1.5 Desktop shell.** Window, environment (background colour from the document), orbit/pan/zoom navigation that edits the view, open dialog, status bar. Screenshot test of the sample from three views.
+- [x] **1.1 Tessellation.** `tess`: `tessellate_chunk(&StrokeChunk, ...) -> ChunkMesh` with four surfaces, chunk-centre-relative positions, normals, sRGB8 colour + opacity, `CUSTOM0` direction + seed. Tests: vertex counts 2/7/7/4 per point; ring radii and ellipse axes; zero-width ends; local parity with Alembic ring geometry.
+- [x] **1.2 Evaluation skeleton.** `eval`: `evaluate(&Document, time, &view) -> RenderFrame` with static visibility, opacity and transforms (animation arrives in M2).
+- [x] **1.3 Bridge.** `LimnerScene` node: `import_quill(path)`, `set_view/get_view`, per-frame reconcile of layer nodes and chunk meshes from the `RenderFrame`; mesh cache keyed by chunk pointer.
+- [x] **1.4 Stroke shaders.** Opaque and see-through variants, cull back and cull disabled, blue-noise dither texture generated by `scripts/gen_blue_noise.py`, per-instance layer opacity and seed, directional opacity.
+- [x] **1.5 Desktop shell.** Window, environment (background colour from the document), orbit/pan/zoom navigation that edits the view, open dialog, status bar. Screenshot test of the sample from three views.
 
 ## M2: Player
 
-- [ ] **2.1 Timeline evaluation.** Clips, offsets, sequences with loop points, paint frames with repeat rules, key interpolation about the pivot, action keys. Unit tests for each rule with hand-computed cases.
+- [x] **2.1 Timeline evaluation.** Clips, offsets, sequences with loop points, paint frames with repeat rules, key interpolation about the pivot, action keys. Unit tests for each rule with hand-computed cases.
 - [ ] **2.2 Playback.** `session/playback.rs`: play, stop, seek, step, range, loop; frame-accurate clock in flicks.
 - [ ] **2.3 Pictures, models, sounds from Quill.** Decode qbin records; media table; Godot nodes for flat, 360 and cubemap pictures, model meshes, positional and flat sounds with attenuation and cone/frustum modifiers.
 - [ ] **2.4 Spawn areas and cameras.** Gizmos, jump to spawn area, camera preview.
