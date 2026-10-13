@@ -1,50 +1,216 @@
 //! An editing session: a document plus everything about working on it that is not
-//! part of the document itself (the view, the playhead, the tool in hand).
+//! part of the document itself (the view, the playhead, the tool in hand, undo).
+//!
+//! The session is the one place edits happen. Interfaces send it [`Command`]s and
+//! controller input, and ask it what to show.
 
+mod command;
+mod history;
+mod options;
+mod playback;
+mod props;
+mod query;
+pub mod tools;
 mod view;
 
+pub use command::{Command, CommandError, SelectMode};
+pub use history::History;
+pub use options::{AutoSelect, Options};
+pub use playback::{Playback, PlaybackEvent};
+pub use props::{apply_kind_patch, kind_props};
 pub use view::{View, DEFAULT_ZOOM_LIMITS};
 
 use crate::eval::{evaluate, Clock, RenderFrame};
-use crate::math::Aabb;
-use crate::model::{Document, LayerKind};
+use crate::json::patched;
+use crate::math::{Aabb, Xform};
+use crate::model::{Document, LayerId, LayerKind, PALETTE_SIZE};
+use crate::ops::layers::{self, NewLayerKind};
+use crate::time::Flicks;
 use glam::DVec3;
+use serde_json::{json, Value};
+use tools::ToolSettings;
+
+/// An edit in progress that spans several commands or frames of input, such as
+/// dragging a slider. It becomes one undo step.
+struct Transaction {
+    before: Document,
+    revision: u64,
+    label: String,
+    depth: u32,
+}
 
 pub struct Session {
     doc: Document,
+    history: History,
     pub view: View,
-    pub clock: Clock,
+    pub playback: Playback,
+    pub tools: ToolSettings,
+    pub options: Options,
+    /// Rows selected in the layer list; the last one is the current layer.
+    selected_layers: Vec<LayerId>,
+    /// The layer the painting tools draw into.
+    paint_layer: Option<LayerId>,
+    /// What grabbing moves; `None` is the view.
+    transform_target: Option<LayerId>,
+    /// Counts changes to the document, for interfaces that redraw on change.
+    doc_revision: u64,
+    /// Counts changes to everything else an interface shows.
+    state_revision: u64,
+    saved_revision: u64,
+    transaction: Option<Transaction>,
 }
 
 impl Session {
     pub fn new(doc: Document) -> Self {
         let mut session = Self {
             doc,
+            history: History::default(),
             view: View::default(),
-            clock: Clock::default(),
+            playback: Playback::default(),
+            tools: ToolSettings::default(),
+            options: Options::default(),
+            selected_layers: Vec::new(),
+            paint_layer: None,
+            transform_target: None,
+            doc_revision: 1,
+            state_revision: 1,
+            saved_revision: 1,
+            transaction: None,
         };
         session.go_to_default_viewpoint();
+        session.adopt_document();
         session
+    }
+
+    /// Replaces the document, as when opening a file. History and selection start over.
+    pub fn replace_document(&mut self, doc: Document) {
+        self.doc = doc;
+        self.history.clear();
+        self.transaction = None;
+        self.playback = Playback::default();
+        self.selected_layers.clear();
+        self.paint_layer = None;
+        self.transform_target = None;
+        self.doc_revision += 1;
+        self.saved_revision = self.doc_revision;
+        self.state_revision += 1;
+        self.view = View::default();
+        self.go_to_default_viewpoint();
+        self.adopt_document();
+    }
+
+    fn adopt_document(&mut self) {
+        self.paint_layer = self.first_paint_layer();
+        self.selected_layers = self.paint_layer.into_iter().collect();
+    }
+
+    fn first_paint_layer(&self) -> Option<LayerId> {
+        self.doc
+            .walk()
+            .into_iter()
+            .find(|id| self.doc.layer(*id).is_some_and(|l| l.as_paint().is_some()))
     }
 
     pub fn doc(&self) -> &Document {
         &self.doc
     }
 
-    /// Evaluates the document at the session's clock.
+    /// The document for editing. Every access counts as a change.
+    fn doc_mut(&mut self) -> &mut Document {
+        self.doc_revision += 1;
+        &mut self.doc
+    }
+
+    pub fn history(&self) -> &History {
+        &self.history
+    }
+
+    pub fn doc_revision(&self) -> u64 {
+        self.doc_revision
+    }
+
+    pub fn state_revision(&self) -> u64 {
+        self.state_revision
+    }
+
+    fn touch_state(&mut self) {
+        self.state_revision += 1;
+    }
+
+    /// True when the document has changed since it was last saved or opened.
+    pub fn is_dirty(&self) -> bool {
+        self.doc_revision != self.saved_revision
+    }
+
+    pub fn mark_saved(&mut self) {
+        self.saved_revision = self.doc_revision;
+        self.touch_state();
+    }
+
+    pub fn clock(&self) -> Clock {
+        self.playback.clock()
+    }
+
+    /// Evaluates the document at the playhead.
     pub fn evaluate(&self) -> RenderFrame {
-        evaluate(&self.doc, self.clock)
+        evaluate(&self.doc, self.clock())
+    }
+
+    pub fn selected_layers(&self) -> &[LayerId] {
+        &self.selected_layers
+    }
+
+    /// The row last selected in the layer list.
+    pub fn current_layer(&self) -> Option<LayerId> {
+        self.selected_layers.last().copied()
+    }
+
+    pub fn paint_layer(&self) -> Option<LayerId> {
+        self.paint_layer
+    }
+
+    pub fn transform_target(&self) -> Option<LayerId> {
+        self.transform_target
+    }
+
+    /// Makes `id` the current layer, and the paint layer if it can be painted on.
+    pub fn set_current_layer(&mut self, id: LayerId) {
+        if self.doc.layer(id).is_none() {
+            return;
+        }
+        self.selected_layers = vec![id];
+        if self.doc.layer(id).is_some_and(|l| l.as_paint().is_some()) {
+            self.paint_layer = Some(id);
+        }
+        self.touch_state();
+    }
+
+    /// Advances playback by `seconds` of real time.
+    pub fn advance(&mut self, seconds: f64) -> Option<PlaybackEvent> {
+        let before = (self.playback.playing, self.playback.is_waiting());
+        let event = self
+            .playback
+            .advance(&self.doc, seconds, self.options.loop_range);
+        if before != (self.playback.playing, self.playback.is_waiting()) {
+            self.touch_state();
+        }
+        event
     }
 
     /// Stands the viewer on the document's default spawn area, if it has one.
     pub fn go_to_default_viewpoint(&mut self) {
         if let Some(id) = self.doc.settings.default_viewpoint {
-            let mut placement = self.doc.world_xform(id);
-            // A spawn area places and scales the viewer; a mirrored viewer makes no sense.
-            placement.flip = crate::math::Flip::None;
-            if placement.is_finite() && placement.scale > 0.0 {
-                self.view.world_from_viewer = placement;
-            }
+            self.go_to_viewpoint(id);
+        }
+    }
+
+    /// Stands the viewer on a spawn area (or at any layer's origin).
+    pub fn go_to_viewpoint(&mut self, id: LayerId) {
+        let mut placement = self.evaluate().world_xform(&self.doc, id);
+        // A spawn area places and scales the viewer; a mirrored viewer makes no sense.
+        placement.flip = crate::math::Flip::None;
+        if placement.is_finite() && placement.scale > 0.0 {
+            self.view.world_from_viewer = placement;
         }
     }
 
@@ -71,58 +237,743 @@ impl Session {
         }
         (min.x <= max.x).then(|| ((min + max) * 0.5, ((max - min).length() * 0.5).max(1e-9)))
     }
+
+    // ---- transactions and history ----
+
+    /// Starts an edit that spans several commands, such as a slider drag. Everything
+    /// until the matching [`Session::commit_transaction`] becomes one undo step.
+    pub fn begin_transaction(&mut self, label: impl Into<String>) {
+        match &mut self.transaction {
+            Some(transaction) => transaction.depth += 1,
+            None => {
+                self.transaction = Some(Transaction {
+                    before: self.doc.clone(),
+                    revision: self.doc_revision,
+                    label: label.into(),
+                    depth: 1,
+                })
+            }
+        }
+    }
+
+    pub fn commit_transaction(&mut self) {
+        let Some(transaction) = &mut self.transaction else {
+            return;
+        };
+        transaction.depth -= 1;
+        if transaction.depth > 0 {
+            return;
+        }
+        let transaction = self.transaction.take().expect("checked above");
+        if transaction.revision != self.doc_revision {
+            self.history.record(transaction.before, transaction.label);
+            self.touch_state();
+        }
+    }
+
+    /// Abandons the edit in progress and puts the document back as it was.
+    pub fn cancel_transaction(&mut self) {
+        if let Some(transaction) = self.transaction.take() {
+            if transaction.revision != self.doc_revision {
+                self.doc = transaction.before;
+                self.doc_revision += 1;
+                self.after_document_change();
+            }
+        }
+    }
+
+    pub fn in_transaction(&self) -> bool {
+        self.transaction.is_some()
+    }
+
+    /// Runs an edit on the document as one undo step. If the edit fails the document
+    /// is left as it was.
+    pub(crate) fn edit<T>(
+        &mut self,
+        label: &str,
+        edit: impl FnOnce(&mut Session) -> Result<T, CommandError>,
+    ) -> Result<T, CommandError> {
+        let before = self.doc.clone();
+        let revision = self.doc_revision;
+        match edit(self) {
+            Ok(value) => {
+                if self.doc_revision != revision {
+                    if self.transaction.is_none() {
+                        self.history.record(before, label);
+                    }
+                    self.after_document_change();
+                }
+                Ok(value)
+            }
+            Err(error) => {
+                if self.doc_revision != revision {
+                    self.doc = before;
+                    self.doc_revision += 1;
+                    self.after_document_change();
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Drops references to layers that no longer exist, after any change to the tree.
+    fn after_document_change(&mut self) {
+        let doc = &self.doc;
+        self.selected_layers.retain(|id| doc.layer(*id).is_some());
+        if self
+            .transform_target
+            .is_some_and(|id| doc.layer(id).is_none())
+        {
+            self.transform_target = None;
+        }
+        if self
+            .paint_layer
+            .is_none_or(|id| doc.layer(id).is_none_or(|l| l.as_paint().is_none()))
+        {
+            self.paint_layer = self
+                .selected_layers
+                .iter()
+                .rev()
+                .copied()
+                .find(|id| doc.layer(*id).is_some_and(|l| l.as_paint().is_some()))
+                .or_else(|| self.first_paint_layer());
+        }
+        self.touch_state();
+        debug_assert_eq!(self.doc.validate(), Ok(()));
+    }
+
+    pub fn undo(&mut self) -> Option<String> {
+        if self.transaction.is_some() {
+            return None;
+        }
+        let (doc, label) = self.history.undo(&self.doc)?;
+        self.doc = doc;
+        self.doc_revision += 1;
+        self.after_document_change();
+        Some(label)
+    }
+
+    pub fn redo(&mut self) -> Option<String> {
+        if self.transaction.is_some() {
+            return None;
+        }
+        let (doc, label) = self.history.redo(&self.doc)?;
+        self.doc = doc;
+        self.doc_revision += 1;
+        self.after_document_change();
+        Some(label)
+    }
+
+    // ---- commands ----
+
+    /// Runs a command given as JSON. See [`Command`] for the vocabulary.
+    pub fn exec_json(&mut self, command: &Value) -> Result<Value, CommandError> {
+        let command: Command = serde_json::from_value(command.clone())
+            .map_err(|e| CommandError::Malformed(e.to_string()))?;
+        self.exec(command)
+    }
+
+    pub fn exec(&mut self, command: Command) -> Result<Value, CommandError> {
+        let Some(label) = command.label() else {
+            return self.run_state_command(command);
+        };
+        if command.is_cosmetic() {
+            // Saved with the document, but not worth an undo step.
+            let before = self.doc.clone();
+            let result = self.run_edit(command);
+            if result.is_err() {
+                self.doc = before;
+            }
+            self.after_document_change();
+            return result;
+        }
+        self.edit(label, |session| session.run_edit(command))
+    }
+
+    /// The time at which a key for `layer` would be written now: the playhead in the
+    /// layer's own time base, on a frame boundary when snapping is on.
+    pub fn key_time(&self, layer: LayerId) -> Flicks {
+        let frame = self.evaluate();
+        let time = frame
+            .get(layer)
+            .map_or(self.playback.time, |s| s.timeline_time);
+        if self.options.snap_to_frames {
+            self.doc.settings.rate.snap_floor(time)
+        } else {
+            time
+        }
+    }
+
+    fn require_unlocked(&self, id: LayerId) -> Result<(), CommandError> {
+        let layer = self
+            .doc
+            .layer(id)
+            .ok_or(crate::ops::OpError::NoSuchLayer(id))?;
+        if layer.locked {
+            return Err(CommandError::Locked(layer.name.clone()));
+        }
+        Ok(())
+    }
+
+    /// Moves a layer: writes a key at the playhead when the layer's transform is
+    /// animated or recording is on, and the resting transform otherwise.
+    pub(crate) fn write_transform(
+        &mut self,
+        id: LayerId,
+        value: Xform,
+    ) -> Result<(), CommandError> {
+        if !(value.is_finite() && value.scale > 0.0) {
+            return Err(CommandError::invalid("the transform is not usable"));
+        }
+        let time = self.key_time(id);
+        let (recording, interp) = (self.options.recording, self.options.default_interp);
+        let layer = self
+            .doc_mut()
+            .layer_mut(id)
+            .ok_or(crate::ops::OpError::NoSuchLayer(id))?;
+        let mut value = value;
+        value.rotation = value.rotation.normalize();
+        if !layer.anim.transform.is_empty() || recording {
+            let interp = layer.anim.transform.get(time).map_or(interp, |k| k.interp);
+            layer.anim.transform.set(time, value, interp);
+        }
+        layer.transform = value;
+        Ok(())
+    }
+
+    /// Sets a layer's opacity, as a key when it is animated or recording is on.
+    pub(crate) fn write_opacity(&mut self, id: LayerId, value: f32) -> Result<(), CommandError> {
+        if !value.is_finite() {
+            return Err(CommandError::invalid("the opacity is not a number"));
+        }
+        let value = value.clamp(0.0, 1.0);
+        let time = self.key_time(id);
+        let (recording, interp) = (self.options.recording, self.options.default_interp);
+        let layer = self
+            .doc_mut()
+            .layer_mut(id)
+            .ok_or(crate::ops::OpError::NoSuchLayer(id))?;
+        if !layer.anim.opacity.is_empty() || recording {
+            let interp = layer.anim.opacity.get(time).map_or(interp, |k| k.interp);
+            layer.anim.opacity.set(time, value, interp);
+        }
+        layer.opacity = value;
+        Ok(())
+    }
+
+    /// Where a new layer goes when the command does not say: inside the current
+    /// layer when that is an open group, otherwise right after it.
+    fn default_insertion_point(&self) -> (LayerId, usize) {
+        let root = self.doc.root();
+        match self.current_layer().and_then(|id| self.doc.layer(id)) {
+            Some(layer) if layer.as_group().is_some() && (!layer.collapsed || layer.id == root) => {
+                (layer.id, 0)
+            }
+            Some(layer) => match layer.parent {
+                Some(parent) => (
+                    parent,
+                    self.doc
+                        .index_in_parent(layer.id)
+                        .map_or(usize::MAX, |i| i + 1),
+                ),
+                None => (root, 0),
+            },
+            None => (root, usize::MAX),
+        }
+    }
+
+    /// Moves a layer under another parent without moving it in the world.
+    fn reparent(&mut self, id: LayerId, parent: LayerId, index: usize) -> Result<(), CommandError> {
+        let old_parent = self
+            .doc
+            .parent_of(id)
+            .ok_or(crate::ops::OpError::NoSuchLayer(id))?;
+        let frame = self.evaluate();
+        self.doc_mut().move_layer(id, parent, index)?;
+        self.keep_placement(&frame, id, old_parent)
+    }
+
+    /// After `id` moved from `old_parent` to wherever it is now, adjusts its transform
+    /// so that it stays where it was in the world.
+    fn keep_placement(
+        &mut self,
+        frame: &RenderFrame,
+        id: LayerId,
+        old_parent: LayerId,
+    ) -> Result<(), CommandError> {
+        let new_parent = self
+            .doc
+            .parent_of(id)
+            .ok_or(crate::ops::OpError::NoSuchLayer(id))?;
+        if new_parent == old_parent {
+            return Ok(());
+        }
+        let delta = frame
+            .world_xform(&self.doc, new_parent)
+            .inverse()
+            .mul(&frame.world_xform(&self.doc, old_parent));
+        if delta.is_finite() && !delta.is_identity() {
+            layers::rebase_transform(self.doc_mut(), id, &delta)?;
+        }
+        Ok(())
+    }
+
+    fn run_edit(&mut self, command: Command) -> Result<Value, CommandError> {
+        let no_layer = |id: LayerId| CommandError::from(crate::ops::OpError::NoSuchLayer(id));
+        match command {
+            Command::SetDocument {
+                title,
+                description,
+                background,
+                rate,
+                range_start,
+                range_end,
+                camera_resolution,
+            } => {
+                if rate.is_some_and(|r| !r.is_valid() || r.as_f64() > 480.0 || r.as_f64() < 1.0) {
+                    return Err(CommandError::invalid(
+                        "the frame rate must be between 1 and 480 frames per second",
+                    ));
+                }
+                if background.is_some_and(|c| c.iter().any(|v| !v.is_finite() || *v < 0.0)) {
+                    return Err(CommandError::invalid("the background colour is not usable"));
+                }
+                if camera_resolution.is_some_and(|r| r.iter().any(|v| !(16..=16384).contains(v))) {
+                    return Err(CommandError::invalid(
+                        "the camera resolution must be between 16 and 16384 pixels each way",
+                    ));
+                }
+                let start = range_start.unwrap_or(self.doc.settings.range_start);
+                let end = range_end.unwrap_or(self.doc.settings.range_end);
+                if start < 0 || end <= start {
+                    return Err(CommandError::invalid(
+                        "the range must start at or after zero and end after it starts",
+                    ));
+                }
+                let doc = self.doc_mut();
+                let settings = &mut doc.settings;
+                if let Some(title) = title {
+                    settings.title = title;
+                }
+                if let Some(description) = description {
+                    settings.description = description;
+                }
+                if let Some(background) = background {
+                    settings.background = background;
+                }
+                if let Some(resolution) = camera_resolution {
+                    settings.camera_resolution = resolution;
+                }
+                settings.range_start = start;
+                settings.range_end = end;
+                if let Some(rate) = rate {
+                    // One frame rate for the whole document: every paint layer follows it.
+                    settings.rate = rate;
+                    for id in doc.walk() {
+                        if let Some(paint) = doc.layer(id).and_then(|l| l.as_paint()) {
+                            if paint.rate != rate {
+                                doc.layer_mut(id)
+                                    .and_then(|l| l.as_paint_mut())
+                                    .expect("checked above")
+                                    .rate = rate;
+                            }
+                        }
+                    }
+                }
+                Ok(Value::Null)
+            }
+            Command::SetDefaultViewpoint { layer } => {
+                if let Some(id) = layer {
+                    if !matches!(
+                        self.doc.layer(id).ok_or_else(|| no_layer(id))?.kind,
+                        LayerKind::Viewpoint(_)
+                    ) {
+                        return Err(CommandError::invalid(
+                            "only a spawn area can be the initial spawn area",
+                        ));
+                    }
+                }
+                self.doc_mut().settings.default_viewpoint = layer;
+                Ok(Value::Null)
+            }
+            Command::SetPaletteColor { index, color } => {
+                if index >= PALETTE_SIZE || color.iter().any(|v| !v.is_finite() || *v < 0.0) {
+                    return Err(CommandError::invalid(
+                        "there is no such palette slot, or the colour is not usable",
+                    ));
+                }
+                let palette = &mut self.doc_mut().settings.palette;
+                palette.resize(PALETTE_SIZE, [0.82, 0.82, 0.82]);
+                palette[index] = color;
+                Ok(Value::Null)
+            }
+            Command::AddLayer {
+                kind,
+                parent,
+                index,
+                name,
+            } => {
+                let (parent, index) = match parent {
+                    Some(parent) => (parent, index.unwrap_or(usize::MAX)),
+                    None => self.default_insertion_point(),
+                };
+                let clip_start = if self.options.create_layers_at_playhead {
+                    self.doc
+                        .settings
+                        .rate
+                        .snap_floor(self.evaluate().child_time(&self.doc, parent))
+                        .max(0)
+                } else {
+                    0
+                };
+                let id = layers::add_layer(
+                    self.doc_mut(),
+                    kind,
+                    parent,
+                    index,
+                    name.as_deref(),
+                    clip_start,
+                )?;
+                if kind == NewLayerKind::Viewpoint && self.doc.settings.default_viewpoint.is_none()
+                {
+                    self.doc_mut().settings.default_viewpoint = Some(id);
+                }
+                self.set_current_layer(id);
+                Ok(json!({ "layer": id }))
+            }
+            Command::DeleteLayers { layers: ids } => {
+                let mut successor = None;
+                for id in ids {
+                    if self.doc.layer(id).is_none() {
+                        continue; // Already gone with a parent deleted earlier in the list.
+                    }
+                    for member in self.doc.subtree(id) {
+                        self.require_unlocked(member)?;
+                    }
+                    let parent = self
+                        .doc
+                        .parent_of(id)
+                        .ok_or(crate::model::DocumentError::RootIsFixed)?;
+                    let index = self.doc.index_in_parent(id).unwrap_or(0);
+                    layers::delete_layer(self.doc_mut(), id)?;
+                    let siblings = self.doc.children(parent);
+                    successor = Some(
+                        siblings
+                            .get(index)
+                            .or(siblings.last())
+                            .copied()
+                            .unwrap_or(parent),
+                    );
+                }
+                if let Some(next) = successor {
+                    self.set_current_layer(next);
+                }
+                Ok(Value::Null)
+            }
+            Command::DuplicateLayers { layers: ids } => {
+                let mut copies = Vec::new();
+                for id in ids {
+                    copies.push(layers::duplicate_layer(self.doc_mut(), id)?);
+                }
+                if let Some(last) = copies.last() {
+                    self.set_current_layer(*last);
+                    self.selected_layers = copies.clone();
+                }
+                Ok(json!({ "layers": copies }))
+            }
+            Command::SetLayer {
+                layer: id,
+                name,
+                visible,
+                locked,
+                collapsed,
+                show_bounds,
+                opacity,
+                transform,
+                pivot,
+            } => {
+                self.doc.layer(id).ok_or_else(|| no_layer(id))?;
+                if opacity.is_some() || transform.is_some() || pivot.is_some() {
+                    self.require_unlocked(id)?;
+                }
+                if let Some(name) = name {
+                    let clean = layers::clean_name(&name);
+                    if self.doc.layer(id).is_some_and(|l| l.name != clean) {
+                        let unique = match self.doc.parent_of(id) {
+                            Some(parent) => {
+                                // The layer's own current name does not count as taken.
+                                self.doc_mut().layer_mut(id).expect("checked above").name =
+                                    String::new();
+                                layers::unique_name(&self.doc, parent, &clean)
+                            }
+                            None => clean,
+                        };
+                        self.doc_mut().layer_mut(id).expect("checked above").name = unique;
+                    }
+                }
+                if visible.is_some()
+                    || locked.is_some()
+                    || collapsed.is_some()
+                    || show_bounds.is_some()
+                {
+                    let layer = self.doc_mut().layer_mut(id).expect("checked above");
+                    layer.visible = visible.unwrap_or(layer.visible);
+                    layer.locked = locked.unwrap_or(layer.locked);
+                    layer.collapsed = collapsed.unwrap_or(layer.collapsed);
+                    layer.show_bounds = show_bounds.unwrap_or(layer.show_bounds);
+                }
+                if let Some(opacity) = opacity {
+                    self.write_opacity(id, opacity)?;
+                }
+                if let Some(transform) = transform {
+                    self.write_transform(id, transform)?;
+                }
+                if let Some(pivot) = pivot {
+                    if !(pivot.is_finite() && pivot.scale > 0.0) {
+                        return Err(CommandError::invalid("the pivot is not usable"));
+                    }
+                    self.doc_mut().layer_mut(id).expect("checked above").pivot = pivot;
+                }
+                Ok(Value::Null)
+            }
+            Command::SetLayerKind { layer: id, values } => {
+                self.doc.layer(id).ok_or_else(|| no_layer(id))?;
+                self.require_unlocked(id)?;
+                apply_kind_patch(
+                    self.doc_mut().layer_mut(id).expect("checked above"),
+                    &values,
+                )
+                .map_err(CommandError::Invalid)?;
+                Ok(Value::Null)
+            }
+            Command::MoveLayer {
+                layer: id,
+                parent,
+                index,
+            } => {
+                self.reparent(id, parent, index)?;
+                Ok(Value::Null)
+            }
+            Command::StepLayer { layer: id, up } => {
+                let old_parent = self
+                    .doc
+                    .parent_of(id)
+                    .ok_or(crate::model::DocumentError::RootIsFixed)?;
+                let frame = self.evaluate();
+                let before = self.doc.index_in_parent(id);
+                if up {
+                    layers::move_layer_up(&mut self.doc, id)?;
+                } else {
+                    layers::move_layer_down(&mut self.doc, id)?;
+                }
+                if self.doc.parent_of(id) != Some(old_parent)
+                    || self.doc.index_in_parent(id) != before
+                {
+                    self.doc_revision += 1;
+                    self.keep_placement(&frame, id, old_parent)?;
+                }
+                Ok(Value::Null)
+            }
+            Command::GroupLayers { layers: ids, name } => {
+                let first = *ids
+                    .first()
+                    .ok_or_else(|| CommandError::invalid("no layers were given to group"))?;
+                let parent = self
+                    .doc
+                    .parent_of(first)
+                    .ok_or(crate::model::DocumentError::RootIsFixed)?;
+                if ids.iter().any(|id| self.doc.parent_of(*id) != Some(parent)) {
+                    return Err(CommandError::invalid(
+                        "only layers in the same group can be grouped together",
+                    ));
+                }
+                // Keep the order they have in the list, wherever they were clicked.
+                let mut ordered: Vec<(usize, LayerId)> = ids
+                    .iter()
+                    .filter_map(|id| Some((self.doc.index_in_parent(*id)?, *id)))
+                    .collect();
+                ordered.sort_unstable();
+                ordered.dedup();
+                let group = layers::add_layer(
+                    self.doc_mut(),
+                    NewLayerKind::Group,
+                    parent,
+                    ordered[0].0,
+                    name.as_deref(),
+                    0,
+                )?;
+                for (_, id) in ordered {
+                    self.doc_mut().move_layer(id, group, usize::MAX)?;
+                }
+                self.set_current_layer(group);
+                Ok(json!({ "layer": group }))
+            }
+            Command::MergeDown { layer: id } => {
+                self.require_unlocked(id)?;
+                let merged = layers::merge_down(self.doc_mut(), id)?;
+                self.set_current_layer(merged);
+                Ok(json!({ "layer": merged }))
+            }
+            Command::FlattenGroup { layer: id } => {
+                for member in self.doc.subtree(id) {
+                    self.require_unlocked(member)?;
+                }
+                let flat = layers::flatten_group(self.doc_mut(), id)?;
+                self.set_current_layer(flat);
+                Ok(json!({ "layer": flat }))
+            }
+            Command::SetGroupIsSequence {
+                layer: id,
+                sequence,
+            } => {
+                if self
+                    .doc
+                    .layer(id)
+                    .ok_or_else(|| no_layer(id))?
+                    .is_sequence()
+                    != sequence
+                {
+                    layers::set_group_is_sequence(self.doc_mut(), id, sequence)?;
+                }
+                Ok(Value::Null)
+            }
+            Command::FlipLayer { layer: id, axis } => {
+                self.require_unlocked(id)?;
+                if axis.is_mirrored() {
+                    layers::flip_layer(self.doc_mut(), id, axis)?;
+                }
+                Ok(Value::Null)
+            }
+            Command::ResetTransform { layer: id } => {
+                self.require_unlocked(id)?;
+                self.write_transform(id, Xform::IDENTITY)?;
+                Ok(Value::Null)
+            }
+            Command::ResetPivot { layer: id } => {
+                self.require_unlocked(id)?;
+                layers::reset_pivot(self.doc_mut(), id)?;
+                Ok(Value::Null)
+            }
+            Command::MakePivotOrigin { layer: id } => {
+                self.require_unlocked(id)?;
+                layers::make_pivot_origin(self.doc_mut(), id)?;
+                Ok(Value::Null)
+            }
+            other => unreachable!("{other:?} does not edit the document"),
+        }
+    }
+
+    fn run_state_command(&mut self, command: Command) -> Result<Value, CommandError> {
+        let result = match command {
+            Command::Undo => json!({ "undone": self.undo() }),
+            Command::Redo => json!({ "redone": self.redo() }),
+            Command::SelectLayers { layers: ids, mode } => {
+                let ids: Vec<LayerId> = ids
+                    .into_iter()
+                    .filter(|id| self.doc.layer(*id).is_some())
+                    .collect();
+                match mode {
+                    SelectMode::Replace => self.selected_layers = ids,
+                    SelectMode::Add => {
+                        self.selected_layers.retain(|id| !ids.contains(id));
+                        self.selected_layers.extend(ids);
+                    }
+                    SelectMode::Remove => self.selected_layers.retain(|id| !ids.contains(id)),
+                    SelectMode::Toggle => {
+                        for id in ids {
+                            match self.selected_layers.iter().position(|s| *s == id) {
+                                Some(at) => {
+                                    self.selected_layers.remove(at);
+                                }
+                                None => self.selected_layers.push(id),
+                            }
+                        }
+                    }
+                }
+                if let Some(paint) = self
+                    .selected_layers
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|id| self.doc.layer(*id).is_some_and(|l| l.as_paint().is_some()))
+                {
+                    self.paint_layer = Some(paint);
+                }
+                Value::Null
+            }
+            Command::SetTransformTarget { layer } => {
+                if let Some(id) = layer {
+                    if id == self.doc.root() || self.doc.layer(id).is_none() {
+                        return Err(CommandError::invalid("that layer cannot be moved"));
+                    }
+                }
+                self.transform_target = layer;
+                Value::Null
+            }
+            Command::SetOptions { values } => {
+                let mut options = patched(&self.options, &values).map_err(CommandError::Invalid)?;
+                options.sanitize();
+                self.options = options;
+                Value::Null
+            }
+            Command::SetTool { tool } => {
+                self.tools.select_tool(tool);
+                Value::Null
+            }
+            Command::SetToolSettings { values } => {
+                let mut tools = patched(&self.tools, &values).map_err(CommandError::Invalid)?;
+                tools.sanitize();
+                self.tools = tools;
+                Value::Null
+            }
+            Command::SetColor { color } => {
+                if color.iter().any(|v| !v.is_finite() || *v < 0.0) {
+                    return Err(CommandError::invalid("the colour is not usable"));
+                }
+                self.tools.color = color;
+                Value::Null
+            }
+            Command::Play => {
+                self.playback.play(&self.doc, self.options.loop_range);
+                Value::Null
+            }
+            Command::Pause => {
+                self.playback.pause();
+                Value::Null
+            }
+            Command::TogglePlay => {
+                if self.playback.playing && !self.playback.is_waiting() {
+                    self.playback.pause();
+                } else {
+                    self.playback.play(&self.doc, self.options.loop_range);
+                }
+                Value::Null
+            }
+            Command::Seek { time } => {
+                self.playback.seek(time);
+                Value::Null
+            }
+            Command::StepFrames { frames } => {
+                let rate = self.doc.settings.rate;
+                self.playback.pause();
+                self.playback
+                    .seek(rate.frame_start((rate.frame_at(self.playback.time) + frames).max(0)));
+                Value::Null
+            }
+            Command::Rewind => {
+                self.playback.seek(self.playback.previous_mark(&self.doc));
+                Value::Null
+            }
+            Command::FastForward => {
+                self.playback.seek(self.playback.next_mark(&self.doc));
+                Value::Null
+            }
+            other => unreachable!("{other:?} edits the document"),
+        };
+        self.touch_state();
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::math::Xform;
-    use crate::model::{Brush, Drawing, Point, Stroke};
-
-    #[test]
-    fn a_session_starts_on_the_default_spawn_area() {
-        let mut doc = Document::new();
-        let spawn = doc.settings.default_viewpoint.unwrap();
-        doc.layer_mut(spawn).unwrap().transform = Xform {
-            scale: 3.0,
-            translation: DVec3::new(1.0, 0.0, 2.0),
-            flip: crate::math::Flip::X,
-            ..Xform::IDENTITY
-        };
-        let session = Session::new(doc);
-        assert_eq!(session.view.world_from_viewer.scale, 3.0);
-        assert_eq!(
-            session.view.world_from_viewer.translation,
-            DVec3::new(1.0, 0.0, 2.0)
-        );
-        assert!(!session.view.world_from_viewer.flip.is_mirrored());
-    }
-
-    #[test]
-    fn visible_bounds_cover_the_painted_strokes() {
-        let mut doc = Document::new();
-        assert!(
-            Session::new(doc.clone()).visible_bounds().is_none(),
-            "an empty document has no bounds"
-        );
-        let paint = doc.find_by_path("Root/Paint").unwrap();
-        let drawing = doc.layer(paint).unwrap().as_paint().unwrap().drawings[0];
-        let p = |x: f32| Point {
-            pos: [x, 0.0, 0.0],
-            normal: [0.0, 1.0, 0.0],
-            dir: [0.0, 0.0, 1.0],
-            color: [1.0; 3],
-            opacity: 1.0,
-            width: 0.0,
-        };
-        *doc.drawing_mut(drawing).unwrap() =
-            Drawing::from_strokes([Stroke::new(0, Brush::Ribbon, false, vec![p(-1.0), p(3.0)])]);
-        doc.layer_mut(paint).unwrap().transform =
-            Xform::from_translation(DVec3::new(0.0, 10.0, 0.0));
-        let (center, radius) = Session::new(doc.clone()).visible_bounds().unwrap();
-        assert!((center - DVec3::new(1.0, 10.0, 0.0)).length() < 1e-9);
-        assert!((radius - 2.0).abs() < 1e-9);
-        doc.layer_mut(paint).unwrap().visible = false;
-        assert!(Session::new(doc).visible_bounds().is_none());
-    }
-}
+mod tests;

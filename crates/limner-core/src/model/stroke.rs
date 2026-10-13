@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 
 /// The cross-section a stroke is drawn with. The numeric values are the ones Quill stores.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum Brush {
     /// A legacy thin line (removed from Quill's interface in 2.0); drawn as a ribbon.

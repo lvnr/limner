@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 /// Mirror applied before rotation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Flip {
     #[default]
     None,

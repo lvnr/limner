@@ -3,8 +3,10 @@
 
 pub mod dither;
 pub mod eval;
+pub mod json;
 pub mod math;
 pub mod model;
+pub mod ops;
 pub mod session;
 pub mod tess;
 pub mod time;

@@ -14,7 +14,7 @@ use glam::DAffine3;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Document {
     pub settings: Settings,
     root: LayerId,

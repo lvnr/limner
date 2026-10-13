@@ -1,16 +1,19 @@
 extends Node
-## Entry point. Builds the world and the desktop shell, and handles the command-line
-## options used for automated runs:
+## Entry point. Builds the world, the editor and the desktop shell, and handles the
+## command-line options used for automated runs:
 ##
 ##   -- --open <path>        open a document at start
 ##   -- --frame-all          fit the document in view
 ##   -- --time <seconds>     move the playhead
 ##   -- --orbit <yaw,pitch>  turn the view, in degrees, after framing
+##   -- --exec <json>        run a command, e.g. '{"cmd":"add_layer","kind":"light"}'
+##   -- --no-panels          hide the docks
 ##   -- --static-dither      keep the dither pattern still (for repeatable screenshots)
 ##   -- --shot <file.png>    save a screenshot after a few frames, then quit
 ##   -- --bench <frames>     print the average frame time over that many frames, then quit
 
 var world: LimnerWorld
+var editor: LimnerEditor
 var shell: DesktopShell
 
 var _shot_path := ""
@@ -24,25 +27,30 @@ func _ready() -> void:
 	world = LimnerWorld.new()
 	world.name = "World"
 	add_child(world)
+	editor = LimnerEditor.new()
+	editor.name = "Editor"
+	add_child(editor)
+	editor.setup(world.scene)
 	shell = DesktopShell.new()
 	shell.name = "Desktop"
 	shell.world = world
+	shell.editor = editor
 	add_child(shell)
 	_apply_arguments.call_deferred()
 
 
 func _apply_arguments() -> void:
 	var args := OS.get_cmdline_user_args()
+	# Let the interface lay itself out first: framing depends on the size of the free area.
+	await get_tree().process_frame
+	await get_tree().process_frame
 	var i := 0
 	while i < args.size():
 		match args[i]:
 			"--open":
 				i += 1
-				var result := world.open_document(args[i])
-				if not result.ok:
-					push_error("Could not open %s: %s" % [args[i], result.error])
-				for warning: String in result.warnings:
-					print("warning: ", warning)
+				if not editor.open_document(args[i]):
+					push_error("Could not open %s" % args[i])
 			"--frame-all":
 				shell.frame_all()
 			"--time":
@@ -51,15 +59,25 @@ func _apply_arguments() -> void:
 			"--orbit":
 				i += 1
 				var parts := args[i].split(",")
-				world.scene.view_rotate(DesktopShell.FOCUS, Vector3.UP, deg_to_rad(float(parts[0])))
+				world.scene.view_rotate(shell.focus_point(), Vector3.UP, deg_to_rad(float(parts[0])))
 				if parts.size() > 1:
-					world.scene.view_rotate(DesktopShell.FOCUS, Vector3.RIGHT, deg_to_rad(float(parts[1])))
+					world.scene.view_rotate(shell.focus_point(), Vector3.RIGHT, deg_to_rad(float(parts[1])))
+			"--exec":
+				i += 1
+				var command = JSON.parse_string(args[i])
+				if command is Dictionary:
+					var reply := world.scene.exec(command)
+					print("exec ", args[i], " -> ", reply)
+				else:
+					push_error("--exec needs a JSON object, got: %s" % args[i])
+			"--no-panels":
+				shell.set_panels_visible(false)
 			"--static-dither":
 				world.animate_dither = false
 			"--shot":
 				i += 1
 				_shot_path = args[i]
-				_frames_until_shot = 6
+				_frames_until_shot = 8
 			"--bench":
 				i += 1
 				_bench_frames = int(args[i])

@@ -130,6 +130,7 @@ impl LayerAnim {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Action {
     /// Pause until the viewer continues.
     Stop,
@@ -167,6 +168,7 @@ pub struct Sequence {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Shading {
     /// Vertex colour only: what was painted is what is shown.
     #[default]
@@ -229,6 +231,7 @@ impl Paint {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Projection {
     #[default]
     Flat,
@@ -258,6 +261,7 @@ pub struct Model {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SoundKind {
     /// Plays the same everywhere.
     #[default]
@@ -268,6 +272,7 @@ pub enum SoundKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AttenuationMode {
     #[default]
     None,
@@ -296,6 +301,7 @@ impl Default for Attenuation {
 
 /// Directional shaping of a positional sound. Angles are in radians.
 #[derive(Clone, Copy, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SoundModifier {
     #[default]
     None,
@@ -365,6 +371,7 @@ impl Default for Camera {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LightKind {
     #[default]
     Point,

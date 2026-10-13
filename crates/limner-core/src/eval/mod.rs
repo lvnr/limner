@@ -79,6 +79,33 @@ impl RenderFrame {
     pub fn get(&self, id: LayerId) -> Option<&LayerState> {
         self.index.get(&id).map(|i| &self.layers[*i])
     }
+
+    /// Placement of a layer in the world at this moment, composed as a layer
+    /// transform so that it can be inverted and re-based without leaving the family.
+    pub fn world_xform(&self, doc: &Document, id: LayerId) -> Xform {
+        let mut x = self.get(id).map_or(Xform::IDENTITY, |s| s.local);
+        for ancestor in doc.ancestors(id) {
+            if let Some(state) = self.get(ancestor) {
+                x = state.local.mul(&x);
+            }
+        }
+        x
+    }
+
+    /// The time the children of `parent` read their keys at.
+    pub fn child_time(&self, doc: &Document, parent: LayerId) -> Flicks {
+        let Some(state) = self.get(parent) else {
+            return self.clock.time;
+        };
+        let sequence = doc
+            .layer(parent)
+            .and_then(|l| l.as_group())
+            .and_then(|g| g.sequence.as_ref());
+        match sequence {
+            Some(sequence) => sequence_time(sequence, state.local_time),
+            None => state.timeline_time,
+        }
+    }
 }
 
 /// The state of a layer's clips at one moment.

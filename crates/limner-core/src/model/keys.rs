@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// How a value moves from one key to the next. Stored on the earlier key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Interp {
     /// Hold the earlier value until the next key.
     #[default]

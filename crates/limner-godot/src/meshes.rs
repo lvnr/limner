@@ -120,15 +120,17 @@ impl MeshCache {
         entry.built.as_ref()
     }
 
-    /// Drops meshes whose chunk no longer exists anywhere else, and the least recently
-    /// used ones when the cache is over budget.
+    /// Drops meshes whose chunk no longer exists anywhere else, and now and then the
+    /// least recently used ones when the cache is over budget.
     pub fn end_frame(&mut self) {
-        if !self.frame.is_multiple_of(120) {
-            return;
-        }
+        // While a tool is at work every frame leaves a superseded version of each chunk
+        // it touches behind. Nothing else refers to those, so they go at once.
         let frame = self.frame;
         self.entries
             .retain(|_, e| e.last_used == frame || Arc::strong_count(&e.chunk) > 1);
+        if !self.frame.is_multiple_of(120) {
+            return;
+        }
         let mut total: usize = self
             .entries
             .values()

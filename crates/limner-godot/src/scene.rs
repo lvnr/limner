@@ -4,7 +4,10 @@
 //! the result. It holds no product logic: what is visible, where, and what an edit
 //! does are all decided in the core.
 
-use crate::convert::{color_from_linear, dvec3, transform3d};
+use crate::convert::{
+    color_from_linear, dictionary_from_json, dvec3, json_from_variant, transform3d,
+    variant_from_json,
+};
 use crate::meshes::{chunk_key, MeshCache};
 use godot::classes::image::Format;
 use godot::classes::{Image, Material, MeshInstance3D};
@@ -12,8 +15,8 @@ use godot::prelude::*;
 use limner::core::dither;
 use limner::core::eval::{Content, LayerState};
 use limner::core::glam::{DAffine3, DQuat, DVec3};
-use limner::core::model::{Drawing, LayerId};
-use limner::core::session::{Session, DEFAULT_ZOOM_LIMITS};
+use limner::core::model::{Document, Drawing, LayerId};
+use limner::core::session::{PlaybackEvent, Session, DEFAULT_ZOOM_LIMITS};
 use limner::core::tess::SurfaceKind;
 use limner::core::time;
 use std::collections::{HashMap, HashSet};
@@ -51,7 +54,9 @@ struct Stats {
 #[class(base=Node3D)]
 pub struct LimnerScene {
     base: Base<Node3D>,
-    session: Option<Session>,
+    session: Session,
+    /// Revisions the interface was last told about.
+    announced: (u64, u64),
     source_path: String,
     source_kind: String,
     warnings: Vec<String>,
@@ -68,7 +73,8 @@ impl INode3D for LimnerScene {
     fn init(base: Base<Node3D>) -> Self {
         Self {
             base,
-            session: None,
+            session: Session::new(Document::new()),
+            announced: (0, 0),
             source_path: String::new(),
             source_kind: String::new(),
             warnings: Vec::new(),
@@ -80,13 +86,121 @@ impl INode3D for LimnerScene {
         }
     }
 
-    fn process(&mut self, _delta: f64) {
+    fn process(&mut self, delta: f64) {
+        if let Some(event) = self.session.advance(delta) {
+            let name = match event {
+                PlaybackEvent::ReachedStop => "stop",
+                PlaybackEvent::Looped => "loop",
+                PlaybackEvent::ReachedEnd => "end",
+            };
+            self.signals().playback_event().emit(name);
+        }
         self.sync();
+        self.announce_changes();
     }
 }
 
 #[godot_api]
 impl LimnerScene {
+    /// The document changed: layers, strokes, keys or settings.
+    #[signal]
+    fn document_changed();
+
+    /// Something else an interface shows changed: the tool, the selection, playback.
+    #[signal]
+    fn state_changed();
+
+    /// Another document was opened or a new one started.
+    #[signal]
+    fn document_replaced();
+
+    /// Playback reached a "stop", wrapped around ("loop") or reached the "end" of the range.
+    #[signal]
+    fn playback_event(event: GString);
+
+    // ----- documents -----
+
+    /// Starts a new, empty document.
+    #[func]
+    fn new_document(&mut self) {
+        self.clear_instances();
+        self.source_path.clear();
+        self.source_kind.clear();
+        self.warnings.clear();
+        self.session.replace_document(Document::new());
+        self.signals().document_replaced().emit();
+    }
+
+    // ----- commands and queries -----
+
+    /// Runs a command, given as a dictionary with a `cmd` entry. Returns
+    /// `{ok, error, result}`. This is how every edit reaches the document.
+    #[func]
+    fn exec(&mut self, command: VarDictionary) -> VarDictionary {
+        match self
+            .session
+            .exec_json(&json_from_variant(&command.to_variant()))
+        {
+            Ok(result) => {
+                vdict! { "ok" => true, "error" => "", "result" => &variant_from_json(&result) }
+            }
+            Err(error) => {
+                vdict! { "ok" => false, "error" => error.to_string(), "result" => &Variant::nil() }
+            }
+        }
+    }
+
+    /// Starts an edit that spans several commands, such as dragging a slider.
+    /// Everything up to `commit_edit` becomes one undo step.
+    #[func]
+    fn begin_edit(&mut self, label: GString) {
+        self.session.begin_transaction(label.to_string());
+    }
+
+    #[func]
+    fn commit_edit(&mut self) {
+        self.session.commit_transaction();
+    }
+
+    #[func]
+    fn cancel_edit(&mut self) {
+        self.session.cancel_transaction();
+    }
+
+    /// Revisions, undo state, playhead and current tool. Cheap enough for every frame.
+    #[func]
+    fn status(&self) -> VarDictionary {
+        dictionary_from_json(&self.session.status())
+    }
+
+    /// One row per layer in list order.
+    #[func]
+    fn layer_rows(&self) -> VarArray {
+        variant_from_json(&self.session.layer_rows())
+            .try_to()
+            .unwrap_or_default()
+    }
+
+    #[func]
+    fn layer_details(&self, layer: i64) -> VarDictionary {
+        dictionary_from_json(&self.session.layer_details(LayerId(layer.max(0) as u64)))
+    }
+
+    #[func]
+    fn document_info(&self) -> VarDictionary {
+        dictionary_from_json(&self.session.document_info())
+    }
+
+    #[func]
+    fn tool_settings(&self) -> VarDictionary {
+        dictionary_from_json(&serde_json::to_value(&self.session.tools).unwrap_or_default())
+    }
+
+    #[func]
+    fn options(&self) -> VarDictionary {
+        dictionary_from_json(&serde_json::to_value(&self.session.options).unwrap_or_default())
+    }
+
     /// Sets the four stroke materials: tubes and flat strokes, each opaque and see-through.
     #[func]
     fn set_stroke_materials(
@@ -126,18 +240,14 @@ impl LimnerScene {
                 self.source_path = path_string;
                 self.source_kind = opened.kind.label().to_owned();
                 self.warnings = opened.warnings;
-                self.session = Some(Session::new(opened.document));
+                self.session.replace_document(opened.document);
+                self.signals().document_replaced().emit();
                 vdict! { "ok" => true, "error" => "", "kind" => self.source_kind.clone(), "warnings" => &self.get_warnings() }
             }
             Err(error) => {
                 vdict! { "ok" => false, "error" => error.to_string(), "kind" => "", "warnings" => &PackedStringArray::new() }
             }
         }
-    }
-
-    #[func]
-    fn has_document(&self) -> bool {
-        self.session.is_some()
     }
 
     #[func]
@@ -148,10 +258,7 @@ impl LimnerScene {
     /// Title, source and size of the open document.
     #[func]
     fn info(&self) -> VarDictionary {
-        let Some(session) = &self.session else {
-            return VarDictionary::new();
-        };
-        let doc = session.doc();
+        let doc = self.session.doc();
         vdict! {
             "title" => doc.settings.title.clone(),
             "path" => self.source_path.clone(),
@@ -168,11 +275,7 @@ impl LimnerScene {
 
     #[func]
     fn background_color(&self) -> Color {
-        let rgb = self
-            .session
-            .as_ref()
-            .map_or([0.8, 0.8, 0.8], |s| s.doc().settings.background);
-        color_from_linear(rgb)
+        color_from_linear(self.session.doc().settings.background)
     }
 
     /// What the last frame drew.
@@ -192,16 +295,14 @@ impl LimnerScene {
 
     #[func]
     fn set_time(&mut self, seconds: f64) {
-        if let Some(session) = &mut self.session {
-            session.clock.time = time::from_seconds(seconds.max(0.0));
-        }
+        self.session
+            .playback
+            .seek(time::from_seconds(seconds.max(0.0)));
     }
 
     #[func]
     fn get_time(&self) -> f64 {
-        self.session
-            .as_ref()
-            .map_or(0.0, |s| time::to_seconds(s.clock.time))
+        time::to_seconds(self.session.playback.time)
     }
 
     // ----- view -----
@@ -209,44 +310,35 @@ impl LimnerScene {
     /// Slides the world by `delta` metres of viewer space.
     #[func]
     fn view_pan(&mut self, delta: Vector3) {
-        if let Some(session) = &mut self.session {
-            session.view.pan(dvec3(delta));
-        }
+        self.session.view.pan(dvec3(delta));
     }
 
     /// Turns the world about a viewer-space point.
     #[func]
     fn view_rotate(&mut self, pivot: Vector3, axis: Vector3, angle: f32) {
-        if let Some(session) = &mut self.session {
-            let axis = dvec3(axis).normalize_or_zero();
-            if axis != DVec3::ZERO {
-                session
-                    .view
-                    .rotate_about(dvec3(pivot), DQuat::from_axis_angle(axis, angle as f64));
-            }
+        let axis = dvec3(axis).normalize_or_zero();
+        if axis != DVec3::ZERO {
+            self.session
+                .view
+                .rotate_about(dvec3(pivot), DQuat::from_axis_angle(axis, angle as f64));
         }
     }
 
     /// Scales the world about a viewer-space point; a factor above one enlarges it.
     #[func]
     fn view_zoom(&mut self, pivot: Vector3, factor: f32) {
-        if let Some(session) = &mut self.session {
-            session
-                .view
-                .zoom_about(dvec3(pivot), factor as f64, DEFAULT_ZOOM_LIMITS);
-        }
+        self.session
+            .view
+            .zoom_about(dvec3(pivot), factor as f64, DEFAULT_ZOOM_LIMITS);
     }
 
     /// Fits everything visible into a viewer-space sphere. Returns false when nothing is visible.
     #[func]
     fn view_frame_all(&mut self, target: Vector3, radius: f32) -> bool {
-        let Some(session) = &mut self.session else {
+        let Some((center, world_radius)) = self.session.visible_bounds() else {
             return false;
         };
-        let Some((center, world_radius)) = session.visible_bounds() else {
-            return false;
-        };
-        session
+        self.session
             .view
             .frame_sphere(center, world_radius, dvec3(target), radius as f64);
         true
@@ -254,15 +346,25 @@ impl LimnerScene {
 
     #[func]
     fn view_go_to_default_viewpoint(&mut self) {
-        if let Some(session) = &mut self.session {
-            session.go_to_default_viewpoint();
-        }
+        self.session.go_to_default_viewpoint();
+    }
+
+    /// Stands the viewer on a spawn area, or at the origin of any other layer.
+    #[func]
+    fn view_go_to_viewpoint(&mut self, layer: i64) {
+        self.session.go_to_viewpoint(LayerId(layer.max(0) as u64));
+    }
+
+    /// Where the world sits in viewer space: the transform for anything drawn in world coordinates.
+    #[func]
+    fn viewer_from_world(&self) -> Transform3D {
+        transform3d(&self.session.view.viewer_from_world_affine())
     }
 
     /// World units per metre of viewer space.
     #[func]
     fn view_scale(&self) -> f64 {
-        self.session.as_ref().map_or(1.0, |s| s.view.scale())
+        self.session.view.scale()
     }
 
     // ----- rendering -----
@@ -271,9 +373,7 @@ impl LimnerScene {
     /// Runs every frame; call it directly to update without waiting for one.
     #[func]
     fn sync(&mut self) {
-        let Some(session) = &self.session else {
-            return;
-        };
+        let session = &self.session;
         let frame = session.evaluate();
         let viewer_from_world = session.view.viewer_from_world_affine();
         let doc = session.doc();
@@ -332,6 +432,18 @@ impl LimnerScene {
 }
 
 impl LimnerScene {
+    /// Tells the interface about changes since it was last told.
+    fn announce_changes(&mut self) {
+        let now = (self.session.doc_revision(), self.session.state_revision());
+        let before = std::mem::replace(&mut self.announced, now);
+        if now.0 != before.0 {
+            self.signals().document_changed().emit();
+        }
+        if now.1 != before.1 {
+            self.signals().state_changed().emit();
+        }
+    }
+
     fn clear_instances(&mut self) {
         for (_, instances) in self.layers.drain() {
             for chunk in instances.chunks {
