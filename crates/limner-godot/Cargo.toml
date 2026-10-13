@@ -11,3 +11,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 godot = { workspace = true }
+limner = { version = "0.1.0", path = "../limner" }
