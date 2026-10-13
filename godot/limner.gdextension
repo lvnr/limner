@@ -1,0 +1,12 @@
+[configuration]
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = 4.7
+reloadable = true
+
+[libraries]
+macos.debug = "res://../target/debug/liblimner_godot.dylib"
+macos.release = "res://../target/release/liblimner_godot.dylib"
+windows.debug.x86_64 = "res://../target/debug/limner_godot.dll"
+windows.release.x86_64 = "res://../target/release/limner_godot.dll"
+linux.debug.x86_64 = "res://../target/debug/liblimner_godot.so"
+linux.release.x86_64 = "res://../target/release/liblimner_godot.so"

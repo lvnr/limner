@@ -1,0 +1,21 @@
+# Build output
+/target/
+godot/.godot/
+godot/bin/*.dylib
+godot/bin/*.so
+godot/bin/*.dll
+godot/bin/*.framework/
+godot/android/
+*.tmp
+
+# Local-only material: downloaded toolchains, reference sources, private samples, scratch output
+/tools/
+/local/
+
+# Proprietary assets from a Quill install, kept for reference only. Never commit or ship.
+/3d models&design/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
