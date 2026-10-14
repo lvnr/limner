@@ -636,9 +636,20 @@ impl LimnerScene {
             cursor.rotation.w as f32,
         );
         let inner = cursor.inner.map_or(Variant::nil(), |r| r.to_variant());
+        // With mirrored working on, the tools act at the hand's mirror image too.
+        let mirror = if cursor.tracked {
+            self.session.mirror_plane().map(|(on_plane, turn)| {
+                let normal = turn * DVec3::Z;
+                cursor.position - normal * 2.0 * (cursor.position - on_plane).dot(normal)
+            })
+        } else {
+            None
+        };
+        let mirror = mirror.map_or(Variant::nil(), |p| crate::convert::vector3(p).to_variant());
         vdict! {
             "tracked" => cursor.tracked,
             "position" => crate::convert::vector3(cursor.position),
+            "mirror_position" => &mirror,
             "rotation" => rotation,
             "tool" => &variant_from_json(&serde_json::to_value(cursor.tool).unwrap_or_default()),
             "radius" => cursor.radius,
