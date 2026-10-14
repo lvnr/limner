@@ -9,7 +9,6 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="Licence: MIT" src="https://img.shields.io/badge/licence-MIT-3d8bfd"></a>
-  <a href="https://github.com/lvnr/limner/actions/workflows/ci.yml"><img alt="Tests" src="https://github.com/lvnr/limner/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Godot 4.8" src="https://img.shields.io/badge/Godot-4.8-478cbf?logo=godotengine&logoColor=white">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-stable-ce422b?logo=rust&logoColor=white">
   <img alt="Status: early" src="https://img.shields.io/badge/status-early-ffb33f">
@@ -107,8 +106,8 @@ With a headset connected through OpenXR, Limner starts in it. Add `-- --desktop`
 | System | Desktop | Headset | Where it stands |
 |---|---|---|---|
 | macOS, Apple silicon | ✅ | (no OpenXR runtime on macOS) | Built, tested and packaged |
-| Windows | expected | Rift, Quest over Link, other OpenXR headsets | Rust and interface tests run in CI; the app has not been tried by hand |
-| Linux | expected | SteamVR or Monado | Rust and interface tests run in CI; the app has not been tried by hand |
+| Windows | expected | Rift, Quest over Link, other OpenXR headsets | Not tried yet; a CI workflow that runs every test on it is ready |
+| Linux | expected | SteamVR or Monado | Not tried yet; a CI workflow that runs every test on it is ready |
 | Quest, standalone | | planned | The build steps are written down in [docs/xr.md](docs/xr.md) |
 
 ## How it is built
