@@ -233,6 +233,15 @@ A grip takes hold of, in this order: a handle of the gimbal the hand is at; the 
 
 The gimbal shows when `show_gimbal` is on and either a layer is the transform object or the Selection tool has a selection. A grip on a handle moves or turns the thing; the trigger on an arrow or the middle moves the pivot, and on a ring turns in `rotation_snap_steps` steps. On the desktop the left button over a handle is the grip, and with Alt the trigger.
 
+## Files and media
+
+| Call | What it does |
+|---|---|
+| `editor.new_document()`, `editor.open_document(path) -> bool`, `editor.save_document(path, thumbnail) -> bool` | A path ending in `.limnz` saves one packed file; any other path is a project folder. Opening also takes a Quill project folder. |
+| `editor.import_file(path) -> int` | Brings a picture (`.png`, `.jpg`), a sound (`.wav`, `.ogg`, `.mp3`) or a model (`.obj`, `.glb`, `.gltf`, `.fbx`) in as a new layer after the current one, as one undo step. Returns the new layer's id or -1, and tells the user what the file had that was not brought in. |
+
+Materials are made once by `LimnerWorld` and handed to the scene (`set_stroke_materials`, `set_lit_stroke_materials`, `set_layer_materials`, `set_highlight_material`); nothing else should call those.
+
 ## Trying things out
 
 ```bash
