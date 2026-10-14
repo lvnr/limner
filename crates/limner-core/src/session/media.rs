@@ -80,6 +80,26 @@ fn layer_name(file_name: &str) -> String {
 impl Session {
     /// Adds a picture, sound or model layer holding `media`, placed where a new layer
     /// goes, named after the file and selected. One undo step.
+    /// Brings another document in as a group after the current layer, as one undo
+    /// step: everything in it, with its animation. The group becomes the current layer.
+    pub fn import_document(
+        &mut self,
+        other: &crate::model::Document,
+        name: &str,
+    ) -> Result<LayerId, CommandError> {
+        self.edit("Import project", |session| {
+            let (parent, index) = session.default_insertion_point();
+            let group = layers::graft_document(session.doc_mut(), other, parent, index, name)?;
+            // It arrives folded: one row in the layer list, and the next thing added
+            // goes after it, not into it.
+            if let Some(layer) = session.doc_mut().layer_mut(group) {
+                layer.collapsed = true;
+            }
+            session.set_current_layer(group);
+            Ok(group)
+        })
+    }
+
     pub fn add_media_layer(&mut self, media: NewMedia) -> Result<LayerId, CommandError> {
         if !fits(media.kind, &media.data) {
             return Err(CommandError::invalid(
@@ -271,5 +291,113 @@ mod tests {
         assert_eq!(layer_name("/art/noext"), "noext");
         assert_eq!(layer_name(".hidden"), ".hidden");
         assert_eq!(layer_name(""), "Layer");
+    }
+}
+
+#[cfg(test)]
+mod import_tests {
+    use crate::model::{Document, Interp, LayerKind, MediaData, MediaKind, Picture, Projection};
+    use crate::session::Session;
+    use crate::time::from_seconds;
+    use std::sync::Arc;
+
+    /// A document with a keyed group holding a paint layer of two frames that share
+    /// nothing with any other document, and a picture.
+    fn other() -> Document {
+        let mut doc = Document::new();
+        let root = doc.root();
+        let paint = doc.find_by_path("Root/Paint").unwrap();
+        let group = doc.new_layer("Arm", LayerKind::Group(Default::default()), 0);
+        let group = doc.insert_layer(group, root, usize::MAX).unwrap();
+        doc.move_layer(paint, group, 0).unwrap();
+        doc.layer_mut(group)
+            .unwrap()
+            .anim
+            .opacity
+            .set(from_seconds(1.0), 0.5, Interp::Linear);
+        let second = doc.add_drawing(Default::default());
+        let frames = doc.layer_mut(paint).unwrap().as_paint_mut().unwrap();
+        frames.drawings.push(second);
+        frames.frames = vec![0, 1, 0];
+        let image = doc.add_media(
+            "photo.png",
+            MediaKind::Image,
+            MediaData::RawImage {
+                width: 1,
+                height: 1,
+                channels: 3,
+                pixels: Arc::from(vec![9u8, 9, 9]),
+            },
+        );
+        let picture = doc.new_layer(
+            "Photo",
+            LayerKind::Picture(Picture {
+                media: Some(image),
+                projection: Projection::Flat,
+                viewer_locked: false,
+                source_path: String::new(),
+            }),
+            0,
+        );
+        doc.insert_layer(picture, root, usize::MAX).unwrap();
+        doc.validate().unwrap();
+        doc
+    }
+
+    #[test]
+    fn another_project_comes_in_as_a_group_with_everything_in_it() {
+        let mut session = Session::new(Document::new());
+        let before = session.doc().layer_count();
+        let group = session.import_document(&other(), "Robot").unwrap();
+        let doc = session.doc();
+        doc.validate().unwrap();
+        assert_eq!(doc.layer(group).unwrap().name, "Robot");
+        assert!(doc.layer(group).unwrap().collapsed, "folded, as one row");
+        assert_eq!(session.current_layer(), Some(group));
+        // Spawn area, the arm with its paint layer, and the photo.
+        assert_eq!(doc.layer_count(), before + 5);
+        let arm = doc
+            .find_by_path("Root/Robot/Arm")
+            .expect("the group came along");
+        assert_eq!(
+            doc.layer(arm).unwrap().anim.opacity.len(),
+            1,
+            "with its keys"
+        );
+        let paint = doc.find_by_path("Root/Robot/Arm/Paint").unwrap();
+        let frames = doc.layer(paint).unwrap().as_paint().unwrap();
+        assert_eq!(frames.frames, [0, 1, 0], "and its frames");
+        assert!(frames.drawings.iter().all(|d| doc.drawing(*d).is_some()));
+        let own = doc.find_by_path("Root/Paint").unwrap();
+        let own_drawing = doc.layer(own).unwrap().as_paint().unwrap().drawings[0];
+        assert!(
+            !frames.drawings.contains(&own_drawing),
+            "under ids of its own"
+        );
+        let photo = doc.find_by_path("Root/Robot/Photo").unwrap();
+        let LayerKind::Picture(picture) = &doc.layer(photo).unwrap().kind else {
+            panic!("not a picture");
+        };
+        assert!(
+            doc.media(picture.media.unwrap()).is_some(),
+            "the picture's data too"
+        );
+        assert_eq!(
+            doc.settings.default_viewpoint,
+            Document::new().settings.default_viewpoint
+        );
+
+        assert_eq!(session.history().undo_label(), Some("Import project"));
+        session.undo();
+        assert_eq!(session.doc().layer_count(), before);
+        // Twice in, the second gets a name of its own.
+        session.import_document(&other(), "Robot").unwrap();
+        let again = session.import_document(&other(), "Robot").unwrap();
+        assert_eq!(session.doc().layer(again).unwrap().name, "Robot 2");
+        assert_eq!(
+            session.doc().parent_of(again),
+            Some(session.doc().root()),
+            "beside the first, not inside it"
+        );
     }
 }

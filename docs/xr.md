@@ -49,7 +49,7 @@ godot/ui/settings_panel.gd    the Settings panel
 
 ### Project settings the headset needs
 
-These belong in `godot/project.godot`. They are not in the file yet at the time of writing; without them `XRShell.is_available()` is always false and only the simulated rig runs.
+These are in `godot/project.godot`. Without them `XRShell.is_available()` is always false and only the simulated rig runs.
 
 ```
 [xr]

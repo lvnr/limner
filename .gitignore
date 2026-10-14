@@ -20,3 +20,4 @@ godot/android/
 .vscode/
 .idea/
 /.cargo/
+godot/override.cfg

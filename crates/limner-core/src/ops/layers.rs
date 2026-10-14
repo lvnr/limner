@@ -4,8 +4,8 @@ use super::strokes::{append_transformed, transformed_drawing};
 use super::OpError;
 use crate::math::{Aabb, Flip, Xform};
 use crate::model::{
-    Camera, Document, Drawing, DrawingId, Group, Layer, LayerId, LayerKind, Light, Paint, Sequence,
-    Viewpoint,
+    Camera, Document, Drawing, DrawingId, Group, Layer, LayerId, LayerKind, Light, MediaId, Paint,
+    Sequence, Viewpoint,
 };
 use crate::time::Flicks;
 use glam::DVec3;
@@ -175,6 +175,92 @@ fn copy_subtree(
         copy_subtree(doc, child, new_id, usize::MAX, drawing_map)?;
     }
     Ok(new_id)
+}
+
+/// Brings everything in `other` into `doc` as one new group named `name` under
+/// `parent`: its layers with their animation, their drawings and their media. The
+/// other document's own settings, marks and initial spawn area stay behind. Returns
+/// the new group.
+pub fn graft_document(
+    doc: &mut Document,
+    other: &Document,
+    parent: LayerId,
+    index: usize,
+    name: &str,
+) -> Result<LayerId, OpError> {
+    let name = unique_name(doc, parent, &clean_name(name));
+    let group = doc.new_layer(name, LayerKind::Group(Group::default()), 0);
+    let group = doc.insert_layer(group, parent, index)?;
+    let mut drawings: HashMap<DrawingId, DrawingId> = HashMap::new();
+    let mut media: HashMap<MediaId, MediaId> = HashMap::new();
+    for child in other.children(other.root()) {
+        graft_layer(doc, other, *child, group, &mut drawings, &mut media)?;
+    }
+    Ok(group)
+}
+
+fn graft_layer(
+    doc: &mut Document,
+    other: &Document,
+    source: LayerId,
+    parent: LayerId,
+    drawings: &mut HashMap<DrawingId, DrawingId>,
+    media: &mut HashMap<MediaId, MediaId>,
+) -> Result<(), OpError> {
+    let Some(original) = other.layer(source) else {
+        return Ok(());
+    };
+    let mut layer = (**original).clone();
+    layer.id = doc.alloc_layer_id();
+    layer.parent = None;
+    // What a layer shows lives in tables of the document it came from; bring that
+    // along under names of this one. Shared drawings and media stay shared.
+    let mut bring = |id: &mut Option<MediaId>, doc: &mut Document| {
+        *id = id.and_then(|old| match media.get(&old) {
+            Some(new) => Some(*new),
+            None => {
+                let item = other.media(old)?;
+                let new = doc.add_media(item.name.clone(), item.kind, item.data.clone());
+                media.insert(old, new);
+                Some(new)
+            }
+        });
+    };
+    let children: Vec<LayerId> = match &mut layer.kind {
+        LayerKind::Group(group) => std::mem::take(&mut group.children),
+        LayerKind::Paint(paint) => {
+            for drawing in &mut paint.drawings {
+                *drawing = match drawings.get(drawing) {
+                    Some(new) => *new,
+                    None => {
+                        let shared = other.drawing(*drawing).cloned().unwrap_or_default();
+                        let new = doc.add_shared_drawing(shared);
+                        drawings.insert(*drawing, new);
+                        new
+                    }
+                };
+            }
+            Vec::new()
+        }
+        LayerKind::Picture(picture) => {
+            bring(&mut picture.media, doc);
+            Vec::new()
+        }
+        LayerKind::Model(model) => {
+            bring(&mut model.media, doc);
+            Vec::new()
+        }
+        LayerKind::Sound(sound) => {
+            bring(&mut sound.media, doc);
+            Vec::new()
+        }
+        _ => Vec::new(),
+    };
+    let id = doc.insert_layer(layer, parent, usize::MAX)?;
+    for child in children {
+        graft_layer(doc, other, child, id, drawings, media)?;
+    }
+    Ok(())
 }
 
 /// Moves a layer one step up the list (towards the first child). At the top of its

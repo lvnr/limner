@@ -24,6 +24,28 @@ use std::path::Path;
 /// out or repaired on the way.
 pub(super) fn import(session: &mut Session, path: &str) -> Result<(LayerId, Vec<String>), String> {
     let path = Path::new(path);
+    // Another project (a Limner one, packed or not, or a Quill folder) comes in whole,
+    // as a group.
+    let is_project = path.is_dir()
+        || path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("limnz"));
+    if is_project {
+        let opened = limner::open(path).map_err(|e| e.to_string())?;
+        let name = if opened.document.settings.title.trim().is_empty() {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Imported")
+                .to_owned()
+        } else {
+            opened.document.settings.title.clone()
+        };
+        let group = session
+            .import_document(&opened.document, &name)
+            .map_err(|e| e.to_string())?;
+        return Ok((group, opened.warnings));
+    }
     let kind = media::kind_of(path).map_err(|e| e.to_string())?;
     let import = if kind.needs_engine() {
         let (mesh, warnings) = engine_mesh(path, kind)?;

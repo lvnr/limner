@@ -147,8 +147,9 @@ impl LimnerScene {
     }
 
     /// Brings a picture (`.png`, `.jpg`), a sound (`.wav`, `.ogg`, `.mp3`) or a model
-    /// (`.obj`, `.glb`, `.gltf`, `.fbx`) into the document as a new layer, as one
-    /// undo step. Returns `{ok, error, layer, warnings}`; the warnings say what the
+    /// (`.obj`, `.glb`, `.gltf`, `.fbx`) into the document as a new layer, or another
+    /// project (a `.limn` or Quill folder, or a `.limnz` file) as a folded group of
+    /// everything in it, as one undo step. Returns `{ok, error, layer, warnings}`; the warnings say what the
     /// file had that was not brought in.
     #[func]
     fn import_file(&mut self, path: GString) -> VarDictionary {

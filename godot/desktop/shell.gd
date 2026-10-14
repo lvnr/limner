@@ -35,6 +35,7 @@ const IMPORT_FILTERS := [
 	"*.png, *.jpg, *.jpeg ; Pictures",
 	"*.wav, *.ogg, *.mp3 ; Sounds",
 	"*.obj, *.glb, *.gltf, *.fbx ; Models",
+	"*.limnz ; Limner projects (a project folder can be chosen too, as can a Quill project folder)",
 ]
 enum EditMenu { UNDO, REDO, DUPLICATE, DELETE, RENAME, SELECT_ALL, DESELECT, TRANSFORM_AGAIN }
 enum ViewMenu { FRAME_ALL, HOME, GRID, EXTRAS, PANELS, FULLSCREEN, GIMBAL }
@@ -379,7 +380,8 @@ func _on_file_menu(id: int) -> void:
 		FileMenu.SAVE_AS:
 			save_as()
 		FileMenu.IMPORT:
-			_ask_for_path(FileDialog.FILE_MODE_OPEN_FILE, "Import a picture, a sound or a model as a new layer", PackedStringArray(IMPORT_FILTERS), editor.import_file)
+			# A project is a folder (or one packed file), so folders can be chosen as well as files.
+			_ask_for_path(FileDialog.FILE_MODE_OPEN_ANY, "Import a picture, a sound, a model or another project as a new layer", PackedStringArray(IMPORT_FILTERS), editor.import_file)
 		FileMenu.EXPORT:
 			show_details("Export")
 		FileMenu.QUIT:

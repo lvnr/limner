@@ -204,3 +204,25 @@ func test_an_imported_model_survives_saving_and_opening() -> void:
 	check_eq(LayerTestKit.count(world.scene, "AudioStreamPlayer3D"), 1, "and the sound has its player")
 	var model: MeshInstance3D = LayerTestKit.node(world.scene, "Model", int(row_named("Rock").id))
 	check(model.get_node("Wire").visible, "the wireframe setting came back")
+
+
+func test_another_project_comes_in_as_a_folded_group() -> void:
+	# A project to bring in: one stroke, saved packed.
+	run({"cmd": "add_strokes", "strokes": [{"points": [[0, 1, -1], [0.2, 1, -1]], "width": 0.01}]})
+	run({"cmd": "set_document", "title": "Prop"})
+	var saved := OS.get_user_data_dir().path_join("test_import_project.limnz")
+	check(editor.save_document(saved), "saving the project to bring in")
+	editor.new_document()
+	await frames(2)
+	var before := editor.get_rows().size()
+	var group := editor.import_file(saved)
+	await frames(2)
+	check(group >= 0, "imported")
+	var row := editor.row(group)
+	check_eq(row.get("name"), "Prop", "named after the project")
+	check_eq(row.get("kind"), "group", "as a group")
+	check(row.get("collapsed", false), "folded")
+	check_eq(editor.get_rows().size(), before + 3, "with its spawn area and paint layer inside")
+	check_eq(int(world.scene.info().strokes), 1, "and its stroke")
+	check_eq(editor.status.undo_label, "Import project", "one undo step")
+	DirAccess.remove_absolute(saved)
