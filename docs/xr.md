@@ -134,7 +134,7 @@ The action map was written by a script through Godot's own classes and read back
 
 Found by opening every drop-down and picker on every panel through the simulated rig:
 
-- `godot/ui/save_target.gd` hides its "browse" button with `get_viewport().use_xr`. On the palette the panel's viewport is its own `SubViewport`, where `use_xr` is always false, so the button stays and opens a system file dialog that cannot be seen in a headset. It should ask the main viewport: `get_tree().root.use_xr`.
+- (Fixed.) `godot/ui/save_target.gd` used to ask its own viewport whether a headset was in use to hide its "browse" button. On the palette that viewport is the panel's own `SubViewport`, which never uses XR, so the button stayed and opened a system file dialog nobody could see. It now asks the main viewport (`get_tree().root.use_xr`). Any other panel code that wants to know whether it is in a headset must ask the same way.
 - The colour picker (`ColorField`) works, but it is 308 x 610 pixels, taller than most panels, so the sheet grows to hold it. Its eyedropper samples the screen and has nothing to sample in a headset. A smaller picker, or the Color panel's own square, would serve better.
 - The layer list's context menu opens on a right click. In a headset that is the drawing hand's lower button while pointing at a row.
 
