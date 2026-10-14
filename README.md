@@ -21,7 +21,7 @@ Limner is a tool for painting in three dimensions and bringing the paintings to 
 Quill shaped a whole community of VR artists and animators, and it has not changed since version 2.9. Limner keeps its way of working, opens existing Quill projects, and adds what artists have been asking for: **lights that shade the paint**, mirrored painting, text, smooth keys, an open file format, and export to the 3D formats used today.
 
 > [!NOTE]
-> **Early days.** Everything in the plan is built and tested on macOS, where Limner runs on the desktop and with a simulated headset, and on Windows, where it runs on the desktop. It has not yet run on a real headset or on a Quest; that is the next step. [What has and has not been verified](docs/handoff.md) is written down.
+> **Early days.** Everything in the plan is built and tested on macOS, where Limner runs on the desktop and with a simulated headset, and on Windows, where it runs on the desktop. It has had one first session in a real headset (on Windows, with a Meta PC headset); what that found is fixed, but the fixes have not been back in a headset yet, and nothing has run on a Quest. [What has and has not been verified](docs/handoff.md) is written down.
 
 ## Highlights
 
@@ -82,10 +82,10 @@ Export to glTF, USD/USDZ, FBX and OBJ with hierarchy, animation, lights and came
 
 ## Download
 
-**Windows 10 and 11 (64-bit):** download [Limner-0.1.0-windows-x64.zip](https://github.com/lvnr/limner/releases/latest/download/Limner-0.1.0-windows-x64.zip) from the [latest release](https://github.com/lvnr/limner/releases/latest), unzip it anywhere and double-click `Limner.exe`. Nothing else needs installing.
+**Windows 10 and 11 (64-bit):** download the `Limner-…-windows-x64.zip` file from the [latest release](https://github.com/lvnr/limner/releases/latest), unzip it anywhere and double-click `Limner.exe`. Nothing else needs installing.
 
 - The app is not signed yet, so Windows SmartScreen says "Windows protected your PC" the first time. Choose **More info**, then **Run anyway**.
-- With a headset connected through Meta Quest Link, SteamVR or another OpenXR runtime, Limner starts in the headset; otherwise it opens on the desktop. Headset support has not been tried on real hardware yet.
+- With a headset connected through Meta Quest Link, SteamVR or another OpenXR runtime, Limner starts in the headset; otherwise it opens on the desktop. Headset support is early: it has had one first session, on a Meta PC headset.
 - It draws with Vulkan, which most graphics cards and chips from the last several years support; keep the graphics driver up to date.
 
 There is no download for macOS or Linux yet: build from source as below.
@@ -116,7 +116,7 @@ With a headset connected through OpenXR, Limner starts in it. Add `-- --desktop`
 | System | Desktop | Headset | Where it stands |
 |---|---|---|---|
 | macOS, Apple silicon | ✅ | (no OpenXR runtime on macOS) | Built, tested and packaged |
-| Windows | ✅ | Rift, Quest over Link, other OpenXR headsets | Built, tested and packaged on the desktop; not yet tried with a headset |
+| Windows | ✅ | Rift, Quest over Link, other OpenXR headsets | Built, tested and packaged; one first session with a Meta PC headset |
 | Linux | expected | SteamVR or Monado | Not tried yet; a CI workflow that runs every test on it is ready |
 | Quest, standalone | | planned | The build steps are written down in [docs/xr.md](docs/xr.md) |
 
