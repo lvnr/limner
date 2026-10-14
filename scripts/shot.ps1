@@ -7,5 +7,5 @@ if (-not [System.IO.Path]::IsPathRooted($Out)) { $Out = Join-Path $Root $Out }
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Out) | Out-Null
 $Size = if ($env:SHOT_SIZE) { $env:SHOT_SIZE } else { "1440x900" }
 # --xr-mode off and --desktop: a screenshot run never starts the headset.
-& "$Root\scripts\godot.ps1" --xr-mode off --path "$Root\godot" --resolution $Size --position 40,40 -- --desktop @Rest --shot $Out
+& "$Root\scripts\godot.ps1" --xr-mode off --path "$Root\godot" --resolution $Size --position "40,40" -- --desktop @Rest --shot $Out
 exit $LASTEXITCODE

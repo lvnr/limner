@@ -47,8 +47,14 @@ if ($Missing) {
 }
 
 Set-Location $Root
+# Link the C runtime into the extension, so the package does not need the Visual C++
+# Redistributable (VCRUNTIME140.dll), which not every PC has. This differs from the
+# flags of a plain cargo build, so the first package after one rebuilds everything.
+$env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = "-C target-feature=+crt-static"
 if ($DebugBuild) { cargo build -p limner-godot } else { cargo build -p limner-godot --release }
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$Built = $LASTEXITCODE
+Remove-Item Env:\CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS
+if ($Built -ne 0) { exit $Built }
 # Registers scripts and assets; the first run on a fresh checkout may print a crash trace at exit.
 & "$Root\scripts\godot.ps1" --headless --xr-mode off --path godot --import *> $null
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Out) | Out-Null

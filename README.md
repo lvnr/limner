@@ -21,7 +21,7 @@ Limner is a tool for painting in three dimensions and bringing the paintings to 
 Quill shaped a whole community of VR artists and animators, and it has not changed since version 2.9. Limner keeps its way of working, opens existing Quill projects, and adds what artists have been asking for: **lights that shade the paint**, mirrored painting, text, smooth keys, an open file format, and export to the 3D formats used today.
 
 > [!NOTE]
-> **Early days.** Everything in the plan is built and tested on macOS, where Limner runs on the desktop and with a simulated headset. It has not yet run on a real headset, on Windows or on a Quest; that is the next step. [What has and has not been verified](docs/handoff.md) is written down.
+> **Early days.** Everything in the plan is built and tested on macOS, where Limner runs on the desktop and with a simulated headset, and on Windows, where it runs on the desktop. It has not yet run on a real headset or on a Quest; that is the next step. [What has and has not been verified](docs/handoff.md) is written down.
 
 ## Highlights
 
@@ -106,7 +106,7 @@ With a headset connected through OpenXR, Limner starts in it. Add `-- --desktop`
 | System | Desktop | Headset | Where it stands |
 |---|---|---|---|
 | macOS, Apple silicon | ✅ | (no OpenXR runtime on macOS) | Built, tested and packaged |
-| Windows | expected | Rift, Quest over Link, other OpenXR headsets | Not tried yet; a CI workflow that runs every test on it is ready |
+| Windows | ✅ | Rift, Quest over Link, other OpenXR headsets | Built, tested and packaged on the desktop; not yet tried with a headset |
 | Linux | expected | SteamVR or Monado | Not tried yet; a CI workflow that runs every test on it is ready |
 | Quest, standalone | | planned | The build steps are written down in [docs/xr.md](docs/xr.md) |
 

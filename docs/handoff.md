@@ -43,6 +43,17 @@ On the PC:
 
 The project is set to start OpenXR whenever the app starts on Windows. That is what makes a headset work without a switch, and it means the headset's software can wake up for a desktop session. `--xr-mode off` (before the `--`) prevents that; the test and screenshot scripts already pass it.
 
+### Windows, first run
+
+On a Windows 10 PC (Core i9-9900K, GeForce RTX 4060, Windows PowerShell 5.1, Rust 1.99, Visual Studio 2022 Build Tools), with Godot 4.8 dev 7:
+
+- `cargo build -p limner-godot` built without changes, and every Rust test passed.
+- The headless interface tests: 221 run, 0 failed (the capture tests need a window and were left out).
+- The app ran on the desktop with Vulkan on the GeForce and drew the demo sheet as on the Mac.
+- `scripts\package.ps1` made a release package (`Limner.exe`, `Limner.pck`, `limner_godot.dll`, 40 MB zipped) that ran from a fresh folder.
+
+Three things in the PowerShell scripts were wrong and are fixed: Windows PowerShell 5.1 turns a program's stderr into errors when the output is redirected, so a harmless Godot warning stopped `test.ps1` and `package.ps1` at the import (`godot.ps1` now sets `$ErrorActionPreference = "Continue"` and relies on Godot's exit code); `shot.ps1` passed `--position 40,40` unquoted, which PowerShell splits into two arguments; and the package's extension needed the Visual C++ runtime (`VCRUNTIME140.dll`), which `package.ps1` now links in statically so the package runs on a PC without it.
+
 ## The first session with the headset
 
 `docs/xr.md` has the full list: how to make Meta's PC app the active OpenXR runtime, a 15-step first session in order, and the names of the constants to tune at each step (where the brush tip sits, how deep a poke has to go, where the palette rides in the hand). In short:
@@ -56,9 +67,9 @@ The original Rift is a PC headset, so the "PC headset" target in the Performance
 ## What has never been checked
 
 - **Anything in a headset.** Session start, controller bindings, stereo rendering of every shader, haptics, the palette's place and size, poke depths, performance.
-- **Anything on Windows or Linux.** The Rust code is portable and has no platform-specific parts, but it has only been built and run on macOS (Apple silicon).
+- **Linux.** The Rust code is portable and has no platform-specific parts, but it has not been built or run there. Windows is now checked on the desktop (see "Windows, first run" below); Windows with a headset is not.
 - **A Quest.** No Android build of the extension, no export, no vendors plugin.
-- **Packaged builds on Windows, Linux and Quest.** `scripts/package.sh` made a macOS package here, debug and release, and the packaged app was started and looked at. `scripts\package.ps1` is its untested twin for Windows. The macOS package holds the extension for Apple silicon only and is not notarised.
+- **Packaged builds on Linux and Quest.** `scripts/package.sh` made a macOS package here, debug and release, and the packaged app was started and looked at. `scripts\package.ps1` has made a Windows release package (see below). The macOS package holds the extension for Apple silicon only and is not notarised; the Windows one is not signed, so Windows SmartScreen warns before the first start.
 - **The exports in Blender, Unity and Unreal.** glTF and FBX files load in Godot's own importers and USD files pass Apple's USD tools, but nothing has been opened in the programs people will take them to. `docs/export.md` lists what was checked and says what each file should look like there.
 - **Sound by ear.** Players start, stop, loop, seek and fade as they should according to their state. Nobody has listened.
 - **FBX and Ogg import with real files**, ambisonic sound (only the first channels are played), MP3 beyond generated silence.
