@@ -1,17 +1,17 @@
 //! Lenient access to Quill's JSON. Quill 2.x writes many integers as strings and
-//! other writers do not, so every accessor accepts both.
+//! other writers do not, so every accessor accepts both. Numbers that are not finite
+//! (a string can spell "nan") read as missing.
 
 use serde_json::Value;
 
 pub(crate) fn as_i64(v: &Value) -> Option<i64> {
     match v {
-        Value::Number(n) => n.as_i64().or_else(|| n.as_f64().map(|f| f as i64)),
-        Value::String(s) => {
-            let s = s.trim();
-            s.parse::<i64>()
-                .ok()
-                .or_else(|| s.parse::<f64>().ok().map(|f| f as i64))
-        }
+        Value::Number(n) => n.as_i64().or_else(|| as_f64(v).map(|f| f as i64)),
+        Value::String(s) => s
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .or_else(|| as_f64(v).map(|f| f as i64)),
         Value::Bool(b) => Some(*b as i64),
         _ => None,
     }
@@ -23,6 +23,7 @@ pub(crate) fn as_f64(v: &Value) -> Option<f64> {
         Value::String(s) => s.trim().parse::<f64>().ok(),
         _ => None,
     }
+    .filter(|f| f.is_finite())
 }
 
 pub(crate) fn as_bool(v: &Value) -> Option<bool> {
@@ -88,6 +89,17 @@ mod tests {
         assert_eq!(as_i64(&json!(" 12 ")), Some(12));
         assert_eq!(as_i64(&json!(3.0)), Some(3));
         assert_eq!(as_i64(&json!([1])), None);
+    }
+
+    #[test]
+    fn numbers_that_are_not_finite_read_as_missing() {
+        assert_eq!(as_f64(&json!("nan")), None);
+        assert_eq!(as_f64(&json!("inf")), None);
+        assert_eq!(as_i64(&json!("-infinity")), None);
+        assert_eq!(as_f64(&json!("1e3")), Some(1000.0));
+        assert_eq!(floats::<2>(&json!([1.0, "NaN"])), None);
+        // Out-of-range values saturate instead of wrapping.
+        assert_eq!(as_i64(&json!(1e300)), Some(i64::MAX));
     }
 
     #[test]

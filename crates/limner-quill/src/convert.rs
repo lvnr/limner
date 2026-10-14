@@ -7,19 +7,26 @@ use limner_core::glam::{DAffine3, DMat3, DQuat, DVec3};
 use limner_core::math::{Flip, Xform};
 use limner_core::model::{
     Action, Attenuation, AttenuationMode, Camera, Document, Drawing, DrawingId, Group, Interp, Key,
-    Layer, LayerAnim, LayerId, LayerKind, MediaId, MediaKind, Model, Paint, Picture, Projection,
-    Sequence, Shading, Sound, SoundKind, SoundModifier, Viewpoint,
+    Layer, LayerAnim, LayerId, LayerKind, MediaData, MediaId, MediaKind, Model, Paint, Picture,
+    Projection, Sequence, Shading, Sound, SoundKind, SoundModifier, Viewpoint,
 };
 use limner_core::time::{self, FrameRate};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+
+/// Placeholders Quill's sharing dialog wrote when the artist typed nothing.
+const DEFAULT_TITLE: &str = "Untitled";
+const DEFAULT_DESCRIPTION: &str = "Shared from Quill";
 
 pub(crate) struct Converted {
     pub document: Document,
     pub warnings: Vec<String>,
 }
 
-pub(crate) fn convert(root: &Value, qbin: &[u8]) -> Result<Converted, ImportError> {
+/// Converts a project. `qbin` is `None` when the project has no `Quill.qbin`; the
+/// caller reports that once, and the per-layer consequences are then not repeated.
+pub(crate) fn convert(root: &Value, qbin: Option<&[u8]>) -> Result<Converted, ImportError> {
     let sequence = root
         .get("Sequence")
         .ok_or_else(|| ImportError::NotAProject("Quill.json has no \"Sequence\" object".into()))?;
@@ -35,15 +42,28 @@ pub(crate) fn convert(root: &Value, qbin: &[u8]) -> Result<Converted, ImportErro
     }
 
     let mut c = Converter {
-        qbin: Qbin::new(qbin),
+        qbin: Qbin::new(qbin.unwrap_or(&[])),
+        has_data: qbin.is_some_and(|bytes| !bytes.is_empty()),
         doc: Document::empty(),
         warnings: Vec::new(),
         drawings_by_offset: HashMap::new(),
-        pictures_by_offset: HashMap::new(),
+        media_by_offset: HashMap::new(),
         totals: DrawingReport::default(),
         damaged_drawings: 0,
         unreadable_drawings: 0,
     };
+    if qbin.is_some_and(|bytes| bytes.is_empty()) {
+        c.warn("Quill.qbin is empty; all drawings and media are empty".to_owned());
+    }
+    if let Some(version) = root
+        .get("Version")
+        .and_then(json::as_i64)
+        .filter(|v| *v != 1)
+    {
+        c.warn(format!(
+            "Quill.json declares format version {version}; this importer was written for version 1"
+        ));
+    }
     c.read_settings(sequence);
     c.read_root(root_layer);
 
@@ -65,11 +85,14 @@ pub(crate) fn convert(root: &Value, qbin: &[u8]) -> Result<Converted, ImportErro
 
 struct Converter<'a> {
     qbin: Qbin<'a>,
+    /// False when there is no binary data at all. That is reported once for the whole
+    /// project, so records that cannot be read are then not reported one by one.
+    has_data: bool,
     doc: Document,
     warnings: Vec<String>,
     /// Several layers can point at the same record; they then share one drawing.
     drawings_by_offset: HashMap<u64, DrawingId>,
-    pictures_by_offset: HashMap<u64, MediaId>,
+    media_by_offset: HashMap<(MediaKind, u64), MediaId>,
     totals: DrawingReport,
     damaged_drawings: usize,
     unreadable_drawings: usize,
@@ -80,13 +103,20 @@ impl Converter<'_> {
         self.warnings.push(message);
     }
 
+    /// Reports a record that could not be read, unless the whole file is absent.
+    fn warn_unreadable(&mut self, message: String) {
+        if self.has_data {
+            self.warn(message);
+        }
+    }
+
     fn read_settings(&mut self, sequence: &Value) {
         let settings = &mut self.doc.settings;
         if let Some(color) = sequence.get("BackgroundColor").and_then(json::floats::<3>) {
             settings.background = color.map(|v| v as f32);
         }
-        if let Some(fps) = json::get_f64(sequence, "Framerate").filter(|f| *f > 0.0) {
-            settings.rate = FrameRate::from_f64(fps);
+        if let Some(rate) = json::get_f64(sequence, "Framerate").and_then(frame_rate) {
+            settings.rate = rate;
         }
         if let Some(start) = json::get_i64(sequence, "ExportStart") {
             settings.range_start = time::from_quill_ticks(start);
@@ -101,11 +131,40 @@ impl Converter<'_> {
         }
         if let Some(metadata) = sequence.get("Metadata") {
             settings.title = json::get_str(metadata, "Title")
+                .filter(|t| *t != DEFAULT_TITLE)
                 .unwrap_or_default()
                 .to_owned();
             settings.description = json::get_str(metadata, "Description")
+                .filter(|d| *d != DEFAULT_DESCRIPTION)
                 .unwrap_or_default()
                 .to_owned();
+        }
+
+        let posters = sequence
+            .get("Gallery")
+            .and_then(|g| g.get("Pictures"))
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        if posters > 0 {
+            self.warn(format!(
+                "{posters} gallery poster(s) saved for Quill's sharing feature were not imported"
+            ));
+        }
+
+        // January 2017 files place the viewer with a matrix instead of a spawn area.
+        if let Some(home) = sequence.get("HomePosition") {
+            if !parse_xform(home).is_some_and(|x| is_nearly_identity(&x)) {
+                self.warn(
+                    "the home position of this 2017 file is not imported; viewers start at the origin"
+                        .to_owned(),
+                );
+            }
+        }
+        // 1 is floor level in the Oculus SDK and the only value seen in files.
+        if let Some(origin) = json::get_i64(sequence, "TrackingOrigin").filter(|o| *o != 1) {
+            self.warn(format!(
+                "the tracking origin of this 2017 file ({origin}) is not imported; floor level is assumed"
+            ));
         }
     }
 
@@ -128,7 +187,26 @@ impl Converter<'_> {
             max_repeat,
         });
         self.read_transforms(root, v, &name);
+        self.note_unsupported(v, &name);
         self.read_children(v, root, &name);
+    }
+
+    /// Warns about per-layer features that have no counterpart in the document.
+    fn note_unsupported(&mut self, v: &Value, path: &str) {
+        let keep_alive = v
+            .get("KeepAlive")
+            .and_then(|k| json::get_str(k, "Type"))
+            .filter(|t| !t.is_empty() && !t.eq_ignore_ascii_case("none"));
+        if let Some(behaviour) = keep_alive {
+            self.warn(format!(
+                "{path}: the keep-alive behaviour \"{behaviour}\" is not imported"
+            ));
+        }
+        if let Some(offset) = json::get_f64(v, "AnimOffset").filter(|o| *o != 0.0) {
+            self.warn(format!(
+                "{path}: the animation offset of this 2017 layer ({offset}) is not imported"
+            ));
+        }
     }
 
     fn read_children(&mut self, v: &Value, parent: LayerId, parent_path: &str) {
@@ -149,60 +227,52 @@ impl Converter<'_> {
         let type_name = json::get_str(v, "Type").unwrap_or("");
         let (anim, sequence) = self.read_animation(v, &path);
 
-        let kind = match type_name {
-            "Group" => LayerKind::Group(Group {
+        // A model imported with its hierarchy is a tree of nodes; a node can carry a
+        // mesh and children at once, which no single layer here can.
+        let has_children = implementation.get("Children").is_some();
+        let mut node_mesh = None;
+        let kind = match type_name.to_ascii_lowercase().as_str() {
+            "group" => LayerKind::Group(Group {
                 children: Vec::new(),
                 sequence,
             }),
-            "Paint" => LayerKind::Paint(self.read_paint(implementation, &path)),
-            "Viewpoint" => LayerKind::Viewpoint(self.read_viewpoint(implementation)),
-            "Camera" => LayerKind::Camera(Camera {
+            "paint" => LayerKind::Paint(self.read_paint(implementation, &path)),
+            "viewpoint" => LayerKind::Viewpoint(self.read_viewpoint(implementation, &path)),
+            "camera" => LayerKind::Camera(Camera {
                 fov: json::get_f64(implementation, "FOV")
                     .filter(|f| *f > 0.0 && *f < 180.0)
                     .unwrap_or(45.0) as f32,
             }),
-            "Picture" => LayerKind::Picture(self.read_picture(implementation, &path)),
-            "Model" => {
-                self.warn(format!(
-                    "{path}: model geometry is not imported yet; the layer is kept empty"
-                ));
-                LayerKind::Model(Model {
-                    media: None,
-                    shading: if json::get_str(implementation, "ShadingModel") == Some("Smooth") {
-                        Shading::Lit
-                    } else {
-                        Shading::Unlit
-                    },
-                    wireframe: json::get_bool(implementation, "RenderWireFrame").unwrap_or(false),
-                    source_path: json::get_str(implementation, "ImportFilePath")
-                        .unwrap_or_default()
-                        .to_owned(),
+            "picture" => LayerKind::Picture(self.read_picture(implementation, &name, &path)),
+            "model" if has_children => {
+                if implementation.get("DataFileOffset").is_some() {
+                    node_mesh = Some(self.read_model(implementation, &name, &path));
+                }
+                LayerKind::Group(Group {
+                    children: Vec::new(),
+                    sequence,
                 })
             }
-            "Sound" => {
+            "model" => LayerKind::Model(self.read_model(implementation, &name, &path)),
+            "sound" => LayerKind::Sound(self.read_sound(implementation, &name, &path)),
+            _ if has_children => {
                 self.warn(format!(
-                    "{path}: sound data is not imported yet; the layer is kept silent"
-                ));
-                LayerKind::Sound(read_sound(implementation))
-            }
-            other if implementation.get("Children").is_some() => {
-                self.warn(format!(
-                    "{path}: unknown layer type \"{other}\" imported as a group"
+                    "{path}: unknown layer type \"{type_name}\" imported as a group"
                 ));
                 LayerKind::Group(Group {
                     children: Vec::new(),
                     sequence,
                 })
             }
-            other => {
+            _ => {
                 self.warn(format!(
-                    "{path}: layer of unknown type \"{other}\" was skipped"
+                    "{path}: layer of unknown type \"{type_name}\" was skipped"
                 ));
                 return;
             }
         };
 
-        let mut layer = self.doc.new_layer(name, kind, 0);
+        let mut layer = self.doc.new_layer(name.clone(), kind, 0);
         read_common(&mut layer, v);
         layer.anim = anim;
         let id = self
@@ -210,6 +280,13 @@ impl Converter<'_> {
             .insert_layer(layer, parent, usize::MAX)
             .expect("parent is a group");
         self.read_transforms(id, v, &path);
+        self.note_unsupported(v, &path);
+        if let Some(model) = node_mesh {
+            let mesh_layer = self.doc.new_layer(name, LayerKind::Model(model), 0);
+            self.doc
+                .insert_layer(mesh_layer, id, usize::MAX)
+                .expect("a model node with children is imported as a group");
+        }
         if self.doc.layer(id).is_some_and(|l| l.as_group().is_some()) {
             self.read_children(v, id, &path);
         }
@@ -226,10 +303,20 @@ impl Converter<'_> {
     fn read_xform(&mut self, v: Option<&Value>, path: &str, what: &str) -> Xform {
         match v {
             None | Some(Value::Null) => Xform::IDENTITY,
-            Some(v) => parse_xform(v).unwrap_or_else(|| {
-                self.warn(format!("{path}: unreadable {what}; identity used"));
-                Xform::IDENTITY
-            }),
+            Some(v) => match parse_xform(v) {
+                Some(x) => {
+                    if json::floats::<16>(v).is_some_and(|m| !is_similarity(&m)) {
+                        self.warn(format!(
+                            "{path}: the {what} matrix has uneven scale, shear or perspective; the nearest uniform transform is used"
+                        ));
+                    }
+                    x
+                }
+                None => {
+                    self.warn(format!("{path}: unreadable {what}; identity used"));
+                    Xform::IDENTITY
+                }
+            },
         }
     }
 
@@ -238,9 +325,17 @@ impl Converter<'_> {
             // Files from before Quill 2.0 have no timeline: the layer is simply present.
             return (LayerAnim::starting_at(0), None);
         };
+        let Some(keys) = animation.get("Keys").filter(|k| k.is_object()) else {
+            // Quill 1.4 to 1.8 kept clips as "Spans" (and frames in the animation block).
+            // No file or reader documents that layout, so the layer is simply present.
+            if animation.get("Spans").is_some() || animation.get("Frames").is_some() {
+                self.warn(format!(
+                    "{path}: the clips of this Quill 1.x layer are in a layout this importer does not know; the layer is shown for the whole timeline"
+                ));
+            }
+            return (LayerAnim::starting_at(0), read_sequence(animation));
+        };
         let mut anim = LayerAnim::default();
-        let empty = Value::Null;
-        let keys = animation.get("Keys").unwrap_or(&empty);
         let list = |name: &str| {
             keys.get(name)
                 .and_then(Value::as_array)
@@ -306,17 +401,7 @@ impl Converter<'_> {
                 .insert(Key::step(at, time::from_quill_ticks(start_offset)));
         }
 
-        let sequence = json::get_bool(animation, "Timeline")
-            .unwrap_or(false)
-            .then(|| Sequence {
-                loop_duration: time::from_quill_ticks(
-                    json::get_i64(animation, "Duration").unwrap_or(0).max(0),
-                ),
-                max_repeat: json::get_i64(animation, "MaxRepeatCount")
-                    .unwrap_or(0)
-                    .clamp(0, u32::MAX as i64) as u32,
-            });
-        (anim, sequence)
+        (anim, read_sequence(animation))
     }
 
     fn read_interp(&mut self, key: &Value, path: &str) -> Interp {
@@ -338,8 +423,7 @@ impl Converter<'_> {
 
     fn read_paint(&mut self, implementation: &Value, path: &str) -> Paint {
         let rate = json::get_f64(implementation, "Framerate")
-            .filter(|f| *f > 0.0)
-            .map(FrameRate::from_f64)
+            .and_then(frame_rate)
             .unwrap_or(self.doc.settings.rate);
         let max_repeat = json::get_i64(implementation, "MaxRepeatCount")
             .unwrap_or(0)
@@ -421,7 +505,7 @@ impl Converter<'_> {
     }
 
     fn summarise_drawing_problems(&mut self) {
-        if self.unreadable_drawings > 0 {
+        if self.unreadable_drawings > 0 && self.has_data {
             self.warn(format!(
                 "{} drawing(s) point outside Quill.qbin and were imported empty",
                 self.unreadable_drawings
@@ -449,7 +533,7 @@ impl Converter<'_> {
         }
     }
 
-    fn read_viewpoint(&mut self, implementation: &Value) -> Viewpoint {
+    fn read_viewpoint(&mut self, implementation: &Value, path: &str) -> Viewpoint {
         let mut viewpoint = Viewpoint {
             // Spawn areas written before the eye/floor choice existed behaved as floor level.
             floor_level: json::get_str(implementation, "TypeStr")
@@ -474,40 +558,35 @@ impl Converter<'_> {
         viewpoint.thumbnail = implementation
             .get("DataFileOffset")
             .and_then(json::file_offset)
-            .and_then(|offset| self.picture_at(offset, "thumbnail"));
+            .and_then(|offset| self.picture_at(offset, "thumbnail", path, "spawn area thumbnail"));
         viewpoint
     }
 
-    fn read_picture(&mut self, implementation: &Value, path: &str) -> Picture {
+    fn read_picture(&mut self, implementation: &Value, layer_name: &str, path: &str) -> Picture {
         let source_path = json::get_str(implementation, "ImportFilePath")
             .unwrap_or_default()
             .to_owned();
-        let type_name = json::get_str(implementation, "Type").unwrap_or("2D");
-        let lower = type_name.to_ascii_lowercase();
-        let projection = if lower.contains("equirect") && lower.contains("stereo") {
-            Projection::EquirectStereo
-        } else if lower.contains("equirect") {
-            Projection::Equirect
-        } else if lower.contains("cross") {
-            Projection::CubemapCross
-        } else if lower.contains("cube") {
-            Projection::CubemapStrip
-        } else {
-            if lower != "2d" {
-                self.warn(format!(
-                    "{path}: picture type \"{type_name}\" is shown as a flat image"
-                ));
-            }
-            Projection::Flat
-        };
-        let name = file_name(&source_path).unwrap_or("picture").to_owned();
-        let media = implementation
+        let name = file_name(&source_path).unwrap_or(layer_name).to_owned();
+        let media = match implementation
             .get("DataFileOffset")
             .and_then(json::file_offset)
-            .and_then(|offset| self.picture_at(offset, &name));
-        if media.is_none() {
-            self.warn(format!("{path}: the picture's pixels could not be read"));
-        }
+        {
+            Some(offset) => self.picture_at(offset, &name, path, "picture"),
+            None => {
+                self.warn(format!(
+                    "{path}: the picture has no readable file offset and is empty"
+                ));
+                None
+            }
+        };
+        let size = media
+            .and_then(|id| self.doc.media(id))
+            .and_then(|m| match &m.data {
+                MediaData::RawImage { width, height, .. } => Some((*width, *height)),
+                _ => None,
+            });
+        let type_name = json::get_str(implementation, "Type").unwrap_or("2D");
+        let projection = self.picture_projection(type_name, size, path);
         Picture {
             media,
             projection,
@@ -516,14 +595,344 @@ impl Converter<'_> {
         }
     }
 
-    fn picture_at(&mut self, offset: u64, name: &str) -> Option<MediaId> {
-        if let Some(id) = self.pictures_by_offset.get(&offset) {
+    /// Maps a picture `Type` string to a projection. "2D", "2DDepth" and the two
+    /// equirectangular names come from the community readers; Quill also has two
+    /// cubemap layouts whose names are in no reader, so those are matched loosely.
+    fn picture_projection(
+        &mut self,
+        type_name: &str,
+        size: Option<(u32, u32)>,
+        path: &str,
+    ) -> Projection {
+        let key: String = type_name
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        match key.as_str() {
+            "2d" | "" => return Projection::Flat,
+            "360equirectangularmono" => return Projection::Equirect,
+            "360equirectangularstereo" => return Projection::EquirectStereo,
+            "2ddepth" => {
+                self.warn(format!(
+                    "{path}: picture type \"{type_name}\" is shown as a flat image; its depth is not imported"
+                ));
+                return Projection::Flat;
+            }
+            _ => {}
+        }
+        let (projection, shown_as) = if key.contains("equirect") && key.contains("stereo") {
+            (Projection::EquirectStereo, "a stereo 360 image")
+        } else if key.contains("equirect") {
+            (Projection::Equirect, "a 360 image")
+        } else if key.contains("cube") {
+            // A cross is four faces wide and three high; a strip is one face wide.
+            let cross = key.contains("cross")
+                || (!key.contains("strip") && size.is_some_and(|(w, h)| w > h));
+            if cross {
+                (Projection::CubemapCross, "a cubemap cross")
+            } else {
+                (Projection::CubemapStrip, "a cubemap strip")
+            }
+        } else {
+            (Projection::Flat, "a flat image")
+        };
+        self.warn(format!(
+            "{path}: picture type \"{type_name}\" is not a name this importer knows; it is shown as {shown_as}"
+        ));
+        projection
+    }
+
+    /// Reads the picture record at `offset`, once per record.
+    fn picture_at(&mut self, offset: u64, name: &str, path: &str, what: &str) -> Option<MediaId> {
+        if let Some(id) = self.media_by_offset.get(&(MediaKind::Image, offset)) {
             return Some(*id);
         }
-        let data = self.qbin.read_picture(offset)?;
-        let id = self.doc.add_media(name, MediaKind::Image, data);
-        self.pictures_by_offset.insert(offset, id);
+        match self.qbin.read_picture(offset) {
+            Ok((data, notes)) => {
+                if let Some(image_type) = notes.unexpected_type {
+                    self.warn(format!(
+                        "{path}: the {what} is stored as image type {image_type}, not a flat image; it was read as one grid of pixels"
+                    ));
+                }
+                let id = self.doc.add_media(name, MediaKind::Image, data);
+                self.media_by_offset.insert((MediaKind::Image, offset), id);
+                Some(id)
+            }
+            Err(reason) => {
+                self.warn_unreadable(format!("{path}: the {what} could not be read ({reason})"));
+                None
+            }
+        }
+    }
+
+    fn read_model(&mut self, implementation: &Value, layer_name: &str, path: &str) -> Model {
+        let source_path = json::get_str(implementation, "ImportFilePath")
+            .unwrap_or_default()
+            .to_owned();
+        let name = file_name(&source_path).unwrap_or(layer_name).to_owned();
+        let media = match implementation
+            .get("DataFileOffset")
+            .and_then(json::file_offset)
+        {
+            Some(offset) => self.mesh_at(offset, &name, path),
+            None => {
+                self.warn(format!(
+                    "{path}: the model has no readable file offset; the layer is kept empty"
+                ));
+                None
+            }
+        };
+        let shading = match json::get_str(implementation, "ShadingModel").unwrap_or("Unlit") {
+            s if s.eq_ignore_ascii_case("Smooth") => Shading::Lit,
+            s if s.eq_ignore_ascii_case("Unlit") => Shading::Unlit,
+            other => {
+                self.warn(format!(
+                    "{path}: unknown shading model \"{other}\" read as unlit"
+                ));
+                Shading::Unlit
+            }
+        };
+        Model {
+            media,
+            shading,
+            wireframe: json::get_bool(implementation, "RenderWireFrame").unwrap_or(false),
+            source_path,
+        }
+    }
+
+    /// Reads the mesh record at `offset`, once per record.
+    fn mesh_at(&mut self, offset: u64, name: &str, path: &str) -> Option<MediaId> {
+        if let Some(id) = self.media_by_offset.get(&(MediaKind::Mesh, offset)) {
+            return Some(*id);
+        }
+        let (mesh, notes) = match self.qbin.read_mesh(offset) {
+            Ok(read) => read,
+            Err(reason) => {
+                self.warn_unreadable(format!(
+                    "{path}: the model's geometry could not be read ({reason}); the layer is kept empty"
+                ));
+                return None;
+            }
+        };
+        if notes.points_only {
+            self.warn(format!(
+                "{path}: the model is a point cloud; its {} point(s) are kept but nothing is drawn",
+                mesh.positions.len()
+            ));
+        }
+        if notes.damaged_vertices > 0 {
+            self.warn(format!(
+                "{path}: {} vertex position(s) of the model were not finite; the faces using them were skipped",
+                notes.damaged_vertices
+            ));
+        }
+        if notes.skipped_faces > 0 {
+            self.warn(format!(
+                "{path}: {} face(s) of the model were skipped (not a triangle or quad, or pointing at a missing vertex)",
+                notes.skipped_faces
+            ));
+        }
+        if notes.repaired_attributes > 0 {
+            self.warn(format!(
+                "{path}: {} non-finite normal(s) or colour(s) of the model were replaced",
+                notes.repaired_attributes
+            ));
+        }
+        if notes.unexpected_layout {
+            self.warn(format!(
+                "{path}: the model's vertex attributes are not the position, colour, normal set Quill writes; normals and colours may be missing or swapped"
+            ));
+        }
+        if notes.extra_streams {
+            self.warn(format!(
+                "{path}: the model has more than one vertex stream; only the first was imported"
+            ));
+        }
+        let id = self
+            .doc
+            .add_media(name, MediaKind::Mesh, MediaData::Mesh(Arc::new(mesh)));
+        self.media_by_offset.insert((MediaKind::Mesh, offset), id);
         Some(id)
+    }
+
+    fn read_sound(&mut self, implementation: &Value, layer_name: &str, path: &str) -> Sound {
+        let source_path = json::get_str(implementation, "ImportFilePath")
+            .unwrap_or_default()
+            .to_owned();
+        let name = file_name(&source_path).unwrap_or(layer_name).to_owned();
+        let media = match implementation
+            .get("DataFileOffset")
+            .and_then(json::file_offset)
+        {
+            Some(offset) => self.sound_at(offset, &name, path),
+            None => {
+                self.warn(format!(
+                    "{path}: the sound has no readable file offset; the layer is kept silent"
+                ));
+                None
+            }
+        };
+
+        let type_name = json::get_str(implementation, "Type").unwrap_or("Flat");
+        let kind = match type_name.to_ascii_lowercase().as_str() {
+            "flat" => SoundKind::Flat,
+            "positional" => SoundKind::Positional,
+            "ambisonic" => SoundKind::Ambisonic,
+            _ => {
+                self.warn(format!(
+                    "{path}: unknown sound type \"{type_name}\" read as flat"
+                ));
+                SoundKind::Flat
+            }
+        };
+
+        let mut attenuation = Attenuation::default();
+        if let Some(a) = implementation.get("Attenuation").filter(|a| a.is_object()) {
+            let mode = json::get_str(a, "Mode").unwrap_or("None");
+            attenuation.mode = match mode.to_ascii_lowercase().as_str() {
+                "none" => AttenuationMode::None,
+                "linear" => AttenuationMode::Linear,
+                "logarithmic" | "logarithm" | "log" => AttenuationMode::Logarithmic,
+                _ => {
+                    self.warn(format!(
+                        "{path}: unknown attenuation mode \"{mode}\"; the sound does not fade with distance"
+                    ));
+                    AttenuationMode::None
+                }
+            };
+            let distance = |key: &str, fallback: f32| {
+                json::get_f64(a, key)
+                    .filter(|v| *v >= 0.0)
+                    .map_or(fallback, |v| v as f32)
+            };
+            attenuation.min = distance("Minimum", attenuation.min);
+            attenuation.max = distance("Maximum", attenuation.max);
+        }
+
+        let modifier = self.read_sound_modifier(implementation.get("Modifiers"), path);
+        Sound {
+            media,
+            kind,
+            gain: json::get_f64(implementation, "Gain")
+                .filter(|g| *g >= 0.0)
+                .map_or(1.0, |g| g as f32),
+            looped: json::get_bool(implementation, "Loop").unwrap_or(false),
+            attenuation,
+            modifier,
+            source_path,
+        }
+    }
+
+    /// Reads the directional shaping of a positional sound.
+    ///
+    /// Only the modifier type names are public (`DirectionalCone`, and `DirectionalFrus`
+    /// spelled `DirectionFrus` by one reader). The parameter names appear in no reader
+    /// and no file, so they are matched by what Quill's runtime calls them (inner angle,
+    /// band, attenuation outside) and every match is reported.
+    fn read_sound_modifier(&mut self, modifiers: Option<&Value>, path: &str) -> SoundModifier {
+        let list: Vec<&Value> = match modifiers {
+            Some(Value::Array(items)) => items.iter().collect(),
+            Some(single @ Value::Object(_)) => vec![single],
+            _ => Vec::new(),
+        };
+        let active: Vec<(&Value, &str)> = list
+            .into_iter()
+            .filter_map(|m| {
+                let kind = json::get_str(m, "Type")?;
+                (!kind.is_empty() && !kind.eq_ignore_ascii_case("none")).then_some((m, kind))
+            })
+            .collect();
+        if active.len() > 1 {
+            self.warn(format!(
+                "{path}: the sound has {} directional modifiers; only the first is imported",
+                active.len()
+            ));
+        }
+        let Some((value, type_name)) = active.into_iter().next() else {
+            return SoundModifier::None;
+        };
+        let kind = type_name.to_ascii_lowercase();
+
+        let numbers = modifier_numbers(value);
+        let find = |wanted: &dyn Fn(&str) -> bool| {
+            numbers.iter().find(|(key, _)| wanted(key)).map(|(_, v)| *v)
+        };
+        let band = find(&|k| k.contains("band"));
+        let outside = find(&|k| k.contains("atten"))
+            .or_else(|| find(&|k| k.contains("out") && !k.contains("angle")));
+        let (shape, angles): (&str, Option<Vec<f64>>) = if kind.contains("cone") {
+            let inner = find(&|k| k.contains("anglein") || k.contains("inner"));
+            ("cone", inner.map(|a| vec![a]))
+        } else if kind.contains("frus") {
+            let axis = |axis: char, word: &str| {
+                find(&|k| {
+                    k.contains(word)
+                        || ((k.contains("anglein") || k.contains("inner")) && k.ends_with(axis))
+                })
+            };
+            let both = axis('x', "horizontal").zip(axis('y', "vertical"));
+            ("frustum", both.map(|(h, v)| vec![h, v]))
+        } else {
+            self.warn(format!(
+                "{path}: unknown sound modifier \"{type_name}\" was not imported"
+            ));
+            return SoundModifier::None;
+        };
+        let Some(angles) = angles else {
+            self.warn(format!(
+                "{path}: the sound's directional {shape} has no parameters this importer recognises; the sound plays in all directions"
+            ));
+            return SoundModifier::None;
+        };
+
+        // Quill's runtime holds these angles in radians and shows degrees; a value past
+        // a full turn can only be degrees.
+        let band = band.unwrap_or(0.0);
+        let degrees = angles
+            .iter()
+            .chain([&band])
+            .any(|a| a.abs() > std::f64::consts::TAU);
+        let angle = |a: f64| (if degrees { a.to_radians() } else { a }) as f32;
+        let outside = outside.unwrap_or(0.0) as f32;
+        self.warn(format!(
+            "{path}: the sound's directional {shape} was read from parameter names no Quill file has confirmed (angles taken as {}); check it",
+            if degrees { "degrees" } else { "radians" }
+        ));
+        match angles.as_slice() {
+            [inner] => SoundModifier::Cone {
+                inner: angle(*inner),
+                band: angle(band),
+                outside,
+            },
+            [inner_h, inner_v] => SoundModifier::Frustum {
+                inner_h: angle(*inner_h),
+                inner_v: angle(*inner_v),
+                band: angle(band),
+                outside,
+            },
+            _ => SoundModifier::None,
+        }
+    }
+
+    /// Reads the sound record at `offset`, once per record.
+    fn sound_at(&mut self, offset: u64, name: &str, path: &str) -> Option<MediaId> {
+        if let Some(id) = self.media_by_offset.get(&(MediaKind::Audio, offset)) {
+            return Some(*id);
+        }
+        match self.qbin.read_sound(offset) {
+            Ok((data, _layout)) => {
+                let id = self.doc.add_media(name, MediaKind::Audio, data);
+                self.media_by_offset.insert((MediaKind::Audio, offset), id);
+                Some(id)
+            }
+            Err(reason) => {
+                self.warn_unreadable(format!(
+                    "{path}: the sound's audio could not be read ({reason}); the layer is kept silent"
+                ));
+                None
+            }
+        }
     }
 }
 
@@ -535,37 +944,51 @@ fn read_common(layer: &mut Layer, v: &Value) {
     layer.opacity = json::get_f64(v, "Opacity").map_or(1.0, |o| (o as f32).clamp(0.0, 1.0));
 }
 
-fn read_sound(implementation: &Value) -> Sound {
-    let kind = match json::get_str(implementation, "Type").unwrap_or("Flat") {
-        "Positional" => SoundKind::Positional,
-        "Ambisonic" => SoundKind::Ambisonic,
-        _ => SoundKind::Flat,
-    };
-    let mut attenuation = Attenuation::default();
-    if let Some(a) = implementation.get("Attenuation") {
-        attenuation.mode = match json::get_str(a, "Mode")
-            .unwrap_or("None")
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "linear" => AttenuationMode::Linear,
-            "logarithmic" | "logarithm" | "log" => AttenuationMode::Logarithmic,
-            _ => AttenuationMode::None,
+/// The numeric fields of a sound modifier, keyed by lower-case name without
+/// punctuation. Parameters nested one level down (for example under the modifier's
+/// own name) are included.
+fn modifier_numbers(modifier: &Value) -> BTreeMap<String, f64> {
+    fn collect(value: &Value, depth: usize, out: &mut BTreeMap<String, f64>) {
+        let Some(object) = value.as_object() else {
+            return;
         };
-        attenuation.min = json::get_f64(a, "Minimum").map_or(attenuation.min, |v| v as f32);
-        attenuation.max = json::get_f64(a, "Maximum").map_or(attenuation.max, |v| v as f32);
+        for (key, field) in object {
+            if field.is_object() && depth == 0 {
+                collect(field, 1, out);
+            } else if let Some(number) = json::as_f64(field) {
+                let key: String = key
+                    .chars()
+                    .filter(char::is_ascii_alphanumeric)
+                    .map(|c| c.to_ascii_lowercase())
+                    .collect();
+                out.entry(key).or_insert(number);
+            }
+        }
     }
-    Sound {
-        media: None,
-        kind,
-        gain: json::get_f64(implementation, "Gain").map_or(1.0, |g| g as f32),
-        looped: json::get_bool(implementation, "Loop").unwrap_or(false),
-        attenuation,
-        modifier: SoundModifier::None,
-        source_path: json::get_str(implementation, "ImportFilePath")
-            .unwrap_or_default()
-            .to_owned(),
-    }
+    let mut out = BTreeMap::new();
+    collect(modifier, 0, &mut out);
+    out
+}
+
+/// A usable frame rate, or `None` for values that cannot time frames.
+fn frame_rate(fps: f64) -> Option<FrameRate> {
+    (fps > 0.0)
+        .then(|| FrameRate::from_f64(fps))
+        .filter(|rate| rate.is_valid())
+}
+
+/// The nested clock of a group whose animation block has the timeline flag.
+fn read_sequence(animation: &Value) -> Option<Sequence> {
+    json::get_bool(animation, "Timeline")
+        .unwrap_or(false)
+        .then(|| Sequence {
+            loop_duration: time::from_quill_ticks(
+                json::get_i64(animation, "Duration").unwrap_or(0).max(0),
+            ),
+            max_repeat: json::get_i64(animation, "MaxRepeatCount")
+                .unwrap_or(0)
+                .clamp(0, u32::MAX as i64) as u32,
+        })
 }
 
 /// Last component of a Windows or POSIX path.
@@ -620,6 +1043,42 @@ fn parse_xform(v: &Value) -> Option<Xform> {
     (x.is_finite() && scale != 0.0).then_some(x)
 }
 
+/// True when a row-major 4x4 matrix is a rotation with one uniform scale, at most one
+/// mirror and a translation: everything a layer transform can hold. Old files round
+/// to six decimals, hence the loose tolerance.
+fn is_similarity(m: &[f64; 16]) -> bool {
+    const TOLERANCE: f64 = 1e-3;
+    let columns = [
+        DVec3::new(m[0], m[4], m[8]),
+        DVec3::new(m[1], m[5], m[9]),
+        DVec3::new(m[2], m[6], m[10]),
+    ];
+    let lengths = columns.map(DVec3::length);
+    let scale = lengths.iter().sum::<f64>() / 3.0;
+    if scale <= 0.0 {
+        return false;
+    }
+    let even = lengths
+        .iter()
+        .all(|l| (l - scale).abs() <= TOLERANCE * scale);
+    let square = [(0, 1), (0, 2), (1, 2)]
+        .iter()
+        .all(|(a, b)| columns[*a].dot(columns[*b]).abs() <= TOLERANCE * scale * scale);
+    let affine = m[12].abs() <= TOLERANCE
+        && m[13].abs() <= TOLERANCE
+        && m[14].abs() <= TOLERANCE
+        && (m[15] - 1.0).abs() <= TOLERANCE;
+    even && square && affine
+}
+
+fn is_nearly_identity(x: &Xform) -> bool {
+    const TOLERANCE: f64 = 1e-6;
+    !x.flip.is_mirrored()
+        && (x.scale - 1.0).abs() <= TOLERANCE
+        && x.translation.length() <= TOLERANCE
+        && x.rotation.dot(DQuat::IDENTITY).abs() >= 1.0 - TOLERANCE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -659,6 +1118,240 @@ mod tests {
         // A zero quaternion falls back to no rotation instead of producing NaNs.
         let x = parse_xform(&json!({"Rotation": [0.0, 0.0, 0.0, 0.0], "Scale": 1.0})).unwrap();
         assert_eq!(x.rotation, DQuat::IDENTITY);
+    }
+
+    /// A project with one record of every kind, in the modern schema.
+    fn everything() -> (Value, Vec<u8>) {
+        use crate::testing::*;
+        let mut qbin = QbinBuilder::default();
+        let thumbnail = qbin.picture_rgb(2, 2, &[9; 12]);
+        let drawing = qbin.drawing(&[
+            StrokeSpec::new(0, 2, tube(0.0, 5)),
+            StrokeSpec::new(1, 1, tube(1.0, 3)),
+        ]);
+        let pixels = qbin.picture_rgba(2, 1, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        let mesh = qbin.mesh(&MeshSpec {
+            positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]],
+            colors: Some(vec![[1.0; 3]; 4]),
+            normals: Some(vec![[0.0, 0.0, 1.0]; 4]),
+            faces: vec![vec![0, 1, 2, 3], vec![0, 1, 2]],
+        });
+        let wave = qbin.sound_wave(2, 16, 44_100, &[0; 16]);
+        let file = qbin.sound_file(&wav_file(1, 8, 8_000, &[1, 2, 3]));
+
+        let spawn = layer(
+            "InitialSpawnArea",
+            "Viewpoint",
+            json!({"Version": 1, "Color": [0.4, 0.3, 0.5], "Sphere": [0.0, 1.0, 0.0, 2.0],
+                   "DataFileOffset": thumbnail, "TypeStr": "FloorLevel"}),
+        );
+        let mut positional = sound("Voice", &wave, "voice.wav");
+        positional["Implementation"]["Modifiers"] =
+            json!([{"Type": "DirectionalCone", "AngleIn": 0.5, "AngleBand": 0.1, "AttenOut": 0.0}]);
+        let mut body = group(
+            "Body",
+            vec![
+                paint("Anim", &[&drawing, &drawing], &[0, 1, 1]),
+                picture("Ref", "360 Equirectangular Stereo", &pixels, "C:/ref.png"),
+                model("Rock", &mesh, "C:/rock.obj"),
+                positional,
+                sound("Music", &file, "music.wav"),
+                layer("Cam", "Camera", json!({"FOV": 40})),
+            ],
+        );
+        body["Animation"]["Keys"]["Transform"] = json!([
+            {"Time": "0", "Value": identity(), "Interpolation": "Linear"},
+            {"Time": "525", "Value": xform([0.0, 1.0, 0.0, 0.0], 2.0, "X", [1.0, 2.0, 3.0]), "Interpolation": "None"}
+        ]);
+        body["Animation"]["Keys"]["Opacity"] =
+            json!([{"Time": "0", "Value": 0.5, "Interpolation": "EaseOut"}]);
+        let mut quill = project(vec![spawn, body]);
+        quill["Sequence"]["RootLayer"]["Animation"]["Keys"]["Action"] =
+            json!([{"Time": "1050", "Value": "Stop", "Interpolation": "None"}]);
+        (quill, qbin.bytes)
+    }
+
+    /// A small deterministic generator, so a failure can be reproduced from its seed.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+    }
+
+    #[test]
+    fn the_test_project_is_clean_when_whole() {
+        let (quill, qbin) = everything();
+        let converted = convert(&quill, Some(&qbin)).unwrap();
+        // The cone is the one thing in it that cannot be read with certainty.
+        assert_eq!(converted.warnings.len(), 1, "{:?}", converted.warnings);
+        assert!(converted.warnings[0].contains("directional cone"));
+        let doc = &converted.document;
+        assert_eq!(doc.layer_count(), 9);
+        assert_eq!(doc.media_items().count(), 5);
+        assert_eq!(doc.stroke_count(), 2);
+    }
+
+    #[test]
+    fn a_binary_file_cut_anywhere_still_imports() {
+        let (quill, qbin) = everything();
+        for len in 0..=qbin.len() {
+            let converted = convert(&quill, Some(&qbin[..len]))
+                .unwrap_or_else(|e| panic!("cut at {len} bytes: {e}"));
+            converted
+                .document
+                .validate()
+                .unwrap_or_else(|e| panic!("cut at {len} bytes: {e}"));
+            assert_eq!(converted.document.layer_count(), 9, "cut at {len} bytes");
+            assert_eq!(
+                converted.warnings.len() > 1,
+                len < qbin.len(),
+                "a cut at {len} of {} bytes must be reported: {:?}",
+                qbin.len(),
+                converted.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn corrupted_binary_data_never_panics() {
+        let (quill, qbin) = everything();
+        let mut rng = Rng(0x2545_f491_4f6c_dd1d);
+        for round in 0..4000 {
+            let mut bytes = qbin.clone();
+            for _ in 0..1 + rng.below(4) {
+                let at = rng.below(bytes.len());
+                bytes[at] = match rng.below(4) {
+                    0 => 0,
+                    1 => 0xff,
+                    2 => 0x7f,
+                    _ => rng.next() as u8,
+                };
+            }
+            let converted =
+                convert(&quill, Some(&bytes)).unwrap_or_else(|e| panic!("round {round}: {e}"));
+            converted
+                .document
+                .validate()
+                .unwrap_or_else(|e| panic!("round {round}: {e}"));
+        }
+    }
+
+    /// Replaces one value somewhere in the tree with something of another shape.
+    fn mutate(value: &mut Value, rng: &mut Rng) {
+        let children = match value {
+            Value::Object(map) => map.len(),
+            Value::Array(items) => items.len(),
+            _ => 0,
+        };
+        if children > 0 && rng.below(8) != 0 {
+            let pick = rng.below(children);
+            match value {
+                Value::Object(map) => mutate(map.values_mut().nth(pick).expect("in range"), rng),
+                Value::Array(items) => mutate(&mut items[pick], rng),
+                _ => unreachable!(),
+            }
+            return;
+        }
+        *value = match rng.below(12) {
+            0 => Value::Null,
+            1 => json!(true),
+            2 => json!(-1),
+            3 => json!(1e300),
+            4 => json!("nan"),
+            5 => json!("ffffffffffffffff"),
+            6 => json!(""),
+            7 => json!([]),
+            8 => json!({}),
+            9 => json!([1, "two", null]),
+            10 => json!(u64::MAX),
+            _ => json!("Model"),
+        };
+    }
+
+    #[test]
+    fn mangled_json_is_an_error_or_an_import_never_a_panic() {
+        let (quill, qbin) = everything();
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        let mut imported = 0;
+        for round in 0..6000 {
+            let mut mangled = quill.clone();
+            for _ in 0..1 + rng.below(3) {
+                mutate(&mut mangled, &mut rng);
+            }
+            if let Ok(converted) = convert(&mangled, Some(&qbin)) {
+                imported += 1;
+                converted
+                    .document
+                    .validate()
+                    .unwrap_or_else(|e| panic!("round {round}: {e}"));
+            }
+        }
+        assert!(imported > 3000, "only {imported} mangled projects imported");
+    }
+
+    #[test]
+    fn similarity_matrices_are_told_from_the_rest() {
+        let floats = |v: Value| json::floats::<16>(&v).unwrap();
+        // Six-decimal rounding, as old files have it, is not an uneven scale.
+        assert!(is_similarity(&floats(json!([
+            5.002647, 0.0, 0.0, 1.0, 0.0, 5.002635, 0.0, 2.0, 0.0, 0.0, 5.002636, 3.0, 0.0, 0.0,
+            0.0, 1.0
+        ]))));
+        assert!(is_similarity(&floats(json!([
+            -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0
+        ]))));
+        for bad in [
+            json!([2.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+            json!([1.0, 0.5, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+            json!([1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5, 1.0]),
+            json!([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]),
+        ] {
+            assert!(!is_similarity(&floats(bad)));
+        }
+        assert!(is_nearly_identity(
+            &parse_xform(&json!([
+                0.9999999999,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.9999999999,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.9999999999,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ]))
+            .unwrap()
+        ));
+        assert!(!is_nearly_identity(&Xform::from_translation(DVec3::X)));
+    }
+
+    #[test]
+    fn modifier_parameters_are_gathered_one_level_deep() {
+        let numbers = modifier_numbers(&json!({
+            "Type": "DirectionalCone", "Angle In": "0.5", "Enabled": true,
+            "Params": {"Angle_Band": 0.25, "Deeper": {"Ignored": 1.0}}
+        }));
+        assert_eq!(
+            numbers.into_iter().collect::<Vec<_>>(),
+            [("angleband".to_owned(), 0.25), ("anglein".to_owned(), 0.5)]
+        );
+        assert!(modifier_numbers(&json!("cone")).is_empty());
     }
 
     #[test]
