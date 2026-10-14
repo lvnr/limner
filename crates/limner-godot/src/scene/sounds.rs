@@ -370,6 +370,12 @@ impl SoundNode {
         matches!(self.player, Player::Positional(_))
     }
 
+    /// True while the player is sounding: during playback, or for the snippet a
+    /// scrub plays. A muted sound still counts, since it is mixed all the same.
+    pub(super) fn is_playing(&self) -> bool {
+        on_player!(&self.player, p => p.is_playing())
+    }
+
     /// Brings the player in line with its layer. `audible` says that the layer and
     /// everything above it are inside their clips; the eye toggle is not asked, since
     /// hiding a sound layer hides its gizmo and nothing else.

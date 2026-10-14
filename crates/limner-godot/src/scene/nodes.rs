@@ -432,6 +432,14 @@ impl LayerNodes {
         self.streams.end_frame();
     }
 
+    /// How many sound layers are sounding now.
+    pub(super) fn sounds_playing(&self) -> usize {
+        self.entries
+            .values()
+            .filter(|entry| matches!(&entry.content, Content::Sound(node) if node.is_playing()))
+            .count()
+    }
+
     /// Frees every node, as when another document is opened.
     pub(super) fn clear(&mut self) {
         for (_, entry) in self.entries.drain() {

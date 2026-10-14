@@ -21,6 +21,16 @@ const DRAG_THRESHOLD := 4.0
 const MIN_FRAME_PIXELS := 6.0
 const KEY_REACH := 9.0
 const EDGE_REACH := 8.0
+## While a drag holds the pointer this close to an edge of the tracks, or past it,
+## the view scrolls by itself.
+const SCROLL_ZONE := 28.0
+## Pixels a second the view scrolls with the pointer on the edge itself; it goes
+## faster in step with how far into the zone, or past the edge, the pointer is.
+const SCROLL_SPEED := 450.0
+const SCROLL_SPEED_MAX := 5000.0
+## Pixels a unit of a trackpad's two-finger pan moves the view. Godot on macOS makes
+## a unit of about 33 points of finger travel, so that the content follows the fingers.
+const PAN_PIXELS := 33.0
 const PLAYHEAD := Color(1.0, 0.58, 0.12)
 const CHOSEN := Color(1.0, 0.85, 0.32)
 const KIND_COLORS := {
@@ -79,11 +89,13 @@ func _init(timeline_panel: TimelinePanel) -> void:
 	_h_bar.step = 0.0001
 	_h_bar.tooltip_text = "Scroll along time"
 	_h_bar.value_changed.connect(_on_h_scrolled)
+	_h_bar.gui_input.connect(_on_bar_input.bind(_h_bar))
 	add_child(_h_bar)
 	_v_bar = VScrollBar.new()
 	_v_bar.step = 1.0
 	_v_bar.tooltip_text = "Scroll the layers"
 	_v_bar.value_changed.connect(_on_v_scrolled)
+	_v_bar.gui_input.connect(_on_bar_input.bind(_v_bar))
 	add_child(_v_bar)
 
 
@@ -159,6 +171,12 @@ func key_position(id: int, track: String, time: int) -> Vector2:
 ## True between a press on the tracks or the ruler and its release.
 func is_dragging() -> bool:
 	return not _drag.is_empty()
+
+
+## What the drag under way does: "scrub", "range_start", "range_end", "clip", "keys"
+## or "band"; empty when there is none.
+func drag_kind() -> String:
+	return str(_drag.get("kind", ""))
 
 
 # ---- zoom and scroll ----
@@ -944,6 +962,7 @@ func _gui_input(event: InputEvent) -> void:
 			accept_event()
 		elif button.pressed and button.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN, MOUSE_BUTTON_WHEEL_LEFT, MOUSE_BUTTON_WHEEL_RIGHT]:
 			_on_wheel(button)
+			_follow_pointer()
 			accept_event()
 	elif event is InputEventMouseMotion:
 		var motion: InputEventMouseMotion = event
@@ -952,23 +971,62 @@ func _gui_input(event: InputEvent) -> void:
 		else:
 			drag(motion.position)
 			accept_event()
-	elif event is InputEventMagnifyGesture:
-		var pinch: InputEventMagnifyGesture = event
-		if pinch.position.x >= names_width:
-			zoom_at(pinch.position.x, pinch.factor)
+	elif event is InputEventGesture:
+		on_gesture(event)
 		accept_event()
+
+
+## Escape during a drag puts back what the drag did and ends it. The key is taken
+## here, before the shell's own Escape (which cancels a stroke or deselects) sees it.
+func _input(event: InputEvent) -> void:
+	if _drag.is_empty() or not event is InputEventKey:
+		return
+	var key: InputEventKey = event
+	if key.pressed and not key.echo and key.keycode == KEY_ESCAPE:
+		cancel_drag()
+		get_viewport().set_input_as_handled()
+
+
+func _process(delta: float) -> void:
+	if not _drag.is_empty():
+		auto_scroll(delta)
+
+
+## A trackpad gesture over the view, at its position in the view.
+##
+## Pinching (`InputEventMagnifyGesture`, whose factor is above 1 as the fingers
+## spread) zooms about the fingers. Two fingers (`InputEventPanGesture`, whose delta
+## is positive toward later times and lower rows, the way a wheel turned down
+## scrolls) move along time and through the rows together, as a scroll view does;
+## with Shift they only scroll the rows, and with Ctrl or Cmd up and down zooms.
+func on_gesture(event: InputEventGesture) -> void:
+	if event is InputEventMagnifyGesture:
+		var pinch: InputEventMagnifyGesture = event
+		if pinch.factor > 0.0 and is_finite(pinch.factor):
+			var x := pinch.position.x if pinch.position.x >= names_width else tracks_rect().get_center().x
+			zoom_at(x, clampf(pinch.factor, 0.5, 2.0))
 	elif event is InputEventPanGesture:
 		var pan: InputEventPanGesture = event
-		if pan.position.x < names_width or pan.shift_pressed:
-			scroll_rows((pan.delta.y + pan.delta.x) * 12.0)
-		elif pan.ctrl_pressed or pan.meta_pressed:
+		var delta := pan.delta * PAN_PIXELS * DisplayServer.screen_get_scale()
+		if pan.shift_pressed:
+			scroll_rows(delta.y + delta.x)
+		elif (pan.ctrl_pressed or pan.meta_pressed) and pan.position.x >= names_width:
 			zoom_at(pan.position.x, pow(1.08, -pan.delta.y))
 		else:
-			if absf(pan.delta.x) > 0.0:
-				pan_pixels(pan.delta.x * 14.0)
-			if absf(pan.delta.y) > 0.0:
-				scroll_rows(pan.delta.y * 12.0)
-		accept_event()
+			if delta.x != 0.0:
+				pan_pixels(delta.x)
+			if delta.y != 0.0:
+				scroll_rows(delta.y)
+	_follow_pointer()
+
+
+## A gesture over a scroll bar is meant for the view.
+func _on_bar_input(event: InputEvent, bar: Control) -> void:
+	if event is InputEventGesture:
+		var gesture := event.duplicate() as InputEventGesture
+		gesture.position += bar.position
+		on_gesture(gesture)
+		bar.accept_event()
 
 
 ## The wheel pans along time; with Ctrl or Cmd it zooms about the pointer; with
@@ -1005,11 +1063,14 @@ func _show_cursor(at: Vector2) -> void:
 ## what is selected; `double` is the second press of a double press.
 func press(at: Vector2, add := false, toggle := false, double := false) -> void:
 	_finish_drag(false)
+	# Asked of the scene: the editor's copy of the status may be a frame old.
+	var before := int(editor.scene.status().time)
 	if at.x > size.x - BAR or at.y > size.y - BAR:
 		return
 	if at.y < RULER:
 		if at.x >= names_width:
 			_press_ruler(at)
+			_begin_drag(at, before)
 		return
 	var index := row_index_at(at.y)
 	if at.x < names_width:
@@ -1023,25 +1084,45 @@ func press(at: Vector2, add := false, toggle := false, double := false) -> void:
 		var key := key_at(at, index)
 		if not key.is_empty():
 			_press_key(at, row, key, add or toggle)
+			_begin_drag(at, before)
 			return
 		# Clips cover most of a track, so there is a way to drag out a range of keys
 		# over them: with Shift held, or with the panel's switch for it on.
 		var hit := {} if add or panel.select_range else clip_at(at.x, index)
 		if not hit.is_empty():
 			_press_clip(at, row, hit)
+			_begin_drag(at, before)
 			return
 	var keep: Dictionary = panel.selected_keys.duplicate(true) if add or toggle else {}
-	_drag = {"kind": "band", "from": at, "moved": false, "keep": keep}
+	_drag = {"kind": "band", "from": at, "moved": false, "keep": keep, "before": panel.selected_keys.duplicate(true), "track": panel.key_track}
+	_begin_drag(at, before)
+
+
+## What every drag remembers of its press: the pointer, the time and the row under
+## it (so that the view can scroll under a drag), and where the playhead was.
+func _begin_drag(at: Vector2, playhead_before: int) -> void:
+	if _drag.is_empty():
+		return
+	_drag["at"] = at
+	_drag["from_time"] = time_at(at.x)
+	_drag["from_y"] = at.y + scroll_y
+	_drag["playhead_before"] = playhead_before
 
 
 func drag(at: Vector2) -> void:
 	if _drag.is_empty():
 		return
+	_drag["at"] = at
 	var from: Vector2 = _drag.from
 	if not _drag.moved:
 		if from.distance_to(at) < DRAG_THRESHOLD:
 			return
 		_drag.moved = true
+	_drag_to(at)
+
+
+## Carries the drag under way to the pointer at `at`, against the view as it is now.
+func _drag_to(at: Vector2) -> void:
 	match str(_drag.kind):
 		"scrub":
 			seek_to(at.x)
@@ -1081,6 +1162,77 @@ func _finish_drag(by_release: bool) -> void:
 				panel.select_keys(panel.key_track, done.keep)
 				panel.select_clip(-1, -1)
 	queue_redraw()
+
+
+## Puts back everything the drag under way has changed (the document, the keys a
+## band selected, the playhead a scrub moved) and ends it, as Escape does. What the
+## press itself selected stays selected. False when nothing was being dragged.
+func cancel_drag() -> bool:
+	if _drag.is_empty():
+		return false
+	var kind := str(_drag.kind)
+	match kind:
+		"clip", "keys", "range_start", "range_end":
+			editor.cancel()
+			if kind == "keys":
+				panel.selected_keys = (_drag.original as Dictionary).duplicate(true)
+			# Read while the drag is still on, so that the clip being dragged stays selected.
+			panel.reload(kind.begins_with("range"))
+		"band":
+			panel.select_keys(str(_drag.track), _drag.before)
+		"scrub":
+			editor.run({"cmd": "seek", "time": int(_drag.playhead_before)})
+	_drag = {}
+	_band = Rect2()
+	queue_redraw()
+	return true
+
+
+## How fast the view should scroll, in pixels a second, for a pointer at `x` along
+## an extent from `low` to `high`: below zero toward `low`, above toward `high`,
+## zero away from both. The same for up and down.
+static func edge_speed(x: float, low: float, high: float) -> float:
+	var zone := minf(SCROLL_ZONE, (high - low) * 0.25)
+	if zone <= 0.0:
+		return 0.0
+	var depth := 0.0
+	if x < low + zone:
+		depth = x - (low + zone)
+	elif x > high - zone:
+		depth = x - (high - zone)
+	return clampf(depth / zone * SCROLL_SPEED, -SCROLL_SPEED_MAX, SCROLL_SPEED_MAX)
+
+
+## Scrolls the view while a drag holds the pointer near an edge of the tracks, or
+## past it, and carries the drag along so that what is dragged stays at the time
+## under the pointer. Called every frame; `delta` is in seconds. A drag that selects
+## keys scrolls the rows too. Returns whether the view moved.
+func auto_scroll(delta: float) -> bool:
+	if _drag.is_empty() or not _drag.moved or not _drag.has("at"):
+		return false
+	var at: Vector2 = _drag.at
+	var area := tracks_rect()
+	var start := axis.start
+	var top := scroll_y
+	var speed := edge_speed(at.x, area.position.x, area.end.x)
+	if speed != 0.0:
+		axis.start = maxf(axis.start + speed * delta / axis.zoom, 0.0)
+	if _drag.kind == "band":
+		scroll_y += edge_speed(at.y, area.position.y, area.end.y) * delta
+	if axis.start == start and scroll_y == top:
+		return false
+	refresh()
+	if axis.start == start and scroll_y == top:
+		return false
+	_drag_to(at)
+	return true
+
+
+## After the view zoomed or scrolled under a drag, what is dragged catches up with
+## the pointer.
+func _follow_pointer() -> void:
+	if not _drag.is_empty() and _drag.moved and _drag.has("at"):
+		_drag_to(_drag.at)
 
 
 func _press_ruler(at: Vector2) -> void:
@@ -1183,7 +1335,6 @@ func _apply(label: String, commands: Array, settings := false) -> void:
 func _drag_clip(at: Vector2) -> void:
 	if _drag.locked:
 		return
-	var from: Vector2 = _drag.from
 	var id: int = _drag.layer
 	var number: int = _drag.clip
 	var origin: int = _drag.origin
@@ -1193,7 +1344,7 @@ func _drag_clip(at: Vector2) -> void:
 	var lower: int = _drag.lower
 	var has_upper: bool = _drag.upper != null
 	var upper: int = int(_drag.upper) if has_upper else 0
-	var shift := axis.duration_of(at.x - from.x)
+	var shift := time_at(at.x) - int(_drag.from_time)
 	var frame := maxi(int(panel.info.get("frame_duration", 1)), 1)
 	var shortest := frame if open else mini(frame, end - start)
 	var commands := []
@@ -1229,11 +1380,10 @@ func _drag_clip(at: Vector2) -> void:
 func _drag_keys(at: Vector2) -> void:
 	if _drag.locked:
 		return
-	var from: Vector2 = _drag.from
 	var track: String = _drag.track
 	var time: int = _drag.time
 	var original: Dictionary = _drag.original
-	var delta := maxi(snap_time(time + axis.duration_of(at.x - from.x), int(_drag.origin)), 0) - time
+	var delta := maxi(snap_time(time + time_at(at.x) - int(_drag.from_time), int(_drag.origin)), 0) - time
 	# Keys pushed against zero keep their spacing, on every layer alike.
 	for id: int in original:
 		for other: int in original[id]:
@@ -1267,14 +1417,18 @@ func _drag_range(at: Vector2) -> void:
 
 
 ## Selects the keys of the chosen type that the dragged rectangle covers.
+## Where it began is held in time and in the rows, so that it stays put while the
+## view scrolls under it.
 func _drag_band(at: Vector2) -> void:
-	var from: Vector2 = _drag.from
+	var anchor_time := int(_drag.from_time)
+	var from := Vector2(x_of(anchor_time), float(_drag.from_y) - scroll_y)
 	_band = Rect2(from, at - from).abs()
 	var chosen: Dictionary = (_drag.keep as Dictionary).duplicate(true)
 	var first := clampi(row_index_at(_band.position.y), 0, panel.rows.size())
 	var last := clampi(row_index_at(_band.end.y) + 1, 0, panel.rows.size())
-	var from_time := time_at(_band.position.x)
-	var to_time := time_at(_band.end.x)
+	var pointer_time := time_at(at.x)
+	var from_time := mini(anchor_time, pointer_time)
+	var to_time := maxi(anchor_time, pointer_time)
 	for index in range(first, last):
 		var row: Dictionary = panel.rows[index]
 		var id := int(row.id)

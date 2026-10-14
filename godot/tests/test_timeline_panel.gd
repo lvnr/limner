@@ -1095,3 +1095,319 @@ func test_mouse_events_reach_the_tracks_and_the_grip() -> void:
 	await frames(2)
 	check_near(panel.height, before + 60.0, "the height the grip was dragged to")
 	check_near(panel.size.y, before + 60.0, "the panel is that tall", 1.0)
+
+
+# ---- scrolling under a drag, Escape, trackpad gestures ----
+
+func _escape() -> void:
+	var key := InputEventKey.new()
+	key.keycode = KEY_ESCAPE
+	key.physical_keycode = KEY_ESCAPE
+	key.pressed = true
+	get_viewport().push_input(key)
+
+
+## A node that counts the Escapes nothing else took, as the desktop shell's own
+## `_unhandled_input` would see them.
+func _escape_listener() -> Node:
+	var script := GDScript.new()
+	script.source_code = "extends Node\nvar escapes := 0\nfunc _unhandled_input(event: InputEvent) -> void:\n\tif event is InputEventKey and (event as InputEventKey).keycode == KEY_ESCAPE:\n\t\tescapes += 1\n"
+	script.reload()
+	var listener := Node.new()
+	listener.set_script(script)
+	add_child(listener)
+	return listener
+
+
+func _pinch(at: Vector2, factor: float) -> InputEventMagnifyGesture:
+	var pinch := InputEventMagnifyGesture.new()
+	pinch.position = at
+	pinch.factor = factor
+	return pinch
+
+
+func _pan(at: Vector2, delta: Vector2) -> InputEventPanGesture:
+	var pan := InputEventPanGesture.new()
+	pan.position = at
+	pan.delta = delta
+	return pan
+
+
+func test_the_view_scrolls_by_itself_when_a_drag_nears_an_edge() -> void:
+	var panel := await _panel()
+	var view := panel.view
+	var paint := _paint()
+	run({"cmd": "toggle_clip", "layer": paint, "time": 2 * SECOND})
+	# Away from the middle of the clip, where the clip is pressed.
+	var key_time := SECOND * 7 / 4
+	run({"cmd": "set_key", "layer": paint, "track": "transform", "time": key_time})
+	run({"cmd": "set_options", "values": {"snap_to_clips": false, "snap_to_frames": false}})
+	await frames(2)
+	for step in 3:
+		_press(panel, "zoom_in")
+	var area := view.tracks_rect()
+	check_eq(TimelineView.edge_speed(area.get_center().x, area.position.x, area.end.x), 0.0, "no scrolling away from the edges")
+	check_near(TimelineView.edge_speed(area.end.x, area.position.x, area.end.x), TimelineView.SCROLL_SPEED, "on the edge", 0.01)
+	check(TimelineView.edge_speed(area.end.x + 50.0, area.position.x, area.end.x) > TimelineView.SCROLL_SPEED * 2.0, "faster past it")
+	check(TimelineView.edge_speed(area.position.x - 5.0, area.position.x, area.end.x) < -TimelineView.SCROLL_SPEED, "backward at the left edge")
+	check_eq(TimelineView.edge_speed(1e6, area.position.x, area.end.x), TimelineView.SCROLL_SPEED_MAX, "up to a limit")
+
+	# A clip dragged to the right edge: the view scrolls, and the clip stays at the
+	# time under the pointer.
+	var from := view.clip_center(paint, 0)
+	var from_time := view.time_at(from.x)
+	view.press(from)
+	view.drag(from + Vector2(12.0, 0.0))
+	check(not view.auto_scroll(0.1), "the view stays while the pointer is away from the edges")
+	var edge := Vector2(area.end.x - 1.0, from.y)
+	view.drag(edge)
+	var start := view.axis.start
+	check(view.auto_scroll(0.1), "near the edge the view scrolls")
+	var near_step := view.axis.start - start
+	check(near_step > 0.0, "toward later times")
+	check_eq(int(panel.timeline[paint].clips[0].start), view.time_at(edge.x) - from_time, "the clip keeps up with the pointer")
+	var beyond := Vector2(area.end.x + 120.0, from.y)
+	view.drag(beyond)
+	start = view.axis.start
+	view.auto_scroll(0.1)
+	check(view.axis.start - start > near_step * 3.0, "faster with the pointer past the edge: %s against %s" % [view.axis.start - start, near_step])
+	var expected := view.time_at(beyond.x) - from_time
+	check_eq(int(panel.timeline[paint].clips[0].start), expected, "the clip is still under the pointer")
+	view.release(beyond)
+	await frames(2)
+	check_eq(int(_line(paint).clips[0].start), expected, "where it was let go")
+	check_eq(_status().undo_label, "Move clip", "as one undo step")
+	editor.undo()
+	await frames(2)
+
+	# Keys too.
+	view.fit()
+	for step in 3:
+		_press(panel, "zoom_in")
+	var key := view.key_position(paint, "transform", key_time)
+	from_time = view.time_at(key.x)
+	view.press(key)
+	view.drag(key + Vector2(10.0, 0.0))
+	view.drag(beyond)
+	for step in 3:
+		view.auto_scroll(0.1)
+	expected = key_time + view.time_at(beyond.x) - from_time
+	view.release(beyond)
+	await frames(2)
+	check_eq(_times(_line(paint).transform_keys), [expected], "a dragged key goes along with the view")
+	editor.undo()
+	await frames(2)
+
+	# Scrubbing past the left edge scrolls back as far as the start, and no further.
+	view.axis.start = 3.0
+	view.refresh()
+	var ruler := Vector2(area.get_center().x, 8.0)
+	view.press(ruler)
+	var left := Vector2(area.position.x - 60.0, 8.0)
+	view.drag(left)
+	var steps := 0
+	while view.auto_scroll(0.1) and steps < 500:
+		steps += 1
+	check_eq(view.axis.start, 0.0, "scrolled back to the start")
+	check(steps > 0 and steps < 500, "in a number of steps: %d" % steps)
+	check_eq(int(_status().time), 0, "the playhead follows the pointer to the start")
+	view.release(left)
+
+	# The end of the range.
+	view.fit()
+	await frames(2)
+	var grip := Vector2(view.x_of(10 * SECOND) - 3.0, TimelineView.RULER - 4.0)
+	view.press(grip)
+	view.drag(beyond)
+	view.auto_scroll(0.1)
+	expected = view.time_at(beyond.x)
+	view.release(beyond)
+	await frames(2)
+	check_eq(int(editor.get_info().range_end), expected, "the end of the range follows the pointer past the edge")
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_selecting_keys_scrolls_the_rows_too() -> void:
+	var panel := await _panel()
+	var view := panel.view
+	var last := -1
+	for number in 12:
+		var added: Dictionary = run({"cmd": "add_layer", "kind": "paint", "name": "Extra %d" % number})
+		last = int(added.layer)
+	run({"cmd": "set_key", "layer": last, "track": "transform", "time": 2 * SECOND})
+	await frames(2)
+	view.scroll_rows(-10000.0)
+	var area := view.tracks_rect()
+	check(view.row_top(view.row_of(last)) > area.end.y, "the last row is out of view")
+	var from := Vector2(view.x_of(SECOND), view.row_top(0) + 5.0)
+	view.press(from)
+	var below := Vector2(view.x_of(3 * SECOND), area.end.y + 40.0)
+	view.drag(below)
+	check_eq(view.drag_kind(), "band", "a drag over empty track space selects")
+	var steps := 0
+	while view.auto_scroll(0.1) and steps < 500:
+		steps += 1
+	check(view.scroll_y > 0.0, "the rows scrolled down")
+	check_near(view.row_top(view.row_of(last)) + TimelineView.ROW, view.tracks_rect().end.y, "as far as the last row", 0.5)
+	check_near(view._band.position.y, view.row_top(0) + 5.0, "the rectangle still starts where it was pressed")
+	check_eq(panel.selected_keys.get(last, []), [2 * SECOND], "and reaches the key on the last row")
+	view.release(below)
+	check_eq(panel.selected_keys.get(last, []), [2 * SECOND], "which stays selected")
+
+
+func test_escape_puts_back_what_a_drag_did() -> void:
+	var panel := await _panel()
+	var view := panel.view
+	var paint := _paint()
+	run({"cmd": "set_key", "layer": paint, "track": "transform", "time": 3 * SECOND})
+	run({"cmd": "toggle_clip", "layer": paint, "time": 2 * SECOND})
+	run({"cmd": "set_options", "values": {"snap_to_clips": false}})
+	await frames(2)
+	var label: String = _status().undo_label
+	var listener := _escape_listener()
+
+	# A clip.
+	var from := view.clip_center(paint, 0)
+	view.press(from)
+	view.drag(from + Vector2(80.0, 0.0))
+	check(int(panel.timeline[paint].clips[0].start) > 0, "the clip is dragged")
+	_escape()
+	check(not view.is_dragging(), "Escape ends the drag")
+	check_eq(int(panel.timeline[paint].clips[0].start), 0, "and puts the clip back")
+	check_eq(int(listener.get("escapes")), 0, "the shell does not see that Escape")
+	view.drag(from + Vector2(120.0, 0.0))
+	view.release(from + Vector2(120.0, 0.0))
+	await frames(2)
+	check_eq(int(_line(paint).clips[0].start), 0, "the rest of the drag does nothing")
+	check_eq([panel.selected_clip_layer, panel.selected_clip], [paint, 0], "the clip pressed stays selected")
+	check_eq(_status().undo_label, label, "nothing to undo")
+
+	# Keys.
+	var key := view.key_position(paint, "transform", 3 * SECOND)
+	view.press(key)
+	view.drag(key + Vector2(80.0, 0.0))
+	check(_times(panel.timeline[paint].transform_keys) != [3 * SECOND], "the key is dragged")
+	_escape()
+	await frames(2)
+	check_eq(_times(_line(paint).transform_keys), [3 * SECOND], "Escape puts the key back")
+	check_eq(panel.selected_keys, {paint: [3 * SECOND]}, "still selected")
+
+	# The end of the range.
+	var grip := Vector2(view.x_of(10 * SECOND) - 3.0, TimelineView.RULER - 4.0)
+	view.press(grip)
+	view.drag(Vector2(view.x_of(6 * SECOND), grip.y))
+	check_eq(int(panel.info.range_end), 6 * SECOND, "the range end is dragged")
+	_escape()
+	await frames(2)
+	check_eq(int(editor.get_info().range_end), 10 * SECOND, "Escape puts it back")
+	check_eq(int(panel.info.range_end), 10 * SECOND, "and the ruler shows it")
+
+	# A rectangle selecting keys.
+	var empty := Vector2(view.x_of(7 * SECOND), view.row_top(0) + 8.0)
+	view.press(empty)
+	view.drag(empty + Vector2(60.0, 40.0))
+	check_eq(panel.selected_keys, {}, "the rectangle covers no keys")
+	_escape()
+	check_eq(panel.selected_keys, {paint: [3 * SECOND]}, "Escape gives back the keys selected before")
+	check(not view._band.has_area(), "and the rectangle goes")
+
+	# Scrubbing.
+	check_eq(int(_status().time), 0, "the playhead at the start")
+	view.press(Vector2(view.x_of(5 * SECOND), 8.0))
+	view.drag(Vector2(view.x_of(6 * SECOND), 8.0))
+	check_eq(int(_status().time), 6 * SECOND, "scrubbing")
+	_escape()
+	check_eq(int(_status().time), 0, "Escape takes the playhead back")
+
+	check_eq(_status().undo_label, label, "none of it left anything to undo")
+	check_eq(int(listener.get("escapes")), 0, "the timeline took every Escape")
+	_escape()
+	check_eq(int(listener.get("escapes")), 1, "with no drag under way, Escape goes on to the shell")
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_trackpad_pinch_and_two_finger_pan() -> void:
+	var panel := await _panel()
+	var view := panel.view
+	var paint := _paint()
+	for number in 12:
+		run({"cmd": "add_layer", "kind": "paint", "name": "Extra %d" % number})
+	run({"cmd": "toggle_clip", "layer": paint, "time": 2 * SECOND})
+	run({"cmd": "set_options", "values": {"snap_to_clips": false, "snap_to_frames": false}})
+	await frames(2)
+	var area := view.tracks_rect()
+	var unit := TimelineView.PAN_PIXELS * DisplayServer.screen_get_scale()
+
+	# Pinching: fingers spreading (a factor above 1) zoom in about where they are.
+	var at := Vector2(area.position.x + area.size.x * 0.6, area.position.y + 10.0)
+	var under := view.time_at(at.x)
+	var zoom := view.axis.zoom
+	view._gui_input(_pinch(at, 1.25))
+	check_near(view.axis.zoom, zoom * 1.25, "spreading zooms in", 0.001)
+	check(absi(view.time_at(at.x) - under) < SECOND / 100, "about the fingers")
+	view._gui_input(_pinch(at, 0.8))
+	check_near(view.axis.zoom, zoom, "closing zooms out", 0.001)
+	view._gui_input(_pinch(at, 0.0))
+	view._gui_input(_pinch(at, -1.0))
+	check_near(view.axis.zoom, zoom, "a factor that makes no sense is left alone", 0.001)
+	var middle := area.get_center().x
+	under = view.time_at(middle)
+	view._gui_input(_pinch(Vector2(40.0, at.y), 1.5))
+	check_near(view.axis.zoom, zoom * 1.5, "over the names it zooms too", 0.001)
+	check(absi(view.time_at(middle) - under) < SECOND / 100, "about the middle of the tracks")
+	view.fit()
+
+	# Two fingers: a positive delta shows later times and lower rows, as a wheel turned down does.
+	view.axis.start = 2.0
+	view.refresh()
+	var start := view.axis.start
+	view._gui_input(_pan(at, Vector2(1.0, 0.0)))
+	check_near(view.axis.start, start + unit / view.axis.zoom, "sideways moves along time", 0.0001)
+	view._gui_input(_pan(at, Vector2(-1000.0, 0.0)))
+	check_eq(view.axis.start, 0.0, "no further back than the start")
+	view._gui_input(_pan(at, Vector2(0.0, 1.0)))
+	check_near(view.scroll_y, unit, "up and down scrolls the rows")
+	var both := _pan(at, Vector2(0.5, 0.5))
+	view._gui_input(both)
+	check_near(view.axis.start, 0.5 * unit / view.axis.zoom, "both at once, as in a scroll view", 0.0001)
+	check_near(view.scroll_y, unit * 1.5, "both at once, the rows too")
+	var shifted := _pan(at, Vector2(1.0, 0.0))
+	shifted.shift_pressed = true
+	start = view.axis.start
+	view._gui_input(shifted)
+	check_near(view.scroll_y, unit * 2.5, "with Shift only the rows scroll")
+	check_eq(view.axis.start, start, "and time stays")
+	var zooming := _pan(at, Vector2(0.0, -1.0))
+	zooming.meta_pressed = true
+	under = view.time_at(at.x)
+	zoom = view.axis.zoom
+	view._gui_input(zooming)
+	check_near(view.axis.zoom, zoom * 1.08, "with Cmd, pushing up zooms in", 0.001)
+	check(absi(view.time_at(at.x) - under) < SECOND / 100, "about the pointer")
+	view.fit()
+
+	# Gestures arrive at the position they have in the window, as the engine sends them.
+	var global := view.get_global_transform_with_canvas() * at
+	under = view.time_at(at.x)
+	zoom = view.axis.zoom
+	get_viewport().push_input(_pinch(global, 1.5))
+	check_near(view.axis.zoom, zoom * 1.5, "a pinch from the window reaches the tracks", 0.001)
+	check(absi(view.time_at(at.x) - under) < SECOND / 100, "at the place under the fingers")
+	start = view.axis.start
+	var bar: Control = view._h_bar
+	get_viewport().push_input(_pan(bar.get_global_rect().get_center(), Vector2(1.0, 0.0)))
+	check(view.axis.start > start, "two fingers over the scroll bar move the tracks")
+	view.fit()
+
+	# A pan in the middle of a drag carries what is dragged along with the pointer.
+	var from := view.clip_center(paint, 0)
+	var from_time := view.time_at(from.x)
+	view.press(from)
+	var to := from + Vector2(30.0, 0.0)
+	view.drag(to)
+	view._gui_input(_pan(from, Vector2(2.0, 0.0)))
+	check_eq(int(panel.timeline[paint].clips[0].start), view.time_at(to.x) - from_time, "the clip stays under the pointer")
+	view.release(to)
+	await frames(2)
+	check(int(_line(paint).clips[0].start) > 0, "and lands there")
+	check(messages.is_empty(), "no errors: %s" % [messages])

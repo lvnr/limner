@@ -410,7 +410,7 @@ impl LimnerScene {
         color_from_linear(self.session.doc().settings.background)
     }
 
-    /// What the last frame drew.
+    /// What the last frame drew, and how many sound layers are playing.
     #[func]
     fn stats(&self) -> VarDictionary {
         vdict! {
@@ -420,6 +420,7 @@ impl LimnerScene {
             "triangles" => self.stats.triangles as i64,
             "meshes_built" => self.stats.meshes_built as i64,
             "cached_meshes" => self.cache.len() as i64,
+            "sounds_playing" => self.nodes.sounds_playing() as i64,
         }
     }
 
