@@ -251,4 +251,6 @@ func _add_swatch() -> void:
 
 ## Replaces a swatch with the current colour.
 func _store_swatch(index: int) -> void:
-	editor.run({"cmd": "set_palette_color", "index": index, "color": LimnerEditor.linear_rgb(_picked())})
+	if editor.run({"cmd": "set_palette_color", "index": index, "color": LimnerEditor.linear_rgb(_picked())}) != null:
+		# These are now the swatches every new document starts with.
+		Preferences.shared().set_value("palette", editor.scene.document_info().palette)

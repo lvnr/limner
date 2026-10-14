@@ -163,3 +163,28 @@ func test_sounds_are_made_in_code_and_follow_the_volume() -> void:
 	world.scene.input_commit(0.011)
 	sounds.follow_tool(world.scene)
 	check_eq(sounds.is_painting(), false, "letting go stops it")
+
+
+func test_swatches_set_in_the_colour_panel_come_back_in_new_documents() -> void:
+	Preferences.use_file("user://test_palette_settings.json")
+	Preferences.shared().set_value("palette", [])
+	var panel := ColorPanel.new(editor)
+	mount(panel)
+	await frames(2)
+	run({"cmd": "set_color", "color": [1.0, 0.0, 0.0]})
+	await frames(2)
+	panel._store_swatch(2)
+	await frames(2)
+	var stored := Preferences.shared().palette()
+	check_eq(stored.size(), 16, "the whole palette is remembered")
+	check_eq(stored[2], [1.0, 0.0, 0.0], "with the new swatch")
+	editor.new_document()
+	await frames(2)
+	check_eq(editor.get_info().palette[2], [1.0, 0.0, 0.0], "a new document starts with it")
+	check(not editor.status.dirty, "and counts as untouched")
+	# Something that is not a palette is not taken for one.
+	Preferences.shared().set_value("palette", [[1.0, 2.0], "red"])
+	check_eq(Preferences.shared().palette().size(), 16, "nonsense is refused")
+	Preferences.shared().set_value("palette", [])
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://test_palette_settings.json"))
+	Preferences.use_file(Preferences.DEFAULT_PATH)

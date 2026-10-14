@@ -21,6 +21,8 @@ signal changed(key: String)
 ## - `theme`: the colour scheme. Only "dark" exists so far; the setting is kept so
 ##   that a light scheme can be added without changing the file.
 ## - `autosave_minutes`: minutes between automatic saves, 0 for never.
+## - `palette`: the swatches a new document starts with, as linear `[r, g, b]`
+##   lists: the ones last set in the Colour panel. Empty for the built-in ones.
 const DEFAULTS := {
 	"dominant_hand": "right",
 	"haptics": true,
@@ -29,6 +31,7 @@ const DEFAULTS := {
 	"show_gimbal_by_default": false,
 	"theme": "dark",
 	"autosave_minutes": 5,
+	"palette": [],
 }
 ## The values a setting may take, for those that are a choice.
 const CHOICES := {
@@ -141,9 +144,35 @@ func save() -> void:
 		push_warning("Could not save preferences to %s: %s" % [storage_path, error_string(error)])
 
 
+## A list of colours as plain `[r, g, b]` lists of numbers, or `null` when `raw` is
+## not one. At most 64 are kept.
+func _clean_colors(raw: Variant) -> Variant:
+	if not raw is Array:
+		return null
+	var colors: Array = []
+	for entry: Variant in raw as Array:
+		if not (entry is Array and (entry as Array).size() == 3):
+			return null
+		var color: Array = []
+		for channel: Variant in entry as Array:
+			if not (channel is float or channel is int) or not is_finite(float(channel)) or float(channel) < 0.0:
+				return null
+			color.append(float(channel))
+		colors.append(color)
+	return colors.slice(0, 64)
+
+
+## The swatches a new document starts with; empty for the built-in ones.
+func palette() -> Array:
+	return _values.get("palette", [])
+
+
 ## Sets the editor options that a preference gives the starting value of. Each shell
 ## calls this once when it starts.
 func apply_at_start(editor: LimnerEditor) -> void:
+	# The untouched document the app starts with takes the user's own swatches.
+	if not palette().is_empty() and editor.path == "" and not editor.scene.status().dirty and int(editor.scene.info().strokes) == 0:
+		editor.new_document()
 	if flag("show_gimbal_by_default") != bool(editor.get_options().get("show_gimbal", false)):
 		editor.set_option("show_gimbal", flag("show_gimbal_by_default"))
 
@@ -161,6 +190,8 @@ func _read_file() -> Dictionary:
 ## `raw` as a valid value for `key`, or `null` when it cannot be one.
 func _clean(key: String, raw: Variant) -> Variant:
 	var default: Variant = DEFAULTS[key]
+	if default is Array:
+		return _clean_colors(raw)
 	if default is bool:
 		return raw if raw is bool else null
 	if default is String:

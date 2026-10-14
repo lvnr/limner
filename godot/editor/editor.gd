@@ -146,7 +146,8 @@ func set_tool_setting(tool: String, key: String, value: Variant) -> void:
 # ---- documents ----
 
 func new_document() -> void:
-	scene.new_document()
+	# A new document starts with the swatches last set in the Colour panel.
+	scene.new_document_with_palette(Preferences.shared().palette())
 	path = ""
 	path_is_native = false
 

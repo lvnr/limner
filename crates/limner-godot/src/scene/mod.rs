@@ -122,11 +122,27 @@ impl LimnerScene {
     /// Starts a new, empty document.
     #[func]
     fn new_document(&mut self) {
+        self.new_document_with_palette(VarArray::new());
+    }
+
+    /// Starts a new, empty document whose swatches are `palette`: linear `[r, g, b]`
+    /// lists, as many as there are (the rest keep their built-in colour).
+    #[func]
+    fn new_document_with_palette(&mut self, palette: VarArray) {
         self.clear_instances();
         self.source_path.clear();
         self.source_kind.clear();
         self.warnings.clear();
-        self.session.replace_document(Document::new());
+        let mut document = Document::new();
+        let colors = json_from_variant(&palette.to_variant());
+        if let Ok(colors) = serde_json::from_value::<Vec<[f32; 3]>>(colors) {
+            for (swatch, color) in document.settings.palette.iter_mut().zip(colors) {
+                if color.iter().all(|v| v.is_finite() && *v >= 0.0) {
+                    *swatch = color;
+                }
+            }
+        }
+        self.session.replace_document(document);
         self.signals().document_replaced().emit();
     }
 
