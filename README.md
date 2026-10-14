@@ -80,6 +80,16 @@ Export to glTF, USD/USDZ, FBX and OBJ with hierarchy, animation, lights and came
 </p>
 <p align="center"><sub>The desktop interface, in the dark or light scheme to match your GitHub theme. The same panels ride on the hand in a headset.</sub></p>
 
+## Download
+
+**Windows 10 and 11 (64-bit):** download [Limner-0.1.0-windows-x64.zip](https://github.com/lvnr/limner/releases/latest/download/Limner-0.1.0-windows-x64.zip) from the [latest release](https://github.com/lvnr/limner/releases/latest), unzip it anywhere and double-click `Limner.exe`. Nothing else needs installing.
+
+- The app is not signed yet, so Windows SmartScreen says "Windows protected your PC" the first time. Choose **More info**, then **Run anyway**.
+- With a headset connected through Meta Quest Link, SteamVR or another OpenXR runtime, Limner starts in the headset; otherwise it opens on the desktop. Headset support has not been tried on real hardware yet.
+- It draws with Vulkan, which most graphics cards and chips from the last several years support; keep the graphics driver up to date.
+
+There is no download for macOS or Linux yet: build from source as below.
+
 ## Getting started
 
 You need [Rust](https://rustup.rs) (stable) and Git. The scripts download the pinned Godot build. On Windows, Rust also needs the Visual Studio Build Tools with "Desktop development with C++".
