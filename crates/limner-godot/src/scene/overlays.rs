@@ -1,5 +1,6 @@
 //! Things drawn over the document that are not part of it: the frames before and
-//! after the one being drawn on (onion skins), and the highlight on selected strokes.
+//! after the one being drawn on (onion skins), the highlight on selected strokes,
+//! and the blink on the stroke the lower button would delete.
 
 use crate::convert::transform3d;
 use crate::meshes::{build_mesh, chunk_key, MeshCache};
@@ -8,7 +9,7 @@ use godot::prelude::*;
 use limner::core::eval::{Content, RenderFrame};
 use limner::core::glam::{DAffine3, DVec3};
 use limner::core::model::{Drawing, DrawingId, LayerId, Stroke};
-use limner::core::session::Session;
+use limner::core::session::{Session, StrokeAtHand};
 use limner::core::tess::{tessellate_chunk, SurfaceKind};
 
 /// Frames before the current one are tinted warm and frames after it cool.
@@ -44,18 +45,33 @@ struct Highlight {
 /// the document, and the drawings on screen.
 type BuiltFrom = (u64, u64, Vec<(LayerId, DrawingId)>);
 
+/// The stroke under the hand, lit up.
+struct AtHand {
+    node: Gd<MeshInstance3D>,
+    origin: DVec3,
+}
+
 #[derive(Default)]
 pub(super) struct Overlays {
     skins: Vec<Skin>,
     highlights: Vec<Highlight>,
     built_from: Option<BuiltFrom>,
     highlight_material: Option<Gd<Material>>,
+    at_hand: Option<AtHand>,
+    /// The stroke the blink was built from, and the state of the document then.
+    at_hand_from: Option<(StrokeAtHand, u64)>,
+    at_hand_material: Option<Gd<Material>>,
 }
 
 impl Overlays {
     pub(super) fn set_highlight_material(&mut self, material: Gd<Material>) {
         self.highlight_material = Some(material);
         self.built_from = None;
+    }
+
+    pub(super) fn set_at_hand_material(&mut self, material: Gd<Material>) {
+        self.at_hand_material = Some(material);
+        self.at_hand_from = None;
     }
 
     pub(super) fn sync(
@@ -69,6 +85,7 @@ impl Overlays {
     ) {
         self.sync_skins(parent, session, frame, viewer_from_world, cache, materials);
         self.sync_highlights(parent, session, frame, viewer_from_world);
+        self.sync_at_hand(parent, session, frame, viewer_from_world);
     }
 
     fn sync_skins(
@@ -238,6 +255,61 @@ impl Overlays {
         }
     }
 
+    /// Shows the stroke the lower button would delete, so that it is seen before
+    /// the button is pressed.
+    fn sync_at_hand(
+        &mut self,
+        parent: &mut Gd<Node3D>,
+        session: &Session,
+        frame: &RenderFrame,
+        viewer_from_world: &DAffine3,
+    ) {
+        let stroke = session.stroke_at_hand();
+        let from = stroke.map(|stroke| (stroke, session.edit_count()));
+        if self.at_hand_from != from {
+            self.at_hand_from = from;
+            let built = stroke.and_then(|at| {
+                let drawing = session.doc().drawing(at.drawing)?;
+                let stroke = drawing.strokes().find(|s| s.id == at.stroke)?;
+                let alone = Drawing::from_strokes([(**stroke).clone()]);
+                build_mesh(&tessellate_chunk(alone.chunks().first()?))
+            });
+            match (built, &mut self.at_hand) {
+                (Some(built), shown) => {
+                    let at_hand = shown.get_or_insert_with(|| {
+                        let mut node = MeshInstance3D::new_alloc();
+                        node.set_name("AtHand");
+                        node.set_layer_mask(HELPER_LAYERS);
+                        parent.add_child(&node);
+                        AtHand {
+                            node,
+                            origin: DVec3::ZERO,
+                        }
+                    });
+                    at_hand.node.set_mesh(&built.mesh);
+                    if let Some(material) = &self.at_hand_material {
+                        for surface in 0..built.kinds.len() {
+                            at_hand
+                                .node
+                                .set_surface_override_material(surface as i32, material);
+                        }
+                    }
+                    at_hand.origin = built.origin;
+                    at_hand.node.set_visible(true);
+                }
+                (None, Some(at_hand)) => at_hand.node.set_visible(false),
+                (None, None) => {}
+            }
+        }
+        if let (Some(at_hand), Some((stroke, _))) = (&mut self.at_hand, self.at_hand_from) {
+            if let Some(state) = frame.get(stroke.layer) {
+                let matrix =
+                    *viewer_from_world * state.world * DAffine3::from_translation(at_hand.origin);
+                at_hand.node.set_transform(transform3d(&matrix));
+            }
+        }
+    }
+
     pub(super) fn clear(&mut self) {
         for skin in self.skins.drain(..) {
             skin.node.clone().queue_free();
@@ -245,6 +317,10 @@ impl Overlays {
         for highlight in self.highlights.drain(..) {
             highlight.node.clone().queue_free();
         }
+        if let Some(at_hand) = self.at_hand.take() {
+            at_hand.node.clone().queue_free();
+        }
         self.built_from = None;
+        self.at_hand_from = None;
     }
 }

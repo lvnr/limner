@@ -105,6 +105,15 @@ func _setup_materials() -> void:
 	var highlight := ShaderMaterial.new()
 	highlight.shader = HIGHLIGHT_SHADER
 	scene.set_highlight_material(highlight)
+	# The stroke the lower button would delete blinks, quicker and warmer than the
+	# selection, so that it is seen before the button is pressed.
+	var at_hand := ShaderMaterial.new()
+	at_hand.shader = HIGHLIGHT_SHADER
+	at_hand.set_shader_parameter("color", Color(1.0, 0.5, 0.1))
+	at_hand.set_shader_parameter("low", 0.15)
+	at_hand.set_shader_parameter("high", 0.9)
+	at_hand.set_shader_parameter("period", 0.45)
+	scene.set_at_hand_material(at_hand)
 
 
 ## One material per shader, by the same names. Those that dither get the noise they

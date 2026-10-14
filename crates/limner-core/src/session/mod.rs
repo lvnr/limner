@@ -23,7 +23,7 @@ mod view;
 
 pub use animation::{KeyTrack, OnionSkin};
 pub use command::{Command, CommandError, OptimizeScope, SelectMode, StrokeSpace, StrokeSpec};
-pub use gesture::Cursor;
+pub use gesture::{Cursor, StrokeAtHand};
 pub use gimbal::{
     Gimbal, GimbalHandle, ARROW_END, ARROW_START, CENTER_RADIUS, PLANE_FAR, PLANE_NEAR,
 };
@@ -87,6 +87,11 @@ pub struct Session {
     selection: Selection,
     /// Keys copied for pasting.
     key_clipboard: Option<animation::KeyClipboard>,
+    /// The stroke the lower button would delete, found on the last update.
+    at_hand: Option<gesture::StrokeAtHand>,
+    /// False from the moment a tool or a grab is at work until the hand has been
+    /// away from every stroke.
+    at_hand_armed: bool,
     /// What the grips hold.
     grab: Option<grab::Grab>,
     grips: [input::Latch; 2],
@@ -124,6 +129,8 @@ impl Session {
             last_input: InputFrame::default(),
             selection: Selection::default(),
             key_clipboard: None,
+            at_hand: None,
+            at_hand_armed: true,
             grab: None,
             grips: [input::Latch::default(); 2],
             hover: [None, None],

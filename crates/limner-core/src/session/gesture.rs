@@ -14,6 +14,7 @@ use super::tools::select::SelectGesture;
 use super::tools::sphere::{GrabGesture, SphereGesture};
 use super::tools::ToolKind;
 use super::Session;
+use crate::model::{DrawingId, LayerId};
 use glam::{DQuat, DVec3};
 
 /// The tool at work.
@@ -35,6 +36,15 @@ const RESIZE_SECONDS: f64 = 0.6;
 /// The lower button deletes, and the upper button picks from, a stroke this close to
 /// the hand at most, in viewer-space metres beyond the tool's own radius.
 const REACH: f64 = 0.01;
+
+/// A stroke singled out by where the drawing hand is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StrokeAtHand {
+    pub layer: LayerId,
+    pub drawing: DrawingId,
+    /// The stroke's id within its drawing.
+    pub stroke: u32,
+}
 
 /// A stick pushed to one side: reports the push once, then again and again while held.
 #[derive(Clone, Copy, Debug, Default)]
@@ -150,6 +160,7 @@ impl Session {
         self.update_grabs(input, &mut feedback);
         self.update_sticks(input, &mut feedback);
         self.update_tool(input, &mut feedback);
+        self.update_at_hand(input);
         self.last_input = *input;
         feedback
     }
@@ -219,6 +230,7 @@ impl Session {
             .off_click
             .update_bool(off.tracked && off.stick_click)
             == Edge::Pressed
+            && !self.options.painting_mode
         {
             self.press(Command::TogglePlay, feedback);
         }
@@ -261,8 +273,9 @@ impl Session {
         }
 
         // Other hand: left and right step through frames; with the modifier they jump
-        // between chapter marks. Up and down make and hold frames.
-        let [x, y] = if input.off.tracked {
+        // between chapter marks. Up and down make and hold frames. In painting mode
+        // the stick is read as at rest.
+        let [x, y] = if input.off.tracked && !self.options.painting_mode {
             input.off.stick
         } else {
             [0.0, 0.0]
@@ -323,6 +336,53 @@ impl Session {
             }
         }
         self.controls = controls;
+    }
+
+    /// The stroke the lower button would delete if it were pressed now: the one
+    /// nearest the drawing hand on the frame being painted on, when it is within
+    /// reach. It is there to be shown before the button is pressed.
+    ///
+    /// Nothing while a tool or a grab is at work, at a handle of the gimbal, or when
+    /// strokes are selected (the button then deletes the selection). And nothing
+    /// right after a tool or a grab either, until the hand has been away from every
+    /// stroke: what was just painted does not start to blink under the brush.
+    pub fn stroke_at_hand(&self) -> Option<StrokeAtHand> {
+        self.at_hand
+    }
+
+    fn update_at_hand(&mut self, input: &InputFrame) {
+        self.at_hand = None;
+        if self.gesture.is_some() || self.is_grabbing(0) {
+            self.at_hand_armed = false;
+            return;
+        }
+        let hand = &input.main;
+        if !self.options.show_stroke_at_hand
+            || !hand.tracked
+            || self.hover[0].is_some()
+            || !self.selection.is_empty()
+        {
+            return;
+        }
+        let Some(layer) = self.paint_layer else {
+            return;
+        };
+        let frame = self.evaluate();
+        if self.editable_drawing(&frame, layer).is_err() {
+            return;
+        }
+        let limit = self.tools.size() as f64 + REACH;
+        match self.nearest_stroke(&frame, &[layer], hand.position, limit) {
+            Some(nearest) if self.at_hand_armed => {
+                self.at_hand = Some(StrokeAtHand {
+                    layer,
+                    drawing: nearest.target.drawing,
+                    stroke: nearest.stroke,
+                });
+            }
+            Some(_) => {}
+            None => self.at_hand_armed = true,
+        }
     }
 
     /// The lower button: deletes the selection, or else the stroke nearest the hand.

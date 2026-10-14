@@ -118,7 +118,7 @@ symmetry: "off" | "x" | "y" | "z"     mirrored working, across the pivot of the 
 
 ### Options
 
-`show_grid`, `onion_skin`, `onion_frames` (0 = all), `snap_to_frames`, `snap_to_clips`, `create_layers_at_playhead`, `loop_range`, `recording`, `select_in_all_layers`, `select_in_all_frames`, `auto_select` (`"none"`, `"layer"`, `"group"`), `show_gimbal`, `rotation_snap_steps`, `allow_translate`, `allow_rotate`, `allow_scale`, `level_horizon`, `animate_duplicates`, `mute`, `preview_spawn_area`, `show_extras`, `default_interp` (`"step"`, `"linear"`, `"ease_in"`, `"ease_out"`, `"ease_in_out"`, `"smooth"`).
+`show_grid`, `onion_skin`, `onion_frames` (0 = all), `snap_to_frames`, `snap_to_clips`, `create_layers_at_playhead`, `loop_range`, `recording`, `select_in_all_layers`, `select_in_all_frames`, `auto_select` (`"none"`, `"layer"`, `"group"`), `show_gimbal`, `rotation_snap_steps`, `allow_translate`, `allow_rotate`, `allow_scale`, `level_horizon`, `animate_duplicates`, `mute`, `preview_spawn_area`, `show_extras`, `default_interp` (`"step"`, `"linear"`, `"ease_in"`, `"ease_out"`, `"ease_in_out"`, `"smooth"`), `painting_mode` (the other hand's stick and its click do nothing; the Timeline panel sets it when its tracks are put away), `show_stroke_at_hand` (blink the stroke the lower button would delete).
 
 ## Commands
 
@@ -234,8 +234,9 @@ Shells feed the scene what the hands do, once per frame, and the core decides wh
 | `gimbal() -> Dictionary` | Empty when there is none; else `{subject, layer, position, rotation, size, hovered, active, arrow_start, arrow_end, plane_near, plane_far, center_radius}`. `GimbalView` draws it. |
 | `is_grabbing(which) -> bool` | |
 | `mirror_plane() -> Dictionary` | Empty unless mirrored working is on; else `{position, rotation, size}` of the mirror in viewer space. `LimnerWorld` draws it. |
+| `stroke_at_hand() -> Dictionary` | Empty, or `{layer, drawing, stroke}`: the stroke the lower button would delete if it were pressed now. The scene draws a blink over it by itself. Nothing is named while a tool or a grip is at work, nor after it until the hand has been away from every stroke, so what was just painted does not blink under the brush. |
 
-Things that help while working and are not part of the picture (the grid, the gimbal, the mirror, the tool at the hand, gizmos, onion skins, the selection highlight) are drawn on render layers other than 1 (`LimnerWorld.HELPER_LAYERS`, and layer 20 for gizmos). Cameras that take pictures see layer 1 only; anything new of that kind should go on the helper layer too.
+Things that help while working and are not part of the picture (the grid, the gimbal, the mirror, the tool at the hand, gizmos, onion skins, the selection highlight, the blink on the stroke at the hand) are drawn on render layers other than 1 (`LimnerWorld.HELPER_LAYERS`, and layer 20 for gizmos). Cameras that take pictures see layer 1 only; anything new of that kind should go on the helper layer too.
 
 A grip takes hold of, in this order: a handle of the gimbal the hand is at; the selected strokes, when the Selection tool is in hand and its sphere reaches them; with `auto_select` on, the layer (or its group) of the stroke at the hand; the layer chosen with `set_transform_target`; otherwise the view. A second grip adds scale, the held hand's stick zooms, and `allow_translate`, `allow_rotate`, `allow_scale` and `level_horizon` limit the motion. Holding the modifier when the grab begins moves a copy.
 
@@ -253,7 +254,7 @@ The gimbal shows when `show_gimbal` is on and either a layer is the transform ob
 
 Pictures and video are taken through `LimnerCapture.of(editor)` and `RenderLauncher`; see `docs/capture.md`.
 
-Materials are made once by `LimnerWorld` and handed to the scene (`set_stroke_materials`, `set_lit_stroke_materials`, `set_layer_materials`, `set_highlight_material`); nothing else should call those.
+Materials are made once by `LimnerWorld` and handed to the scene (`set_stroke_materials`, `set_lit_stroke_materials`, `set_layer_materials`, `set_highlight_material`, `set_at_hand_material`); nothing else should call those.
 
 ## The Timeline panel
 
@@ -267,6 +268,7 @@ How it behaves, where that is not obvious:
 - A drag that starts on empty track space selects the keys it passes over. Clips cover most tracks, so Shift, or the "select a range" switch in the Keys group, makes a drag that starts on a clip do the same.
 - The context row shows the Frames group for a paint layer, Sequence for a sequence and Chapters for the root. What does not apply is greyed out, not hidden, so buttons stay where they are.
 - Besides the thin grip along its top edge the panel has a resize button, which a controller tip can hit.
+- The arrow at the end of the first row puts the tracks away and sets the `painting_mode` option, as collapsing the timeline does in Quill: the other hand's stick no longer makes, holds, deletes or steps frames, and its click no longer plays. The panel follows the option, so both shells agree.
 
 Left rough:
 

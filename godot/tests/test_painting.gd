@@ -44,3 +44,34 @@ func test_the_cursor_follows_the_hand_and_the_tool() -> void:
 	world.scene.input_hand_absent(0)
 	world.scene.input_commit(0.011)
 	check_eq(world.scene.tool_cursor().tracked, false, "the hand has gone")
+
+
+func test_the_stroke_the_lower_button_would_delete_blinks_first() -> void:
+	LimnerDemo.stroke(world.scene, [Vector3(0, 1, -1), Vector3(0.1, 1, -1), Vector3(0.2, 1.05, -1)])
+	LimnerDemo.stroke(world.scene, [Vector3(0, 1.3, -1), Vector3(0.1, 1.3, -1), Vector3(0.2, 1.35, -1)])
+	await frames(2)
+	# Away from both strokes nothing is singled out.
+	world.scene.input_hand(0, Vector3(0.6, 1.7, -1), Quaternion.IDENTITY, 0.0, 0.0, Vector2.ZERO, 0)
+	world.scene.input_commit(0.011)
+	await frames(2)
+	check(world.scene.stroke_at_hand().is_empty(), "nothing under a hand that is away")
+	var blink: MeshInstance3D = world.scene.find_child("AtHand", true, false)
+	check(blink == null or not blink.visible, "and nothing blinks")
+	# At the first stroke, it is named and lit up.
+	world.scene.input_hand(0, Vector3(0.1, 1, -1), Quaternion.IDENTITY, 0.0, 0.0, Vector2.ZERO, 0)
+	world.scene.input_commit(0.011)
+	await frames(2)
+	var at: Dictionary = world.scene.stroke_at_hand()
+	check_eq(int(at.get("layer", -1)), int(row_named("Paint").id), "a stroke of the paint layer")
+	blink = world.scene.find_child("AtHand", true, false)
+	check(blink != null and blink.visible and blink.mesh != null, "it blinks")
+	check_eq(blink.layers, LimnerWorld.HELPER_LAYERS, "on the layer that pictures and renders leave out")
+	# The lower button takes exactly that stroke.
+	world.scene.input_hand(0, Vector3(0.1, 1, -1), Quaternion.IDENTITY, 0.0, 0.0, Vector2.ZERO, 1)
+	world.scene.input_commit(0.011)
+	world.scene.input_hand(0, Vector3(0.1, 1, -1), Quaternion.IDENTITY, 0.0, 0.0, Vector2.ZERO, 0)
+	world.scene.input_commit(0.011)
+	await frames(2)
+	check_eq(row_named("Paint").strokes, 1, "one stroke left")
+	check(world.scene.stroke_at_hand().is_empty(), "and none under the hand")
+	check(not blink.visible, "the blink has gone")

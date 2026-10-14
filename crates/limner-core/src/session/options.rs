@@ -55,6 +55,11 @@ pub struct Options {
     pub show_extras: bool,
     /// How new keys move to the key after them.
     pub default_interp: Interp,
+    /// Painting mode: the other hand's stick and its click do nothing, so that no
+    /// frame is made, held, deleted or stepped past by accident while painting.
+    pub painting_mode: bool,
+    /// Blink the stroke the lower button would delete when the hand comes to it.
+    pub show_stroke_at_hand: bool,
 }
 
 impl Default for Options {
@@ -82,6 +87,8 @@ impl Default for Options {
             preview_spawn_area: false,
             show_extras: true,
             default_interp: Interp::Linear,
+            painting_mode: false,
+            show_stroke_at_hand: true,
         }
     }
 }

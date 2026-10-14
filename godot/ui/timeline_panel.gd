@@ -149,6 +149,10 @@ func _refresh_queued_now() -> void:
 func refresh() -> void:
 	info = editor.get_info()
 	options = editor.get_options()
+	# Painting mode is the timeline put away, wherever it was switched.
+	var painting: bool = options.get("painting_mode", false)
+	if painting != collapsed:
+		_show_collapsed(painting)
 	var all := editor.get_rows()
 	rows = all.filter(func(row: Dictionary) -> bool: return not row.hidden_in_list)
 	_parents = {}
@@ -508,7 +512,7 @@ func _build_options() -> void:
 	var resize := _button("resize", "tl_resize", "Drag up or down to make the timeline taller or shorter", Callable())
 	resize.mouse_default_cursor_shape = Control.CURSOR_VSIZE
 	resize.gui_input.connect(_on_grip_input)
-	_button("collapse", "tl_chevron_down", "Hide the tracks", func() -> void: set_collapsed(not collapsed))
+	_button("collapse", "tl_chevron_down", "Put the timeline away: painting mode", func() -> void: set_collapsed(not collapsed))
 
 
 func _build_context() -> void:
@@ -607,7 +611,7 @@ func _update_controls() -> void:
 	_show_rates()
 	_enable("range_clip", selected_clip_layer >= 0 and timeline.has(selected_clip_layer))
 	(controls.collapse as Button).icon = Icons.texture("tl_chevron_up" if collapsed else "tl_chevron_down", Kit.TEXT, 20)
-	(controls.collapse as Button).tooltip_text = "Show the tracks" if collapsed else "Hide the tracks"
+	(controls.collapse as Button).tooltip_text = "Bring the timeline back and leave painting mode" if collapsed else "Put the timeline away: painting mode, in which the other hand's stick leaves frames and playback alone"
 
 	var current := editor.row(editor.current_layer())
 	var has := not current.is_empty()
@@ -753,13 +757,21 @@ func set_height(value: float) -> void:
 		custom_minimum_size.y = height
 
 
-## Hides everything under the rows of buttons, or shows it again.
+## Hides everything under the rows of buttons, or shows it again. With the tracks
+## put away the editor is in painting mode: the other hand's stick and its click
+## leave frames and playback alone, so that nothing is animated by accident.
 func set_collapsed(on: bool) -> void:
+	_show_collapsed(on)
+	_update_controls()
+	if bool(options.get("painting_mode", false)) != on:
+		editor.set_option("painting_mode", on)
+
+
+func _show_collapsed(on: bool) -> void:
 	collapsed = on
 	_context.visible = not on
 	view.visible = not on
 	custom_minimum_size.y = 0.0 if on else height
-	_update_controls()
 
 
 func _on_grip_input(event: InputEvent) -> void:

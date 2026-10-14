@@ -186,6 +186,10 @@ func test_option_toggles() -> void:
 	check_eq(grid.button_pressed, true, "the grid starts shown")
 	grid.button_pressed = false
 	check_eq(world.scene.options().show_grid, false, "grid switched off")
+	var blink: CheckBox = panel._options["show_stroke_at_hand"]
+	check_eq(blink.button_pressed, true, "the stroke to delete blinks unless switched off")
+	blink.button_pressed = false
+	check_eq(world.scene.options().show_stroke_at_hand, false, "blink switched off")
 	for key: String in ["select_in_all_layers", "select_in_all_frames"]:
 		var toggle: CheckBox = panel._options[key]
 		check_eq(toggle.button_pressed, false, "%s starts off" % key)

@@ -569,6 +569,26 @@ impl LimnerScene {
         self.overlays.set_highlight_material(material);
     }
 
+    /// Sets the material drawn over the stroke the lower button would delete.
+    #[func]
+    fn set_at_hand_material(&mut self, material: Gd<Material>) {
+        self.overlays.set_at_hand_material(material);
+    }
+
+    /// The stroke the lower button would delete now, as `{layer, drawing, stroke}`,
+    /// or an empty dictionary when the hand is at none.
+    #[func]
+    fn stroke_at_hand(&self) -> VarDictionary {
+        match self.session.stroke_at_hand() {
+            Some(at) => vdict! {
+                "layer" => at.layer.0 as i64,
+                "drawing" => at.drawing.0 as i64,
+                "stroke" => at.stroke as i64,
+            },
+            None => VarDictionary::new(),
+        }
+    }
+
     /// Where the eyes are, in viewer space.
     #[func]
     fn input_head(&mut self, position: Vector3) {

@@ -60,6 +60,7 @@ These were chosen to feel right and are constants in the code, easy to change af
 | Sound fade with distance | Linear: even between the two radii. Logarithmic: `inner / distance`, shifted to reach silence at the outer radius | `scene/sounds.rs` |
 | Light range | The layer's range × its scale | `scene/lights.rs` |
 | Undo depth | 200 steps, not kept across save and open | `session/history.rs` |
+| The blink on the stroke at the hand | Shows what the lower button would delete: the nearest stroke of the layer being painted, within 1 cm of the tool's sphere. Not shown while a tool or a grip is at work, nor after it until the hand has left every stroke, nor while strokes are selected. Can be switched off in the Tools panel | `session/gesture.rs` `update_at_hand`, `REACH` |
 | Pulling the start of a clip out past the beginning of its content | The start stops there; the content never moves. Move the clip to start it earlier. | `ops/clips.rs` `trim_clip` |
 
 ## Not carried over

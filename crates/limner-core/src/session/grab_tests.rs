@@ -1145,3 +1145,160 @@ fn the_other_stick_makes_holds_copies_and_deletes_frames() {
     let made = frames(&session).len() - 3;
     assert!((8..=16).contains(&made), "{made} frames");
 }
+
+#[test]
+fn in_painting_mode_the_other_stick_and_its_click_do_nothing() {
+    let (mut session, layer) = session();
+    session
+        .exec_json(&json!({ "cmd": "set_options", "values": { "painting_mode": true } }))
+        .unwrap();
+    let frames = |session: &Session| {
+        session
+            .doc()
+            .layer(layer)
+            .unwrap()
+            .as_paint()
+            .unwrap()
+            .frames
+            .len()
+    };
+    for stick in [[0.0, 1.0], [0.0, -1.0], [1.0, 0.0], [-1.0, 0.0]] {
+        for _ in 0..60 {
+            session.update(&both(
+                at(REST_MAIN),
+                HandInput {
+                    stick,
+                    ..at(REST_OFF)
+                },
+            ));
+        }
+        session.update(&both(at(REST_MAIN), at(REST_OFF)));
+    }
+    assert_eq!(frames(&session), 1, "no frame was made or held");
+    assert_eq!(session.status()["frame"], 0, "and the playhead stayed");
+    session.update(&both(
+        at(REST_MAIN),
+        HandInput {
+            stick_click: true,
+            ..at(REST_OFF)
+        },
+    ));
+    assert_eq!(
+        session.status()["playing"],
+        false,
+        "the click does not play"
+    );
+    assert!(
+        !session.status()["can_undo"].as_bool().unwrap(),
+        "nothing to undo"
+    );
+
+    // Out of painting mode the same push makes a frame again.
+    session
+        .exec_json(&json!({ "cmd": "set_options", "values": { "painting_mode": false } }))
+        .unwrap();
+    for _ in 0..3 {
+        session.update(&both(
+            at(REST_MAIN),
+            HandInput {
+                stick: [0.0, 1.0],
+                ..at(REST_OFF)
+            },
+        ));
+    }
+    assert_eq!(frames(&session), 2);
+}
+
+#[test]
+fn the_stroke_the_lower_button_would_delete_is_named_before_it_is_pressed() {
+    let (mut session, layer) = session();
+    drag(
+        &mut session,
+        DVec3::new(0.0, 1.0, -0.5),
+        DVec3::new(0.1, 1.0, -0.5),
+        5,
+    );
+    drag(
+        &mut session,
+        DVec3::new(0.0, 1.2, -0.5),
+        DVec3::new(0.1, 1.2, -0.5),
+        5,
+    );
+    let ids: Vec<u32> = strokes(&session, layer).iter().map(|s| s.id).collect();
+    assert_eq!(ids.len(), 2);
+    let away = at(DVec3::new(0.5, 1.6, -0.5));
+    let over_second = at(DVec3::new(0.05, 1.2, -0.5));
+
+    // The stroke just painted is under the hand, and is not pointed out.
+    session.update(&main_only(at(DVec3::new(0.1, 1.2, -0.5))));
+    assert_eq!(session.stroke_at_hand(), None, "not what was just painted");
+    // Away from everything, nothing is singled out.
+    session.update(&main_only(away));
+    assert_eq!(session.stroke_at_hand(), None);
+    // Coming back to the upper stroke, it is the one.
+    session.update(&main_only(over_second));
+    let named = session.stroke_at_hand().expect("a stroke under the hand");
+    assert_eq!((named.layer, named.stroke), (layer, ids[1]));
+
+    // Not while a tool is at work, nor after it until the hand has been away.
+    session.update(&main_only(HandInput {
+        trigger: 1.0,
+        ..over_second
+    }));
+    assert_eq!(session.stroke_at_hand(), None, "the trigger is down");
+    session.cancel_gesture();
+    session.update(&main_only(over_second));
+    assert_eq!(session.stroke_at_hand(), None, "the hand has not left yet");
+    session.update(&main_only(away));
+    session.update(&main_only(over_second));
+    assert!(session.stroke_at_hand().is_some(), "back again");
+
+    // Not while a grip holds something.
+    session.update(&main_only(gripping(DVec3::new(0.05, 1.2, -0.5))));
+    assert_eq!(session.stroke_at_hand(), None, "the hand is grabbing");
+    session.update(&main_only(away));
+    session.update(&main_only(over_second));
+    assert!(session.stroke_at_hand().is_some());
+
+    // Not while strokes are selected: the button would delete the selection.
+    run(&mut session, json!({ "cmd": "select_all" }));
+    session.update(&main_only(over_second));
+    assert_eq!(session.stroke_at_hand(), None);
+    run(&mut session, json!({ "cmd": "deselect" }));
+
+    // A locked layer offers nothing to delete, and the option switches it off.
+    run(
+        &mut session,
+        json!({ "cmd": "set_layer", "layer": layer, "locked": true }),
+    );
+    session.update(&main_only(over_second));
+    assert_eq!(session.stroke_at_hand(), None, "the layer is locked");
+    run(
+        &mut session,
+        json!({ "cmd": "set_layer", "layer": layer, "locked": false }),
+    );
+    run(
+        &mut session,
+        json!({ "cmd": "set_options", "values": { "show_stroke_at_hand": false } }),
+    );
+    session.update(&main_only(over_second));
+    assert_eq!(session.stroke_at_hand(), None, "switched off");
+    run(
+        &mut session,
+        json!({ "cmd": "set_options", "values": { "show_stroke_at_hand": true } }),
+    );
+
+    // Pressing the button deletes exactly the stroke that was named, and the next
+    // one in reach, if there is one, is named at once.
+    session.update(&main_only(over_second));
+    let named = session.stroke_at_hand().expect("named again");
+    assert_eq!(named.stroke, ids[1]);
+    session.update(&main_only(HandInput {
+        lower_button: true,
+        ..over_second
+    }));
+    let left: Vec<u32> = strokes(&session, layer).iter().map(|s| s.id).collect();
+    assert_eq!(left, [ids[0]]);
+    session.update(&main_only(over_second));
+    assert_eq!(session.stroke_at_hand(), None, "nothing is left in reach");
+}

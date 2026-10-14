@@ -113,6 +113,7 @@ func _init(limner_editor: LimnerEditor) -> void:
 
 	add_child(Kit.heading("Guides"))
 	add_child(_option("show_grid", "Floor grid", "Show a grid on the floor of the world"))
+	add_child(_option("show_stroke_at_hand", "Blink the stroke to delete", "When the hand comes to a stroke, blink the one its lower button would delete"))
 	_mirror = ChoiceRow.new()
 	_mirror.add_text("off", "Off", "Tools work where the hand is and nowhere else")
 	for axis: String in ["x", "y", "z"]:
