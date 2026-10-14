@@ -24,12 +24,19 @@ static var events := Events.new()
 ## True once the headset's own software has ended the session (its menu's Quit,
 ## while the desktop was in use). OpenXR cannot be started again in the same run.
 static var headset_ended := false
+## Tests set this to be offered the simulated headset where OpenXR is not running, as
+## a Mac always is, so that changing interface can be tried on Windows and Linux too
+## (the tests run with --xr-mode off).
+static var sim_without_openxr := false
 
 
 ## Which headset a switch from the desktop would use: "headset" for a real one,
 ## "sim" for the simulated rig, or "" when there is none to use.
 static func headset_target() -> String:
-	return target_for(OS.get_name(), OS.get_cmdline_user_args(), _openxr_ready(), headset_ended)
+	var target := target_for(OS.get_name(), OS.get_cmdline_user_args(), _openxr_ready(), headset_ended)
+	if target == "" and sim_without_openxr and not headset_ended:
+		return "sim"
+	return target
 
 
 ## The rule behind `headset_target`, for the given system, command-line options,

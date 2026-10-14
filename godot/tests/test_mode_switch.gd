@@ -2,7 +2,8 @@ extends LimnerTest
 ## Changing between the desktop and the headset while the app runs (`main.gd`,
 ## `switch_to`): the work comes along, nothing of the interface that was left stays
 ## behind, and the buttons only offer a headset when there is one. The headset here is
-## the simulated one, which is what a Mac switches to.
+## the simulated one, which is what a Mac switches to; the tests ask for it on other
+## systems too (`ModeSwitch.sim_without_openxr`).
 
 ## A settings file of the tests' own, so that they neither read nor change the user's.
 const SETTINGS := "user://test_mode_switch_settings.json"
@@ -12,6 +13,7 @@ var app: LimnerApp
 
 func _exit_tree() -> void:
 	ModeSwitch.headset_ended = false
+	ModeSwitch.sim_without_openxr = false
 	Autosave.clear()
 	# The desktop shell asks to be told before the app quits; the test runner must not be.
 	get_tree().auto_accept_quit = true
@@ -27,6 +29,8 @@ func _start_app() -> void:
 	Preferences.use_file(SETTINGS)
 	Autosave.clear()
 	ModeSwitch.headset_ended = false
+	# The simulated headset, as a Mac offers it, on every system.
+	ModeSwitch.sim_without_openxr = true
 	app = LimnerApp.new()
 	add_child(app)
 	app.editor.message.connect(func(text: String, is_error: bool) -> void:
