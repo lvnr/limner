@@ -12,8 +12,9 @@ godot/android/
 /tools/
 /local/
 
-# Proprietary assets from a Quill install, kept for reference only. Never commit or ship.
-/3d models&design/
+# Private research notes (they describe Quill's install files and a private sample).
+/reports/
+/research_notes/
 
 # OS / editor
 .DS_Store
