@@ -12,6 +12,8 @@
 
 **How this plan is used.** The project owner asked for unattended, end-to-end development, so this is a living plan and progress tracker, not a hand-off script: tasks state files, interfaces and the tests that prove them, and the code goes straight into the repository. Architecture-critical tasks are done inline; bounded tasks are given to subagents with a self-contained brief. Tick a task only when its tests pass and it is committed.
 
+**Where it stands.** Every milestone is built and ticked except the two items marked open in M8 and M11, which need downloads or machines the development Mac did not have. A tick means built, tested and committed on that Mac; it does not mean tried in a headset or on Windows. `docs/handoff.md` says what has and has not been verified.
+
 ## Global Constraints
 
 - Never commit, copy or ship anything from `3d models&design/` (proprietary Quill assets).
@@ -27,44 +29,47 @@
 ## Commands
 
 ```bash
+scripts/test.sh                             # Rust tests, then the interface tests (Windows: scripts\test.ps1)
 cargo test --workspace                      # all Rust tests
 cargo build -p limner-godot                 # build the extension (debug)
-scripts/godot.sh --headless --path godot -s res://tests/run_tests.gd   # Godot-side tests
-scripts/shot.sh <scene-or-script> <out.png> # windowed run that saves a screenshot to local/out/
+scripts/godot.sh --headless --path godot --script res://tests/run.gd                         # interface tests
+scripts/godot.sh --path godot --script res://tests/run.gd -- capture export_panel monitor    # those that need a window
+scripts/shot.sh <out.png> [app options]     # windowed run that saves a screenshot
 cargo run -p limner-cli -- inspect <project>
 ```
 
 ## File structure
 
+As built. `CLAUDE.md` has the same map with a line on each part.
+
 ```
 crates/limner-core/src/
-  lib.rs
-  time.rs                    Flicks, conversions
-  math/{mod,xform,bounds}.rs Xform (similarity + flip), Aabb
-  model/{mod,ids,document,layer,keys,drawing,stroke,media,settings}.rs
-  eval/{mod,clock,keys,frame}.rs        timeline evaluation -> RenderFrame
-  tess/{mod,frame,brush,chunk}.rs       stroke tessellation -> ChunkMesh
-  ops/{mod,layers,frames,keys,strokes,selection,optimize,lights}.rs  document edits
-  tools/{mod,tuning,paint,line,colorize,blend,eraser,select,grab,thicken,nudge,optimize}.rs
-  session/{mod,command,history,playback,interact,input,view,events}.rs
-crates/limner-format/src/{lib,manifest,blob,store,pack}.rs
-crates/limner-quill/src/{lib,json,qbin,convert,state,error}.rs
-crates/limner-export/src/{lib,scene,gltf,usd,usdz,obj,fbx}.rs
-crates/limner/src/{lib,app,files}.rs
-crates/limner-cli/src/main.rs
-crates/limner-godot/src/{lib,scene,convert,render,meshes,nodes,media}.rs
+  time.rs, dither.rs, json.rs
+  math/{xform,bounds}.rs                Xform (similarity + flip), Aabb
+  model/{ids,document,layer,keys,drawing,stroke,media,settings}.rs
+  eval/mod.rs                           the document at a time -> RenderFrame
+  tess/{frame,brush,chunk}.rs           strokes -> ChunkMesh
+  ops/{layers,frames,clips,keys,strokes,color,simplify,lighting}.rs
+  session/{mod,command,history,playback,input,options,props,query,selection,strokes,media,
+           animation,gesture,grab,gimbal}.rs
+  session/tools/{settings,space,paint,stroke_builder,sphere,select}.rs
+crates/limner-format/src/{manifest,schema,blob,hash,store,save,load,pack,container,media,mesh,wav,state}.rs
+crates/limner-quill/src/{json,qbin,convert,state,mesh,sound}.rs
+crates/limner-export/src/{scene,common,gltf,usd,obj,fbx}.rs
+crates/limner/src/{lib,files,media}.rs
+crates/limner-cli/src/{main,inspect,dump,export}.rs
+crates/limner-godot/src/{lib,convert,meshes}.rs, scene/{mod,nodes,strokes,pictures,models,sounds,lights,gizmos,overlays,import,export}.rs
 godot/
-  project.godot, limner.gdextension
-  main.tscn, main.gd                    mode selection (desktop, XR, test)
-  world/{world.tscn,world.gd}           LimnerScene host, environment
-  shaders/{stroke.gdshaderinc,stroke_*.gdshader,...}
-  desktop/{shell.tscn,shell.gd,navigation.gd,sim_hand.gd}
-  xr/{rig.tscn,rig.gd,action_map.tres,palette.gd,poke.gd,sim_rig.gd}
-  ui/{theme.tres, panels/*.tscn+*.gd, widgets/*}
-  audio/, capture/, assets/{icons,noise}
-  tests/{run_tests.gd, test_*.gd, shots/*.gd}
-docs/{format.md,quill-differences.md,handoff.md,roadmap.md}
-scripts/{fetch-godot.sh,fetch-godot.ps1,godot.sh,shot.sh,build.sh,test.sh,export.sh}
+  main.gd                               start-up and command-line options
+  world/{world,gimbal,tool_cursor}.gd
+  editor/{editor,preferences,autosave,sounds,text_strokes}.gd
+  ui/*.gd                               panels and widgets, built in code
+  desktop/{shell,hand}.gd
+  xr/{xr_shell,rig,openxr_rig,sim_rig,sim_director,palette,panel_surface,pointer,keyboard,button_map,...}.gd
+  capture/{capture,capture_rig,camera_view,render_job,render_launcher}.gd
+  shaders/, tests/{run.gd,test_*.gd}
+docs/{handoff,roadmap,quill-differences,interface-api,format,quill-import,export,capture,xr}.md
+scripts/{fetch-godot,godot,test,shot}.{sh,ps1}
 ```
 
 ---
@@ -89,56 +94,77 @@ scripts/{fetch-godot.sh,fetch-godot.ps1,godot.sh,shot.sh,build.sh,test.sh,export
 ## M2: Player
 
 - [x] **2.1 Timeline evaluation.** Clips, offsets, sequences with loop points, paint frames with repeat rules, key interpolation about the pivot, action keys. Unit tests for each rule with hand-computed cases.
-- [ ] **2.2 Playback.** `session/playback.rs`: play, stop, seek, step, range, loop; frame-accurate clock in flicks.
-- [ ] **2.3 Pictures, models, sounds from Quill.** Decode qbin records; media table; Godot nodes for flat, 360 and cubemap pictures, model meshes, positional and flat sounds with attenuation and cone/frustum modifiers.
-- [ ] **2.4 Spawn areas and cameras.** Gizmos, jump to spawn area, camera preview.
-- [ ] **2.5 Transport UI.** Play controls, scrubber, timecode, fps.
+- [x] **2.2 Playback.** `session/playback.rs`: play, pause, seek, step, working range, loop, stops and chapter marks; a frame-accurate clock in flicks.
+- [x] **2.3 Pictures, models, sounds from Quill.** qbin records decoded; media table; Godot nodes for flat, 360 and cubemap pictures, model meshes, positional and flat sounds with attenuation and cone/frustum modifiers. Ambisonic sound plays its first channels only.
+- [x] **2.4 Spawn areas and cameras.** Gizmos, jump to a spawn area, camera preview in the Monitor.
+- [x] **2.5 Transport UI.** Play controls, scrubbing, timecode, frame rate (in the Timeline panel).
 
 ## M3: Native format
 
-- [ ] **3.1 Blob and manifest.** `.lstk` stroke blobs (zstd, BLAKE3-addressed), `limn.json`. Round-trip property tests.
-- [ ] **3.2 Project store.** Atomic save, incremental writes, garbage collection, media in original encoding, `state.json`, thumbnail.
-- [ ] **3.3 Pack/unpack** `.limnz`. **3.4 CLI convert** Quill to `.limn`. **3.5 Open/save/autosave** in the app. **3.6 `docs/format.md`.**
+- [x] **3.1 Blob and manifest.** `.lstk` stroke blobs (zstd, named by BLAKE3 hash), `limn.json`. Round-trip tests.
+- [x] **3.2 Project store.** Crash-safe save, writes only what changed, garbage collection, media in their original encoding, `state.json`, thumbnail.
+- [x] **3.3 Pack/unpack** `.limnz`. **3.4 CLI convert** Quill to `.limn`. **3.5 Open/save/autosave** in the app. **3.6 `docs/format.md`.**
 
 ## M4: Editing core and desktop shell
 
-- [ ] **4.1 Commands and history.** `Command` enum (serde), `Session::exec`, snapshot undo with memory cap, revision counters.
-- [ ] **4.2 Layer operations.** Add, delete, move, duplicate, rename, visibility, lock, opacity, merge down, flatten, group/sequence conversion, flip, reset transform, pivot operations.
-- [ ] **4.3 Bridge command and query API.** `exec(name, args)`, `query(name, args)`, signals on revision change.
-- [ ] **4.4 Shell UI.** Theme, layout, Layers panel, Transform panel, Documents panel, Settings.
-- [ ] **4.5 Selection and transforms.** Selection set, overlay rendering, gimbal with axis, plane and ring handles, pivot editing, rotation snapping, duplicate-and-repeat.
+- [x] **4.1 Commands and history.** `Command` enum (serde), `Session::exec`, snapshot undo (200 steps), transactions, revision counters.
+- [x] **4.2 Layer operations.** Add, delete, move, duplicate, rename, visibility, lock, opacity, merge down, flatten, group/sequence conversion, flip, reset transform, pivot operations.
+- [x] **4.3 Bridge command and query API.** `exec(Dictionary)`, typed queries, signals on revision change. Documented in `docs/interface-api.md`.
+- [x] **4.4 Shell UI.** Theme, layout, Layers, Transform, Layer properties, Document and Settings panels.
+- [x] **4.5 Selection and transforms.** Selection set and highlight, gimbal with axis, plane and ring handles, pivot editing, rotation snapping, duplicate-and-repeat.
 
 ## M5: Painting
 
-- [ ] **5.1 Input and interaction.** `InputFrame`, gesture state machine, navigation (grab, two-hand scale, rapid zoom), stick shortcuts, button actions.
-- [ ] **5.2 Paint and Line.** Raw sampling, pressure to width and opacity, tapers, caps, seven brushes, animated-brush duration, axis snap, origin grab.
-- [ ] **5.3 Colorize** (14 modes) and Eraser. **5.4 Selection tool, Grab, Thicken/Thin, Nudge.** **5.5 Optimize** (attribute-aware simplification, tool and layer/document commands).
-- [ ] **5.6 Desktop simulated hand, cursor and brush preview. 5.7 Tools and Colour panels.**
+- [x] **5.1 Input and interaction.** `InputFrame`, gesture state machine, navigation (grab, two-hand scale, rapid zoom), stick shortcuts, button actions.
+- [x] **5.2 Paint and Line.** Raw sampling, pressure to width and opacity, tapers, caps, seven brushes, animated-brush duration, axis snap, origin grab.
+- [x] **5.3 Colorize** (14 modes) and Eraser. **5.4 Selection tool, Grab, Thicken/Thin, Nudge.** **5.5 Optimize** (attribute-aware simplification, tool and layer/document commands).
+- [x] **5.6 Desktop simulated hand, cursor and brush preview. 5.7 Tools and Colour panels.**
 
 ## M6: Animation authoring
 
-- [ ] **6.1 Frame commands** (new, hold, duplicate, delete, remove key, double, reverse, loop, copy selection to frames). **6.2 Clips and sequences** (split, trim, move, loop point, bake). **6.3 Keys** (add, delete, move, interpolation, copy/paste, reverse, keys in children, recording). **6.4 Onion skin.** **6.5 Timeline panel.** **6.6 Painting and tools during playback.**
+- [x] **6.1 Frame commands** (new, hold, duplicate, delete, remove key, double, reverse, loop, copy selection to frames). **6.2 Clips and sequences** (split, trim, move, loop point, bake). **6.3 Keys** (add, delete, move, interpolation, copy/paste, reverse, keys in children, recording). **6.4 Onion skin.** **6.5 Timeline panel.** **6.6 Painting and tools during playback.**
 
 ## M7: Lights
 
-- [ ] **7.1 Light layers** in the model, format and commands. **7.2 Lit stroke shaders** and Godot light nodes. **7.3 Bake lights to vertex colour.** **7.4 Lights panel and gizmos.**
+- [x] **7.1 Light layers** in the model, format and commands. **7.2 Lit stroke shaders** and Godot light nodes, with an ambient light setting. **7.3 Bake lights to vertex colour** (no shadows in the bake). **7.4 Light settings in the Layer panel, and gizmos.**
 
 ## M8: Headset
 
-- [ ] **8.1 XR rig and action map. 8.2 Palette, panel viewports and poke input. 8.3 Simulated rig and scripted gesture tests. 8.4 Haptics and UI sounds. 8.5 Export presets: Windows, Linux, macOS, Quest (Android library build of the extension).**
+- [x] **8.1 XR rig and action map. 8.2 Palette, panel viewports and poke input. 8.3 Simulated rig and scripted gesture tests. 8.4 Haptics and UI sounds.** All of it exercised only on the simulated rig; see `docs/xr.md`.
+- [ ] **8.5 Export presets.** Presets for Windows, Linux, macOS and Quest are written (`godot/export_presets.cfg`). The Android build of the extension and a Quest export were not made: they need the Android SDK and NDK and the OpenXR vendors plugin. Steps in `docs/xr.md`.
 
 ## M9: Export and capture
 
-- [ ] **9.1 Export scene builder** (baked meshes, sampled animation). **9.2 glTF. 9.3 USD/USDZ. 9.4 OBJ. 9.5 FBX. 9.6 Stills and 360. 9.7 Camera render to video. 9.8 Export panel and CLI.**
+- [x] **9.1 Export scene builder** (baked meshes, sampled animation). **9.2 glTF. 9.3 USD/USDZ. 9.4 OBJ. 9.5 FBX. 9.6 Stills and 360. 9.7 Camera render to video. 9.8 Export panel and CLI.** Exports are checked by reading them back, not yet in Blender, Unity or Unreal.
 
 ## M10: Beyond Quill
 
-- [ ] **10.1 Smooth key interpolation. 10.2 Symmetry painting. 10.3 Text layers. 10.4 Performance panel and budgets. 10.5 Persistent palettes and preferences. 10.6 Autosave and recovery.**
+- [x] **10.1 Smooth key interpolation. 10.2 Symmetry painting** (seven of the nine tools). **10.3 Text**, written in strokes rather than as a layer kind. **10.4 Performance panel and budgets. 10.5 Persistent palettes and preferences. 10.6 Autosave and recovery.** Also: importing another project as a group.
 
 ## M11: Hand-off
 
-- [ ] **11.1 Packaged builds. 11.2 `docs/handoff.md`, `docs/quill-differences.md`, `docs/roadmap.md`, README. 11.3 Full verification pass and final report.**
+- [x] **11.1 Packaged builds.** `scripts/package.sh` and `scripts\package.ps1` fetch Godot's export templates, build the extension and export with the preset for the system they run on. The macOS package was made, debug and release, and the packaged app was run. Packages for Windows, Linux and Quest have not been made; they need those systems (and for Quest the Android tools).
+- [x] **11.2 `docs/handoff.md`, `docs/quill-differences.md`, `docs/roadmap.md`, README, `CLAUDE.md`.**
+- [x] **11.3 Full verification pass and final report.** Numbers below.
+
+## State at hand-over
+
+Measured on the development Mac (M1 Max, Godot 4.8 dev 7) with everything above committed.
+
+| Check | Result |
+|---|---|
+| `cargo test --workspace` | 517 passed, 0 failed, 3 ignored; 232 of them are in `limner-core` |
+| The three ignored tests | Two run Apple's USD tools on exported files and pass when asked for with `-- --ignored`; the third writes sample files for outside tools |
+| `cargo clippy --workspace --all-targets`, `cargo fmt --all -- --check` | Clean |
+| Interface tests, headless (`scripts/test.sh`) | 176 passed, 0 failed |
+| Interface tests that need a window (`-- capture export_panel monitor`) | 26 passed, 0 failed |
+| `scripts/package.sh` | A 74 MB macOS package. The packaged app starts, loads the extension, draws, and runs the simulated headset interface |
+| Frame time on the owner's sample project (53 layers, 948,032 triangles) at 1440 x 900, V-Sync off | 3.2 ms in the packaged release build, 3.3 ms in the development build |
+
+About 53,000 lines of Rust and 19,000 of GDScript.
+
+Not covered by any of this: a headset, Windows, Linux, a Quest, and other 3D programs opening the exports. `docs/handoff.md` has the list.
 
 ## Self-review notes
 
-Every section of the design maps to a milestone: sections 6 to 7 to M0 to M2, section 8 to M1 and M7, section 9 to M5, section 10 to M4 to M6, section 11 to M8, section 12 to M3, section 13 to M0, M3 and M9. Tasks from M3 onward are refined in this file when their milestone starts, once the interfaces they consume exist.
+Every section of the design maps to a milestone: sections 6 to 7 to M0 to M2, section 8 to M1 and M7, section 9 to M5, section 10 to M4 to M6, section 11 to M8, section 12 to M3, section 13 to M0, M3 and M9.

@@ -1,0 +1,5 @@
+# One line ending everywhere, so that the same files work on macOS, Linux and Windows.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.png binary
+*.limnz binary
