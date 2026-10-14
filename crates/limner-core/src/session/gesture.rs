@@ -7,6 +7,7 @@
 //! picks a colour; the other hand's stick steps through frames.
 
 use super::command::Command;
+use super::gimbal::HandleGesture;
 use super::input::{Edge, Feedback, InputFrame, Latch, FLICK, PRESS, RELEASE, REST};
 use super::tools::paint::{LineGesture, PaintGesture};
 use super::tools::select::SelectGesture;
@@ -22,6 +23,8 @@ pub(crate) enum Gesture {
     Sphere(SphereGesture),
     Grab(GrabGesture),
     Select(SelectGesture),
+    /// The trigger on a handle of the gimbal, in place of the tool.
+    Handle(Box<HandleGesture>),
 }
 
 /// A stick held past this long in one direction starts repeating its action.
@@ -68,6 +71,24 @@ impl Flick {
         }
         0
     }
+
+    /// As `update`, but a push counts once however long the stick is held.
+    fn update_once(&mut self, value: f32) -> i8 {
+        let direction = if value > FLICK {
+            1
+        } else if value < -FLICK {
+            -1
+        } else if value.abs() < REST {
+            0
+        } else {
+            self.direction
+        };
+        if direction == self.direction {
+            return 0;
+        }
+        self.direction = direction;
+        direction
+    }
 }
 
 /// The state of every button and stick between frames.
@@ -105,6 +126,8 @@ pub struct Cursor {
     pub active: bool,
     /// How far the modifier is pressed.
     pub alt: f32,
+    /// The hand is at a handle of the gimbal: the trigger would move that, not apply the tool.
+    pub at_handle: bool,
 }
 
 impl Session {
@@ -133,6 +156,7 @@ impl Session {
             opacity,
             active: self.gesture.is_some(),
             alt: self.last_input.alt(),
+            at_handle: self.hover[0].is_some() || matches!(self.gesture, Some(Gesture::Handle(_))),
         }
     }
 
@@ -141,6 +165,7 @@ impl Session {
     pub fn update(&mut self, input: &InputFrame) -> Vec<Feedback> {
         let mut feedback = Vec::new();
         self.update_buttons(input, &mut feedback);
+        self.update_grabs(input, &mut feedback);
         self.update_sticks(input, &mut feedback);
         self.update_tool(input, &mut feedback);
         self.last_input = *input;
@@ -229,8 +254,7 @@ impl Session {
         } else {
             [0.0, 0.0]
         };
-        let stick_is_taken =
-            matches!(self.gesture, Some(Gesture::Grab(_))) || input.main.grip > 0.5;
+        let stick_is_taken = matches!(self.gesture, Some(Gesture::Grab(_))) || self.is_grabbing(0);
         let sideways = if x.abs() > y.abs() && !stick_is_taken {
             x
         } else {
@@ -261,7 +285,7 @@ impl Session {
         } else {
             [0.0, 0.0]
         };
-        let off_grabbing = input.off.grip > 0.5;
+        let off_grabbing = self.is_grabbing(1);
         let sideways = if x.abs() > y.abs() && !off_grabbing {
             x
         } else {
@@ -289,7 +313,32 @@ impl Session {
                 self.press(Command::FastForward, feedback);
             }
         }
-        let _ = controls.off_upward.update(upward, input.dt);
+        // Up makes a new frame and down holds the one showing a frame longer; with the
+        // modifier, up makes a copy of the frame and down deletes it. One push, one frame.
+        let pushed = controls.off_upward.update_once(upward);
+        if pushed != 0 {
+            if let Some(layer) = self.paint_layer {
+                let command = match (pushed > 0, alt) {
+                    (true, false) => Command::AddFrame {
+                        layer,
+                        kind: crate::ops::frames::NewFrame::Blank,
+                    },
+                    (false, false) => Command::AddHoldFrame { layer, after: true },
+                    (true, true) => Command::AddFrame {
+                        layer,
+                        kind: crate::ops::frames::NewFrame::Duplicate,
+                    },
+                    (false, true) => Command::DeleteFrame { layer },
+                };
+                if self.press(command, feedback) {
+                    feedback.push(Feedback::Haptic {
+                        main: false,
+                        strength: 0.3,
+                        seconds: 0.03,
+                    });
+                }
+            }
+        }
         self.controls = controls;
     }
 
@@ -369,6 +418,22 @@ impl Session {
     fn begin_gesture(&mut self, input: &InputFrame, feedback: &mut Vec<Feedback>) {
         // An unfinished gesture means input stopped without a release; close it first.
         self.end_gesture();
+        // At a handle of the gimbal the trigger works the handle, not the tool.
+        if let Some((handle, gimbal)) = self.hover[0].zip(self.gimbal()) {
+            self.begin_transaction(HandleGesture::label(
+                gimbal.subject,
+                handle,
+                input.alt() > 0.5,
+            ));
+            match HandleGesture::begin(self, input, &gimbal, handle) {
+                Ok(gesture) => self.gesture = Some(Gesture::Handle(Box::new(gesture))),
+                Err(message) => {
+                    self.cancel_transaction();
+                    feedback.push(Feedback::Message(message));
+                }
+            }
+            return;
+        }
         let tool = if self.tools.tool == ToolKind::Paint && input.alt() > 0.5 {
             ToolKind::Line
         } else {
@@ -417,6 +482,7 @@ impl Session {
             Gesture::Sphere(sphere) => sphere.update(self, input),
             Gesture::Grab(grab) => grab.update(self, input),
             Gesture::Select(select) => select.update(self, input),
+            Gesture::Handle(handle) => handle.update(self, input),
         };
         self.gesture = Some(gesture);
         if !keep_going {
@@ -438,12 +504,17 @@ impl Session {
             Gesture::Sphere(sphere) => sphere.end(self),
             Gesture::Grab(grab) => grab.end(self),
             Gesture::Select(_) => {}
+            Gesture::Handle(handle) => handle.end(self),
         }
         self.commit_transaction();
+        let repeat = self.pending_repeat.take();
+        self.remember_repeat(repeat);
     }
 
-    /// Abandons the tool at work and undoes what it did so far.
+    /// Abandons the tool at work, and anything held by the grips, and undoes what
+    /// they did so far.
     pub fn cancel_gesture(&mut self) {
+        self.cancel_grab();
         if self.gesture.take().is_some() {
             self.cancel_transaction();
         }

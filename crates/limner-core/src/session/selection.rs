@@ -11,11 +11,18 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Selection {
     /// For each drawing, the ids of its selected strokes. No entry is ever empty.
     strokes: BTreeMap<DrawingId, BTreeSet<u32>>,
+    /// Counts the changes to what is selected.
+    revision: u64,
 }
 
 impl Selection {
     pub fn is_empty(&self) -> bool {
         self.strokes.is_empty()
+    }
+
+    /// A number that changes whenever the set of selected strokes does.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     /// The number of selected strokes.
@@ -31,7 +38,9 @@ impl Selection {
 
     /// Returns true when the stroke was not selected before.
     pub fn insert(&mut self, drawing: DrawingId, stroke: u32) -> bool {
-        self.strokes.entry(drawing).or_default().insert(stroke)
+        let added = self.strokes.entry(drawing).or_default().insert(stroke);
+        self.revision += u64::from(added);
+        added
     }
 
     /// Returns true when the stroke was selected.
@@ -43,10 +52,12 @@ impl Selection {
         if ids.is_empty() {
             self.strokes.remove(&drawing);
         }
+        self.revision += u64::from(removed);
         removed
     }
 
     pub fn clear(&mut self) {
+        self.revision += u64::from(!self.strokes.is_empty());
         self.strokes.clear();
     }
 
@@ -62,6 +73,7 @@ impl Selection {
 
     /// Replaces the selected strokes of one drawing; an empty set deselects it.
     pub fn set_drawing(&mut self, drawing: DrawingId, ids: BTreeSet<u32>) {
+        self.revision += 1;
         if ids.is_empty() {
             self.strokes.remove(&drawing);
         } else {
@@ -71,6 +83,7 @@ impl Selection {
 
     /// Forgets strokes and drawings that are no longer in the document.
     pub fn retain_existing(&mut self, doc: &Document) {
+        let before = self.count();
         self.strokes.retain(|drawing, ids| {
             let Some(drawing) = doc.drawing(*drawing) else {
                 return false;
@@ -79,6 +92,7 @@ impl Selection {
             ids.retain(|id| existing.contains(id));
             !ids.is_empty()
         });
+        self.revision += u64::from(self.count() != before);
     }
 }
 

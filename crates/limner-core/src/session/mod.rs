@@ -7,6 +7,8 @@
 mod animation;
 mod command;
 mod gesture;
+mod gimbal;
+mod grab;
 mod history;
 pub mod input;
 pub mod media;
@@ -22,6 +24,10 @@ mod view;
 pub use animation::{KeyTrack, OnionSkin};
 pub use command::{Command, CommandError, OptimizeScope, SelectMode};
 pub use gesture::Cursor;
+pub use gimbal::{
+    Gimbal, GimbalHandle, ARROW_END, ARROW_START, CENTER_RADIUS, PLANE_FAR, PLANE_NEAR,
+};
+pub use grab::Subject;
 pub use history::History;
 pub use input::{Feedback, HandInput, InputFrame};
 pub use options::{AutoSelect, Options};
@@ -81,6 +87,18 @@ pub struct Session {
     selection: Selection,
     /// Keys copied for pasting.
     key_clipboard: Option<animation::KeyClipboard>,
+    /// What the grips hold.
+    grab: Option<grab::Grab>,
+    grips: [input::Latch; 2],
+    /// The handle of the gimbal at each hand.
+    hover: [Option<GimbalHandle>; 2],
+    /// The last duplicate-and-move, and the state of the document right after it:
+    /// it can be repeated only while nothing else has been done since.
+    repeat: Option<(grab::Repeat, u64)>,
+    /// A repeat to remember once the gesture that made it is closed.
+    pending_repeat: Option<grab::Repeat>,
+    /// Where the selection's pivot was put, if it was.
+    selection_pivot: Option<grab::SelectionPivot>,
 }
 
 impl Session {
@@ -106,6 +124,12 @@ impl Session {
             last_input: InputFrame::default(),
             selection: Selection::default(),
             key_clipboard: None,
+            grab: None,
+            grips: [input::Latch::default(); 2],
+            hover: [None, None],
+            repeat: None,
+            pending_repeat: None,
+            selection_pivot: None,
         };
         session.go_to_default_viewpoint();
         session.adopt_document();
@@ -118,6 +142,11 @@ impl Session {
         self.history.clear();
         self.transaction = None;
         self.gesture = None;
+        self.grab = None;
+        self.hover = [None, None];
+        self.repeat = None;
+        self.pending_repeat = None;
+        self.selection_pivot = None;
         self.selection.clear();
         self.playback = Playback::default();
         self.selected_layers.clear();
@@ -402,17 +431,28 @@ impl Session {
         let (doc, label) = self.history.undo(&self.doc)?;
         self.doc = doc;
         self.edits += 1;
+        self.selection_pivot = None;
         self.after_document_change();
         Some(label)
     }
 
+    /// Redoes the step last undone. When there is none and the last thing done was to
+    /// move a copy, makes another copy moved as far again.
     pub fn redo(&mut self) -> Option<String> {
         if self.transaction.is_some() {
             return None;
         }
+        if !self.history.can_redo() && self.can_transform_again() {
+            let label = Command::TransformAgain.label()?;
+            return self
+                .exec(Command::TransformAgain)
+                .ok()
+                .map(|_| label.to_owned());
+        }
         let (doc, label) = self.history.redo(&self.doc)?;
         self.doc = doc;
         self.edits += 1;
+        self.selection_pivot = None;
         self.after_document_change();
         Some(label)
     }
@@ -499,13 +539,28 @@ impl Session {
         id: LayerId,
         value: Xform,
     ) -> Result<(), CommandError> {
+        self.write_transform_as(id, value, false)
+    }
+
+    /// As [`Session::write_transform`]. A `quiet` write is one of many in a row, as
+    /// while a layer is carried by the hand: interfaces are told when it is over.
+    pub(crate) fn write_transform_as(
+        &mut self,
+        id: LayerId,
+        value: Xform,
+        quiet: bool,
+    ) -> Result<(), CommandError> {
         if !(value.is_finite() && value.scale > 0.0) {
             return Err(CommandError::invalid("the transform is not usable"));
         }
         let time = self.key_time(id);
         let (recording, interp) = (self.options.recording, self.options.default_interp);
-        let layer = self
-            .doc_mut()
+        let doc = if quiet {
+            self.strokes_mut()
+        } else {
+            self.doc_mut()
+        };
+        let layer = doc
             .layer_mut(id)
             .ok_or(crate::ops::OpError::NoSuchLayer(id))?;
         let mut value = value;
@@ -1029,6 +1084,7 @@ impl Session {
             Command::DeleteSelection => self.delete_selection(),
             Command::SelectionToNewLayer { copy } => self.selection_to_new_layer(copy),
             Command::Optimize { scope } => self.optimize(scope),
+            Command::TransformAgain => self.transform_again(),
             other => unreachable!("{other:?} does not edit the document"),
         }
     }
@@ -1108,6 +1164,9 @@ impl Session {
             Command::SetOptions { values } => {
                 let mut options = patched(&self.options, &values).map_err(CommandError::Invalid)?;
                 options.sanitize();
+                if options.level_horizon && !self.options.level_horizon {
+                    self.view.level(self.last_input.head);
+                }
                 self.options = options;
                 Value::Null
             }
@@ -1172,5 +1231,7 @@ impl Session {
 
 #[cfg(test)]
 mod animation_tests;
+#[cfg(test)]
+mod grab_tests;
 #[cfg(test)]
 mod tests;

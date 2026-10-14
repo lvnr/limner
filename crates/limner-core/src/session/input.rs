@@ -27,6 +27,10 @@ pub struct HandInput {
     /// Upper face button (B on the right controller, Y on the left).
     pub upper_button: bool,
     pub stick_click: bool,
+    /// For a hand steered from a screen by a mouse or a pen: the line of sight through
+    /// the pointer, as an origin and a unit direction. Handles are picked along it,
+    /// since such a hand cannot be moved in depth to reach them.
+    pub ray: Option<(DVec3, DVec3)>,
 }
 
 impl Default for HandInput {
@@ -41,6 +45,7 @@ impl Default for HandInput {
             lower_button: false,
             upper_button: false,
             stick_click: false,
+            ray: None,
         }
     }
 }

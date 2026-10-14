@@ -306,6 +306,9 @@ pub enum Command {
     Optimize {
         scope: OptimizeScope,
     },
+    /// After moving a copy of a layer or of the selected strokes (a grab with the
+    /// modifier held): makes another copy, moved as far again from the last one.
+    TransformAgain,
 
     // ---- what is being worked on (not part of the document, not undoable) ----
     /// Selects every stroke the Selection tool can reach now.
@@ -436,6 +439,7 @@ impl Command {
             SelectionToNewLayer { copy: true } => "Copy strokes to new layer",
             SelectionToNewLayer { copy: false } => "Move strokes to new layer",
             Optimize { .. } => "Optimize strokes",
+            TransformAgain => "Transform again",
             Undo
             | Redo
             | CopyKeys { .. }

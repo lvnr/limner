@@ -62,9 +62,11 @@ impl Session {
             "state_revision": self.state_revision,
             "dirty": self.is_dirty(),
             "can_undo": self.history.can_undo(),
-            "can_redo": self.history.can_redo(),
+            // With nothing to redo, Redo repeats the last move of a copy.
+            "can_redo": self.history.can_redo() || self.can_transform_again(),
             "undo_label": self.history.undo_label(),
-            "redo_label": self.history.redo_label(),
+            "redo_label": self.history.redo_label().or(self.can_transform_again().then_some("Transform again")),
+            "can_transform_again": self.can_transform_again(),
             "time": self.playback.time,
             "seconds": crate::time::to_seconds(self.playback.time),
             "frame": rate.frame_at(self.playback.time),
@@ -76,6 +78,7 @@ impl Session {
             "transform_target": self.transform_target,
             "selection_count": self.selection.count(),
             "tool_active": self.is_tool_active(),
+            "grabbing": self.grabbed().is_some(),
         })
     }
 

@@ -67,6 +67,14 @@ impl View {
         self.apply_motion(&about(pivot, &Xform::from_scale(factor)));
     }
 
+    /// Turns the world about a viewer-space point until its up is the viewer's up.
+    pub fn level(&mut self, pivot: DVec3) {
+        let up = self.viewer_from_world().rotation * DVec3::Y;
+        if let Some(up) = up.try_normalize() {
+            self.rotate_about(pivot, DQuat::from_rotation_arc(up, DVec3::Y));
+        }
+    }
+
     /// Places the viewer so the world-space sphere (`center`, `radius`) appears as the
     /// viewer-space sphere (`target`, `target_radius`), keeping the current orientation.
     pub fn frame_sphere(&mut self, center: DVec3, radius: f64, target: DVec3, target_radius: f64) {
@@ -82,7 +90,7 @@ impl View {
 }
 
 /// The transform `inner` applied about `pivot` instead of the origin.
-fn about(pivot: DVec3, inner: &Xform) -> Xform {
+pub(crate) fn about(pivot: DVec3, inner: &Xform) -> Xform {
     Xform::from_translation(pivot)
         .mul(inner)
         .mul(&Xform::from_translation(-pivot))
