@@ -45,6 +45,8 @@ godot/ui/settings_panel.gd    the Settings panel
 
 **Starting.** `XRShell.is_available()` is true when the OpenXR interface is initialised (Godot does that at start-up when the project has OpenXR switched on) or can be initialised now. It is cheap and, when it fails, undoes the half-made start. `XRShell._ready` then switches the main viewport to XR, turns V-Sync off, and when the session begins asks for the best refresh rate the headset offers out of 120, 90 and 72 Hz. The session's states are followed: without the user's attention (headset off the head, system menu open, session stopping) both hands are reported absent; a recentre is left to the system and does not move the view, because going back to the initial spawn area is something the user asks for in Settings. If starting fails, `started` stays false, `failure` holds the reason, the reason is sent through `editor.message`, and `start_failed` is emitted, so that `main.gd` can fall back to the desktop.
 
+**Quitting and unsaved work.** When the headset's system ends the session (`XRRig.closed`, for instance when the user quits from the system menu) there is no moment left to ask anything, and closing the desktop mirror window quits at once too. In both cases `XRShell.keep_unsaved_work` first copies unsaved work to the recovery file (`Autosave.keep_for_next_time`), and the next start in the headset opens it again, still unsaved; a desktop start offers it. Nothing is asked in the world before quitting, because neither way of quitting leaves time for an answer.
+
 **The mirror.** The desktop window shows one eye, which is what Godot does by itself. The shell sizes the window to 1280 x 720, names it "… — Limner (headset)" and puts one line of text at the bottom saying that the session is in the headset.
 
 ### Project settings the headset needs
@@ -118,13 +120,14 @@ The action map was written by a script through Godot's own classes and read back
 
 - **Sheets.** Every panel is the same `Control` the desktop docks, placed in a `SubViewport` of its own (`XRPanelSurface`) under a title bar and above a line for tooltips. A sheet is 352 pixels wide (a few panels ask for more) at 1.4 pixels per millimetre, a quarter of a metre, and as tall as its panel needs, up to 560 pixels of panel, beyond which it scrolls.
 - **Sharpness.** A viewport's picture has no mip-maps, so each sheet keeps two smaller copies of itself in two more viewports, and `panel.gdshader` blends between the three by how far away the sheet is. Text is sharp at arm's length and does not shimmer on a pinned panel across the room.
-- **Drawing only when needed.** A sheet is redrawn while the pointer is on it, for 0.4 s after the document or the editor state changed, while a pop-up is open in it, while the piece is playing, and otherwise twice a second. Hidden sheets are never drawn.
+- **Drawing only when needed.** A sheet is redrawn while the pointer is on it, for 0.4 s after the document or the editor state changed, while a pop-up is open in it, while the piece is playing, and otherwise twice a second. Hidden sheets are never drawn, and the panel on a hidden sheet is hidden as well (`XRPanelSurface` follows its own visibility), so that a panel that works only while it is seen, such as the Monitor's live picture, stops when its sheet is put away or another panel is brought to the front. In its own viewport a panel would otherwise count as shown for ever.
 - **Tabs.** The strip along the top is built from `XRPalette.PANELS`. A panel whose script is missing or does not load is left out, so the palette works while panels are being written.
 - **Where it is.** Held by its edge, like a clipboard: 5 cm to the inside of the other hand, its top 20 cm above the hand, leaning back 25 degrees.
 - **Pinning.** Grip while over a panel picks it up. It follows the hand, the stick resizes it (0.5 to 3 times), and it stays where it is let go. Its title bar then has a button that sends it back; pressing its tab on the palette does the same. Any number can be pinned. Pinned panels stay when the palette is put away.
 - **Pop-ups** (drop-downs, the colour picker, context menus) open inside the panel's own viewport. A sheet grows while a pop-up larger than it is open. A press beside a pop-up closes it. A drop-down that opens under a press does not take the release as a choice.
 - **Typing.** When a `LineEdit` or `TextEdit` on any panel (or in a pop-up of it) is being typed into, a keyboard sheet appears beside that panel, level with the box, on the drawing hand's side. Its keys send ordinary key events to the box. It goes when typing ends, or with its own key.
 - **Tooltips.** The tooltip of the control under the pointer appears on the line under the panel after half a second.
+- **Files.** The Document panel's File section saves, saves as, starts, opens and imports in one documents folder (`Documents.folder()`: `Documents/Limner`, or `user://documents` on a Quest), with no system dialog: a name is typed on the keyboard sheet, the projects there are listed newest first with their dates, and "save the changes first?" is asked in the panel. See "Files and media" in `docs/interface-api.md`.
 - **Messages** from the core and the editor appear for a few seconds on a line above the palette, whether or not the palette is out.
 
 ### What in the panels cannot work in a headset
@@ -195,7 +198,7 @@ Nothing below has been run. It is the list of what is needed, in order, with the
    adb install -r local/out/builds/quest/limner.apk
    adb logcat -s godot            # what the app prints
    ```
-8. **On the device.** There are no system file dialogs: documents open and save through the Document panel, and exports go to their default folders. `user://` is the app's own storage.
+8. **On the device.** There are no system file dialogs: documents open and save through the Document panel's File section, in `user://documents`, and exports go to their default folders. `user://` is the app's own storage, so documents saved on the Quest are reached from a PC with `adb` (or the device's file sharing), not by browsing its shared storage.
 
 The other presets in `godot/export_presets.cfg` (Windows, Linux, macOS) need only the export templates and a build of the extension for that system. `scripts/package.sh` (`scripts\package.ps1` on Windows) does all of it: it fetches the templates when they are missing, builds the extension, and exports with the preset for the system it runs on. On the Mac this was built on, both the debug and the release package were made that way and the packaged app was started and looked at. Godot's exporter follows the extension's `res://../target/…` paths out of the project folder and puts the library inside the package, so nothing has to be copied by hand. The Windows and Linux packages have not been made.
 
@@ -234,3 +237,4 @@ Start with `-- --xr --no-sim` so that a failure is reported instead of hidden. K
 13. **Attention.** Open the system menu, or take the headset off: nothing should paint, and everything should come back after.
 14. **Left hand.** Settings > Drawing hand > Left: the palette moves to the right hand and the left trigger paints.
 15. **Frame rate.** Open the Performance panel. Note the frame time with the palette out and put away, and with three panels pinned.
+16. **Files.** In the Document panel: Save, type a name on the keyboard, Enter. Paint a stroke, press New and answer the question in the panel; then Open, and pick the project from the list. Quit from the headset's system menu with a stroke unsaved and start again: the stroke should be back, unsaved.

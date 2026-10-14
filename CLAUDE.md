@@ -11,7 +11,7 @@ Everything in the plan is built. It was built on a Mac with no headset, so nothi
 3. `docs/interface-api.md`: how interface code talks to the document, and every command. Read it before touching anything under `godot/`.
 4. `docs/xr.md`: the headset layer, its constants and the order to test it in.
 5. `docs/quill-differences.md`: where Limner departs from Quill and which numbers are guesses to be measured.
-6. `reports/Quill feature map and tech stack.md`: what Quill does, with evidence grades and a table of unknowns to measure.
+6. The research behind the project (a Quill feature map with sources, and a table of Quill behaviours still to be measured) is private and not in the repository. If `reports/` and `research_notes/` exist in the working folder, read `reports/Quill feature map and tech stack.md`; never commit either folder.
 7. `docs/superpowers/plans/2026-10-14-limner-master-plan.md`: the milestones and what each delivered. `docs/roadmap.md`: what could come next.
 
 ## Settled, do not reopen
@@ -23,11 +23,11 @@ Everything in the plan is built. It was built on a Mac with no headset, so nothi
 
 ## Hard rules
 
-- `3d models&design/` is proprietary material from a Quill install. Reference only. Never commit, copy or ship anything from it.
+- Never add material from a Quill install (icons, sounds, models, fonts, screenshots) to the repository, and never ship any.
 - `~/projects/quill-exporter/` is the owner's private artwork and Quill's exporter. Read-only. Never copy it into the repository. Tests that use it must skip when it is missing (`LIMNER_SAMPLE_DIR` overrides the path) and print only totals.
 - Do not run, decompile or inspect Quill's binaries (its EULA forbids reverse engineering). Format knowledge comes from user-owned files and from the Apache/MIT-licensed sources under `local/ref/`. Measuring how Quill behaves by using it, as any user would, is fine and wanted.
 - `limner-core` has no I/O and no Godot types. `limner-godot` holds no product logic.
-- The repository has no remote. Do not push or publish anything unless the owner asks.
+- The repository is public at github.com/lvnr/limner (MIT). Before committing, check new files for local paths, private material and anything from the research notes. Commits use the GitHub noreply address set in the repo's git config.
 
 ## Layout
 

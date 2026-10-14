@@ -102,7 +102,7 @@ This goes beyond Quill, which had no stereo 360 capture.
 
 ### How it works
 
-1. **Render** saves the document: in its own place when it has one and nothing in it is unsaved, and otherwise as a copy in `user://renders/` that is removed when the render ends. The copy is written by `LimnerScene.save_copy`, which neither moves the document to the copy nor counts its changes as saved. The view is saved with it, which is what "Current view" renders.
+1. **Render** saves the document as it is now, unsaved changes included, as a copy in `user://renders/` that is removed when the render ends. The user's own file is never written: saving it again would replace its picture. The copy is written by `LimnerScene.save_copy`, which neither moves the document to the copy nor counts its changes as saved. The view is saved with it, which is what "Current view" renders.
 2. `RenderLauncher` starts a second copy of the application (`OS.get_executable_path()`, with `--path` when it is not an exported build) with Godot's Movie Maker options and Limner's `--render` options.
 3. In that process `main.gd` hands over to `RenderJob`. On every frame the job places the playhead (`start + frame / fps`), renders the camera's view off screen with all the passes of the chosen quality, and shows the result full-window. Godot's Movie Maker records the window once per frame and writes the file.
 4. The job reports progress in a small JSON file (`{state, frame, frames, error}`) that the launcher reads four times a second; the panel shows a progress bar and **Cancel**. Cancelling asks the job to stop, so that it closes its file properly and what was rendered so far stays playable; a job that does not answer within five seconds is stopped.
@@ -184,7 +184,7 @@ scripts/godot.sh --path godot --write-movie /abs/piece.avi --fixed-fps 24 --disa
     -- --render --open piece.limn
 ```
 
-Here Godot's own options choose the file and the frame rate, the folder of the file must exist, and the frames have the size the process started with: the project's window size, 1440 x 900, unless a settings file says otherwise (above). The job says so when `--size` or the document's resolution asks for something else. `--fixed-fps` takes whole numbers only; for a rate such as 23.976 the launcher gives Godot 24 and the job the exact rate, so every frame shows the right instant and the file is labelled 24.
+Here Godot's own options choose the file and the frame rate, the folder of the file must exist, and the frames have the size the process started with: the project's window size, 1440 x 900, unless a settings file says otherwise (above). The job says so when `--size` or the document's resolution asks for something else. `--fixed-fps` takes whole numbers only, and Movie Maker records one frame's worth of sound at that rate for every frame. For a rate such as 23.976 the launcher gives Godot 24 and the job the exact rate, so every frame shows the right instant and every drawn frame appears once; the job plays the sound faster by the same proportion (`AudioServer.playback_speed_scale`, here 1.001, 1.7 cents higher), so picture and sound stay together in a file labelled 24 that runs 0.1% short. An editor that conforms the file to 23.976 gets the exact timing back.
 
 ## The Monitor
 

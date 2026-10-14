@@ -16,14 +16,14 @@
 
 ## Global Constraints
 
-- Never commit, copy or ship anything from `3d models&design/` (proprietary Quill assets).
+- Never commit, copy or ship anything from a Quill install (proprietary assets).
 - `~/projects/quill-exporter/` is private, read-only test data; tests using it must skip when it is absent (`LIMNER_SAMPLE_DIR` overrides the path).
 - Do not run, decompile or inspect Quill's binaries.
 - `limner-core` has no I/O and no Godot types. `limner-godot` has no product logic.
 - Time is integer flicks (705,600,000 per second). One Quill tick is 56,000 flicks.
 - Hierarchy maths in `f64`; stroke points `f32` in layer space.
 - Godot build is pinned: `4.8.dev7.official.c971f93e7`. Extension API level is 4.7.
-- Licence Apache-2.0. New third-party assets need a compatible licence and an entry in `THIRD_PARTY.md`.
+- Licence MIT (Apache-2.0 until the repository went public). New third-party assets need a compatible licence and an entry in `THIRD_PARTY.md`.
 - Commit after each task with the trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
 ## Commands

@@ -20,10 +20,13 @@ Numbers from the last full run on the Mac are at the end of this page.
 
 ## Moving to the Windows PC
 
-The repository has no remote; nothing has been pushed anywhere. Two ways to move it:
+The project is public at [github.com/lvnr/limner](https://github.com/lvnr/limner). Clone it on the PC:
 
-- **Copy the folder.** Leave out `target/` (build output, several GB), `tools/` (the Godot download) and `godot/.godot/` (the engine's cache); they are rebuilt. `local/` holds reference sources and scratch output and is not needed.
-- **Use a remote of your own.** `git remote add origin <url>` and push. `3d models&design/` (material from the Quill install) is git-ignored and must stay out of any repository. `reports/` and `research_notes/` are tracked: they quote a few numbers measured from your own sample project (key times, a camera's field of view), so read them before making the repository public.
+```powershell
+git clone https://github.com/lvnr/limner.git
+```
+
+The research behind the project (the Quill feature report and its notes, `reports/` and `research_notes/`) is kept out of the repository on purpose: it describes Quill's install files and quotes numbers from a private sample. It stays on the Mac; copy those two folders across by hand if the PC session should have them, and keep them out of git (they are listed in `.gitignore`).
 
 On the PC:
 
@@ -59,22 +62,22 @@ The original Rift is a PC headset, so the "PC headset" target in the Performance
 - **The exports in Blender, Unity and Unreal.** glTF and FBX files load in Godot's own importers and USD files pass Apple's USD tools, but nothing has been opened in the programs people will take them to. `docs/export.md` lists what was checked and says what each file should look like there.
 - **Sound by ear.** Players start, stop, loop, seek and fade as they should according to their state. Nobody has listened.
 - **FBX and Ogg import with real files**, ambisonic sound (only the first channels are played), MP3 beyond generated silence.
-- **Quill's exact numbers.** How fast its tools act, its selection hit test, its sound fall-off. Limner's choices are constants listed in `docs/quill-differences.md`; the table of what to measure on a PC with Quill is at the end of `reports/Quill feature map and tech stack.md` and in `docs/quill-import.md`.
+- **Quill's exact numbers.** How fast its tools act, its selection hit test, its sound fall-off. Limner's choices are constants listed in `docs/quill-differences.md`; the table of what to measure on a PC with Quill is at the end of the private research report (see above) and in `docs/quill-import.md`.
 
 ## Known gaps
 
 Things a Quill user may look for and not find, or that are simpler than they could be:
 
-- The Grab tool and the Selection tool do not work across the mirror; the other seven tools do.
-- Moving a very large selection re-draws its strokes every frame and will be slow in the tens of thousands of strokes.
-- Text is one line, in the built-in font, and has no font chooser.
+- Moving a very large selection is smooth while it is carried (only the motion changes each frame), but taking hold and letting go each make the triangles of the touched chunks again once: about 70 ms for 20,000 selected strokes mixed through 40,000 in the development build, a visible hitch at both ends. `cargo run -p limner-core --example selection_move` measures it. Onion skins of other frames whose strokes are carried show them unmoved until the grip lets go.
+- Text has no single-line stroke font for small labels: letters are always outlines (and fillings), which get heavy below a centimetre or so. A font chosen on one computer and missing on another falls back to the built-in one with a note.
 - The upper button picks a colour from the nearest stroke of any visible layer, but the blink at the hand shows what the lower button would delete, which is always a stroke of the layer being painted. A stroke on another layer is picked from without blinking first.
-- No saved "home" views (there is "Go to initial spawn area").
-- Only the dark colour scheme exists; Quill also has a light one.
-- The Performance panel has no count of sounds playing and keeps no peaks, both of which Quill's shows.
-- Baked lighting has no shadows, and a tube gets one brightness all the way round.
-- Sounds are not exported to 3D formats; ambisonic sound is reduced to its first channels.
-- The Timeline does not scroll by itself while a drag nears its edge, Escape does not cancel a drag on its tracks, and pinch and two-finger panning have never met a real trackpad ("The Timeline panel" in `docs/interface-api.md`).
+- The Performance panel's limit on sounds playing at once (16 standalone, 32 PC headset and desktop) is a rule of thumb, like its other limits. The frame-time peak is the highest of its half-second averages, so a single long frame does not show.
+- Baked lighting gives a tube one brightness all the way round. Baked shadows treat every stroke segment as a round capsule (ribbons too, so their shadows are a little rounder than the live ones), are hard-edged where the live view filters its shadow maps, leave out model layers (the core does not hold their shapes), and ignore how directional strokes fade; a point inside another stroke is not shaded by it.
+- Sounds are exported only to USD and USDZ, as UsdMedia `SpatialAudio` prims with the audio beside the `.usda` or inside the `.usdz` (Ogg Vorbis cannot go in a `.usdz` and is left out with a warning). Apple's `usdchecker` accepts the files, but no player has played them. glTF (no ratified audio extension yet), FBX and OBJ leave sounds out and say so in the export's warnings. Ambisonic sound is reduced to its first channels.
+- The Timeline's pinch and two-finger panning have only met synthetic events, written to match what Godot sends on macOS, never a real trackpad; the pan speed may want adjusting by feel ("The Timeline panel" in `docs/interface-api.md`).
+- The Document panel's File section (the headset's only way to save and open) works in one folder, `Documents/Limner` (`user://documents` on a Quest): no subfolders, no renaming or deleting, and its lists show the 30 newest entries. On a Quest that folder is the app's own storage, reached from a PC only with `adb`.
+- The headset never asks before quitting: when its system ends the session, or the mirror window is closed, unsaved work is copied to the recovery file and opened again at the next start. Whether OpenXR's "instance exiting" leaves enough time to write a large document has not been seen on hardware.
+- Videos at a rate that is not a whole number (23.976) are written at the next whole rate with the sound played 0.1% faster to stay with the picture (`docs/capture.md`). Only the arithmetic is tested; no such render with sound has been listened to.
 - What the Quill importer leaves out is listed in `docs/quill-import.md`; what each exporter loses is in `docs/export.md`; the limits of capture are in `docs/capture.md`.
 
 ## Where to read
@@ -84,7 +87,7 @@ Things a Quill user may look for and not find, or that are simpler than they cou
 | Rules, layout and commands for the next coding session | `CLAUDE.md` |
 | The design and its reasons | `docs/superpowers/specs/2026-10-14-limner-design.md` |
 | Milestones and what is ticked | `docs/superpowers/plans/2026-10-14-limner-master-plan.md` |
-| What Quill does, with sources | `reports/Quill feature map and tech stack.md` |
+| What Quill does, with sources | The private research report, if copied across (see "Moving to the Windows PC") |
 | Where Limner differs from Quill | `docs/quill-differences.md` |
 | How panels talk to the document; every command | `docs/interface-api.md` |
 | The file format | `docs/format.md` |

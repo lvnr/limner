@@ -1,57 +1,156 @@
-# Limner
+<p align="center">
+  <img src="docs/images/banner.png" alt="Limner" width="860">
+</p>
 
-Limner is an open-source tool for painting and animating in 3D, in a VR headset or on a desktop screen. It is a successor to Quill 2.9, which has had no updates since 2021: it keeps Quill's way of working, opens existing Quill projects, and adds things Quill never had, such as lights that shade the paint, mirrored painting, text, smooth keys and export to current 3D formats.
+<p align="center">
+  <strong>Paint and animate in 3D, in a VR headset or at your desk.</strong><br>
+  An open-source successor to Quill.
+</p>
 
-"Limner" is a working title and may change.
+<p align="center">
+  <a href="LICENSE"><img alt="Licence: MIT" src="https://img.shields.io/badge/licence-MIT-3d8bfd"></a>
+  <a href="https://github.com/lvnr/limner/actions/workflows/ci.yml"><img alt="Tests" src="https://github.com/lvnr/limner/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Godot 4.8" src="https://img.shields.io/badge/Godot-4.8-478cbf?logo=godotengine&logoColor=white">
+  <img alt="Rust" src="https://img.shields.io/badge/Rust-stable-ce422b?logo=rust&logoColor=white">
+  <img alt="Status: early" src="https://img.shields.io/badge/status-early-ffb33f">
+</p>
 
-**Status.** Every part of the plan is built and tested on a Mac without a headset. Nothing has yet run in a headset, on Windows or on a Quest. `docs/handoff.md` says exactly what has and has not been checked.
+---
 
-![The desktop interface with the demo strokes](docs/images/desktop.png)
+Limner is a tool for painting in three dimensions and bringing the paintings to life. You paint with your hands in the air, walk around what you made, and animate it frame by frame or with keys, the way Quill made possible.
 
-## What it does
+Quill shaped a whole community of VR artists and animators, and it has not changed since version 2.9. Limner keeps its way of working, opens existing Quill projects, and adds what artists have been asking for: **lights that shade the paint**, mirrored painting, text, smooth keys, an open file format, and export to the 3D formats used today.
 
-- **Paint** with nine tools (Paint, Line, Colorize, Eraser, Selection, Grab, Thicken/Thin, Nudge, Optimize) and seven brushes, with pressure, tapers and 14 colour modes.
-- **Animate** frame by frame, with keys, by recording a hand's motion, or by painting while the piece plays; with onion skins, clips, looping sequences and a timeline.
-- **Layers** of paint, groups, sequences, pictures and 360 pictures, models, sounds, spawn areas, cameras and lights.
-- **In a headset** the controls follow Quill's: trigger to use the tool, grips to move the world, a palette in the other hand. **On a desktop** the same tools and panels work with a mouse or a pen.
-- **Files.** Its own open format (`.limn` folders, `.limnz` single files), opening Quill projects directly, and export to glTF, USD/USDZ, FBX and OBJ. Stills, 360 stills and camera renders to video.
+> [!NOTE]
+> **Early days.** Everything in the plan is built and tested on macOS, where Limner runs on the desktop and with a simulated headset. It has not yet run on a real headset, on Windows or on a Quest; that is the next step. [What has and has not been verified](docs/handoff.md) is written down.
 
-## Build and run
+## Highlights
 
-You need Rust (stable) and the pinned Godot build, which a script downloads.
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**🖌️ Paint in space**<br>
+Nine tools (Paint, Line, Colorize, Eraser, Selection, Grab, Thicken, Nudge, Optimize), seven brushes, pressure, tapers and fourteen colour modes. Mirror your strokes across any axis, write text in strokes, and see a small grid around the brush when you want one.
+
+</td>
+<td width="50%" valign="top">
+
+**🎞️ Animate**<br>
+Frames and holds with onion skins, clips and looping sequences, keys with six easings, recording a hand's motion, painting while the piece plays, chapter marks, and a timeline built for both the mouse and the controller.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**💡 Light the scene**<br>
+Sun, point and spot lights shade the layers you choose, with shadows and an ambient level. Bake the light into the paint so the look survives without the lights and in every export.
+
+</td>
+<td valign="top">
+
+**🥽 Headset or desktop**<br>
+In a headset the controls follow Quill's: trigger to paint, grips to move the world, a palette of panels in the other hand. On a desktop the same tools and panels work with a mouse or a pen.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**📂 Open files**<br>
+Its own documented format (<code>.limn</code> folders and <code>.limnz</code> files), crash-safe saving and autosave. Quill projects open directly.
+
+</td>
+<td valign="top">
+
+**📤 Share it**<br>
+Export to glTF, USD/USDZ, FBX and OBJ with hierarchy, animation, lights and cameras. Render stills, 360 stills and camera moves to video.
+
+</td>
+</tr>
+</table>
+
+## A look
+
+<p align="center">
+  <img src="docs/images/desktop.png" alt="The desktop interface: tools on the left, layers and properties on the right, the timeline below" width="860">
+</p>
+<p align="center"><sub>The desktop interface. The same panels ride on the hand in a headset.</sub></p>
+
+## Getting started
+
+You need [Rust](https://rustup.rs) (stable) and Git. The scripts download the pinned Godot build. On Windows, Rust also needs the Visual Studio Build Tools with "Desktop development with C++".
 
 ```bash
-scripts/fetch-godot.sh            # once per machine; Windows: scripts\fetch-godot.ps1
-cargo build -p limner-godot       # the extension the Godot project loads
-scripts/godot.sh --path godot     # the app; Windows: scripts\godot.ps1 --path godot
+git clone https://github.com/lvnr/limner.git
+cd limner
+scripts/fetch-godot.sh            # once; on Windows: scripts\fetch-godot.ps1
+cargo build -p limner-godot       # the Rust part the app loads
+scripts/godot.sh --path godot     # run Limner; on Windows: scripts\godot.ps1 --path godot
 ```
 
-With a headset connected through OpenXR the app starts in it; add `-- --desktop` to stay on the desktop, or `-- --xr --sim` to try the headset interface with a simulated headset and hands.
+With a headset connected through OpenXR, Limner starts in it. Add `-- --desktop` to stay on the desktop, or `-- --xr --sim` to try the headset interface with a simulated headset driven by the mouse.
 
-```bash
-scripts/test.sh                   # every test; Windows: scripts\test.ps1
-scripts/package.sh                # a packaged app in local/out/builds/; Windows: scripts\package.ps1
-cargo run -p limner-cli -- inspect <project>
-cargo run -p limner-cli -- export <project> out.glb
-```
+| Do | Run |
+|---|---|
+| All tests | `scripts/test.sh` (Windows: `scripts\test.ps1`) |
+| A packaged app | `scripts/package.sh` (Windows: `scripts\package.ps1`) |
+| Inspect a project | `cargo run -p limner-cli -- inspect <project>` |
+| Export from the command line | `cargo run -p limner-cli -- export <project> scene.glb` |
+
+## Platforms
+
+| System | Desktop | Headset | Where it stands |
+|---|---|---|---|
+| macOS, Apple silicon | ✅ | (no OpenXR runtime on macOS) | Built, tested and packaged |
+| Windows | expected | Rift, Quest over Link, other OpenXR headsets | Rust and interface tests run in CI; the app has not been tried by hand |
+| Linux | expected | SteamVR or Monado | Rust and interface tests run in CI; the app has not been tried by hand |
+| Quest, standalone | | planned | The build steps are written down in [docs/xr.md](docs/xr.md) |
 
 ## How it is built
 
 A Rust core that knows nothing of any engine holds the document, the timeline, the tools and undo. Every edit is a small command, so the desktop interface, the headset interface, the command line and the tests all drive the same thing. A Godot 4.8 project draws the result and provides the interface, the headset layer, sound and capture.
 
+```mermaid
+flowchart LR
+  core["limner-core<br/>document · timeline · tools · undo"]
+  format["limner-format<br/>.limn and .limnz"]
+  quill["limner-quill<br/>Quill importer"]
+  export["limner-export<br/>glTF · USD · FBX · OBJ"]
+  facade["limner"]
+  cli["limner-cli"]
+  bridge["limner-godot<br/>Godot extension"]
+  app["Godot project<br/>panels · desktop and headset · capture"]
+  core --> format & quill & export --> facade
+  facade --> cli
+  facade --> bridge --> app
+```
+
+## Documentation
+
 | Read | For |
 |---|---|
-| `docs/handoff.md` | what is verified, moving to another machine, the first headset session |
-| `docs/superpowers/specs/2026-10-14-limner-design.md` | the design and its reasons |
-| `docs/quill-differences.md` | where it differs from Quill |
-| `docs/format.md`, `docs/export.md`, `docs/capture.md`, `docs/quill-import.md`, `docs/xr.md` | each area in detail |
-| `docs/interface-api.md` | writing interface code; every command |
-| `docs/roadmap.md` | what could come next |
+| [docs/handoff.md](docs/handoff.md) | What is built, what has been verified, setting up on another machine, the first session in a headset |
+| [docs/quill-differences.md](docs/quill-differences.md) | Where Limner differs from Quill, and why |
+| [docs/format.md](docs/format.md) | The file format, written so that others can read and write it |
+| [docs/export.md](docs/export.md) | What each export format holds and how to bring it into other programs |
+| [docs/capture.md](docs/capture.md) | Stills, 360 stills and camera renders |
+| [docs/quill-import.md](docs/quill-import.md) | Opening Quill projects |
+| [docs/xr.md](docs/xr.md) | The headset layer, and how to build for a Quest |
+| [docs/interface-api.md](docs/interface-api.md) | Writing interface code: every command and query |
+| [docs/roadmap.md](docs/roadmap.md) | What could come next |
+
+## Contributing
+
+Issues and pull requests are welcome, from bug reports to features. Behaviour belongs in the Rust core with a test, and the Godot side only presents it; [CLAUDE.md](CLAUDE.md) holds the project's conventions and commands (it is written for AI coding sessions, but it is a good read for people too). Run `scripts/test.sh` before sending a change.
+
+The most useful help right now is trying Limner on a headset or on Windows and saying what happens.
 
 ## Relationship to Quill
 
-Limner is an independent project, not affiliated with or endorsed by Smoothstep or Meta. It reads Quill project folders so that existing work stays usable, and writes its own open format. It contains no code or assets from Quill.
+Limner is an independent project. It is not affiliated with or endorsed by Smoothstep, Meta or the authors of Quill, and it contains no code or assets from Quill. It reads Quill project folders so that existing work stays usable, and writes its own open format.
 
 ## Licence
 
-Apache-2.0. See `LICENSE`.
+[MIT](LICENSE).

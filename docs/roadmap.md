@@ -21,18 +21,14 @@ Limner does what the plan set out to do, on the machine it was built on. This pa
 
 Small steps from what exists:
 
-- Mirror the Grab and Selection tools too.
-- Text: several lines, a font chooser, a single-line stroke font for small labels.
-- Saved views ("home" positions) beside the spawn areas.
-- A light colour scheme beside the dark one. The colours are constants in `godot/ui/kit.gd` and in the widgets that draw themselves; they would have to become something a preference can swap.
-- A count of sounds playing, and peaks, in the Performance panel.
-- Shadows in baked lighting; baking per ring vertex instead of per point.
-- Sounds in glTF and USD exports.
+- Text: a single-line stroke font for small labels.
+- Baking light per ring vertex instead of per point. Baked shadows could also gain soft edges (a few rays toward a light given a size), flat ribbons as blockers, and model layers as blockers.
+- Sounds in glTF exports, once Khronos ratifies an audio extension (`KHR_audio_emitter` is still an open proposal; see "Why glTF has no sound" in `docs/export.md`). USD and USDZ carry sounds already.
 - Curved turning for smooth keys (they curve position and size now; turning takes the shortest way).
 
 ## Larger pieces
 
-- **Speed for very large scenes.** Strokes are already cut into chunks that are culled and cached one by one. Next would be coarser stand-ins for distant chunks, moving a selection on the graphics card instead of re-making its strokes each frame, and tessellating on a worker thread.
+- **Speed for very large scenes.** Strokes are already cut into chunks that are culled and cached one by one. A carried selection is already shown moved without re-making its strokes. Next would be coarser stand-ins for distant chunks, and tessellating on a worker thread, which would also take away the hitch when a large selection is taken hold of and let go.
 - **A Blender add-on** that reads `.limn` directly (the format is documented in `docs/format.md` for exactly this).
 - **Painting together.** Every edit is already a small command that can be sent over a wire; what is missing is a shared session and conflict rules.
 - **Hand tracking** as an alternative to controllers.

@@ -2,7 +2,7 @@
 
 Date: 2026-10-14. Status: approved direction, building. "Limner" is a provisional working title (the owner may rename it); the project file extension is `.limn`.
 
-Limner is an open-source VR painting and animation tool that succeeds Quill 2.9 (unmaintained since 2021). It keeps Quill's way of working, opens existing Quill projects, runs on a desktop screen and in a headset, and adds what Quill never had, starting with scene lights. The feature map it is measured against is `reports/Quill feature map and tech stack.md`; the notes behind that report are in `research_notes/`.
+Limner is an open-source VR painting and animation tool that succeeds Quill 2.9 (unmaintained since 2021). It keeps Quill's way of working, opens existing Quill projects, runs on a desktop screen and in a headset, and adds what Quill never had, starting with scene lights. The feature map it is measured against is a private research report, kept out of the repository.
 
 ## 1. Decisions already made
 
@@ -15,11 +15,11 @@ These were settled with the project owner and are not to be reopened without a n
 | Fidelity | Quill's features and working habits, not its exact pixels | "Where we can, we should create a better product." When Quill's behaviour and a better design differ, take the better design and record the difference in `docs/quill-differences.md`. |
 | File format | Own open format, plus a one-way Quill importer | Quill's format is undocumented and its EULA forbids reverse engineering the binaries. Format knowledge comes from user-owned files and Apache/MIT-licensed code only. |
 | Targets | Desktop (macOS, Windows, Linux), PC VR through OpenXR, standalone Quest; Steam Frame, Pico, Android XR and visionOS later | Standalone creation is the community's first request. |
-| Licence | Apache-2.0 | Patent grant; compatible with the IMM reference code and with Godot (MIT) and godot-rust (MPL-2.0). |
+| Licence | MIT (chosen when the project went public; Apache-2.0 before) | Simple and permissive; compatible with Godot (MIT) and godot-rust (MPL-2.0). |
 
 Constraints that hold throughout:
 
-- `3d models&design/` holds proprietary assets from a Quill install. It is reference material only, is git-ignored, and nothing from it may be copied into the repository or shipped.
+- Material from a Quill install (icons, sounds, models) was looked at for reference only during development. Nothing from it may be copied into or shipped with the project.
 - `~/projects/quill-exporter/` holds the owner's private artwork and Quill's exporter. It is read-only test data. Tests that use it must skip cleanly when it is absent.
 - Quill's own binaries are not run, decompiled or inspected.
 
@@ -69,7 +69,7 @@ crates/
 godot/                     Godot project: scenes, GDScript shell, shaders, UI, tests
 docs/                      design, format spec, differences from Quill, hand-off guide, roadmap
 scripts/                   fetch-godot, build, test, run, export
-research_notes/, reports/  the Quill feature map and its sources
+(research_notes/, reports/  the Quill feature map and its sources: private, git-ignored)
 local/                     git-ignored: private samples, reference sources, scratch output
 tools/                     git-ignored: downloaded toolchains
 ```

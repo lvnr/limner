@@ -1,22 +1,22 @@
 # Where Limner differs from Quill
 
-Limner follows Quill 2.9's features and habits. It does not copy its pixels or its file layout, and where a better design was available it was taken. This page lists every place a Quill user will notice a difference, and why. It also lists the places where Quill's exact behaviour is not known and Limner made a choice that can be tuned once it has been measured on a real install (see the table of unknowns at the end of `reports/Quill feature map and tech stack.md`).
+Limner follows Quill 2.9's features and habits. It does not copy its pixels or its file layout, and where a better design was available it was taken. This page lists every place a Quill user will notice a difference, and why. It also lists the places where Quill's exact behaviour is not known and Limner made a choice that can be tuned once it has been measured on a real install.
 
 ## Additions
 
 | What | Notes |
 |---|---|
 | **Lights** | A light layer (sun, point, spot) shades the paint layers and models whose shading is set to Lit. Everything else is drawn as painted, as in Quill. Lit strokes use a soft wrapped shading with no highlights, so thin strokes do not fall into black. |
-| **Baking light into paint** | "Bake lighting into paint" writes the light a lit layer gets into its strokes' colours, so the look survives without the lights and in every export. One colour per stroke point, so a tube gets the mean of the light around it; shadows are not baked. |
+| **Baking light into paint** | "Bake lighting into paint" writes the light a lit layer gets into its strokes' colours, so the look survives without the lights and in every export. One colour per stroke point, so a tube gets the mean of the light around it. Lights with shadows on throw them in the bake too: a point is lit by such a light only where no visible stroke at that moment stands between them (each frame of an animated layer is shaded by its own strokes). |
 | **Ambient light** | A document setting for how bright lit paint is where no light reaches. |
-| **Mirrored working** | With a mirror on X, Y or Z through the pivot of the layer being painted, Paint and Line lay a twin of every stroke and Colorize, Eraser, Thicken, Nudge and Optimize work on both sides. Quill's way (copy, flip, merge) still works. |
-| **Text** | A line of text written in strokes, from the font's own outlines: outlined or filled. |
+| **Mirrored working** | With a mirror on X, Y or Z through the pivot of the layer being painted, Paint and Line lay a twin of every stroke, and Colorize, Eraser, Thicken, Nudge, Optimize, Grab and Selection work on both sides. With Grab, strokes near the hand's reflection follow the reflection of the hand's motion; each point moves once, with the sphere on its side of the mirror, and a point on the mirror takes the average of the two motions so it stays on the mirror. Quill's way (copy, flip, merge) still works. |
+| **Text** | Text written in strokes, from the font's own outlines: outlined or filled, one or several lines aligned left, centre or right, in the built-in font or any font installed on the computer, with bold and italic. The font chosen is remembered, the last few are at the top of the list, and the list can be searched. |
 | **Performance panel** | The scene held against what a standalone headset, a PC headset or a desktop draws comfortably. |
 | **Autosave and recovery** | Unsaved work is copied aside every few minutes and offered back after a crash. |
 | **A desktop mode** | The whole editor runs with a mouse or a pen: the same tools, panels and commands. A mouse cannot give depth, so the hand works on a plane in front of the camera (Ctrl + wheel moves the plane). |
 | **Smooth keys** | A sixth interpolation mode that curves through neighbouring keys. Quill's five are kept. |
 | **An open file format** | `.limn` folders and packed `.limnz` files, documented in `docs/format.md`. Quill projects open directly; saving always writes the native format. |
-| **More export formats** | glTF, USD/USDZ, FBX and OBJ with hierarchy, animation, lights and cameras (`docs/export.md`). |
+| **More export formats** | glTF, USD/USDZ, FBX and OBJ with hierarchy, animation, lights and cameras, and sound layers in USD/USDZ (`docs/export.md`). |
 | **A command line** | `limner inspect`, `convert`, `export`. |
 | **Escape** | Takes back a gesture that is half done. |
 | **Importing a project into another** | A `.limn` or `.limnz` project, or a Quill project, arrives as one folded group. |
@@ -39,6 +39,7 @@ Limner follows Quill 2.9's features and habits. It does not copy its pixels or i
 | Sound cones | Not documented whether angles are full or half angles. | Half angles from the layer's forward (-Z) axis. | To be checked against Quill by ear. |
 | Tool gestures | | Every trigger press, grab and slider drag is exactly one undo step. | Stated as a rule so that tools added later follow it. |
 | Selecting keys in the timeline | | Keys of several layers can be selected and moved together. Pressing a key of another kind (position, opacity, chapter mark) switches the key type to it. | Fewer trips to the key-type switch. |
+| Interface colours | A light and a dark scheme, chosen as a preference. | The same two (Settings > Colours), dark by default, in Limner's own colours: warm light greys with near-black text, and the blue accent deepened, rather than the dark scheme turned over. A change shows at once on every panel, desktop and headset, without a restart. The floor grid, gimbal, tool cursor and gizmos keep their colours in both. | Quill's pixels are not the goal; each scheme is drawn to read well on its own. The 3D helpers sit in the scene, not on a panel. |
 | Dragging across a clip in the timeline | | Moves the clip. To select the keys under it instead, hold Shift or turn on "select a range". | Clips cover nearly every track, so a plain drag has to mean one thing. |
 
 ## Choices where Quill's behaviour is not known

@@ -433,7 +433,7 @@ The glTF list applies here as well (blending instead of dithering, no directiona
 
 ## Compared with Quill's exporters
 
-Measured on the owner's own exports (see `reports/Quill feature map and tech stack.md`, "What Quill exports, and what the files really contain").
+Measured on exports Quill 2.9 made of the owner's own project.
 
 | | Quill 2.9 | Limner |
 |---|---|---|

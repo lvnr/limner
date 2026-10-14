@@ -20,6 +20,7 @@ The pieces:
 8. The same panels are shown on the desktop and, later, on a hand-held palette in a headset where a controller tip pokes them. So: lay out correctly from 280 px wide; make every control at least `Kit.ROW` (30 px) tall; never rely on hover, right-click or the keyboard as the only way to reach something; no fixed pixel positions.
 9. GDScript is statically typed here and "inferred from Variant" is an error: give variables explicit types when the right-hand side is a Variant (`var row: Dictionary = ...`, `var id: int = item.get_metadata(0)`).
 10. Use `Kit` for every control and `Icons.texture(name, color, pixels)` for icons, so the look stays in one place. Add an icon by adding an SVG body to `Icons.BODIES` (24 x 24 grid, stroke only, `{c}` for the colour). Icons must be original drawings.
+11. Never write a colour of your own: there is a dark and a light scheme, and the user can switch between them while a panel is open. Read colours from `Kit` (`Kit.TEXT`, `Kit.TEXT_DIM`, `Kit.ACCENT`, `Kit.BG_SUNKEN` and the other roles listed at the top of `godot/ui/kit.gd`) at the moment you build or draw, never into a `const`. On a switch, the shell re-applies the theme to its root with `Kit.apply_theme`; that also redraws every control, so a `_draw` that reads `Kit` is right by itself, and it brings in line theme overrides and `Icons` icons set from a role's exact colour (`Kit.TEXT`, not `Kit.TEXT.darkened(0.2)`: a derived colour is not recognised; add a role instead). Anything else a panel built from colours, such as a `Tree` item's custom colour, it sets again in a method `apply_scheme()`, which is called after the switch. Colours that mean something whatever the scheme (a layer kind's clip colour, the white of a key drawn over a clip) may stay fixed.
 
 ## `LimnerEditor`
 
@@ -31,6 +32,7 @@ The pieces:
 | `undo()`, `redo()` | |
 | `status: Dictionary` | Refreshed every frame. See below. |
 | `get_rows() -> Array` | One dictionary per layer in list order. See below. |
+| `catch_up()` | Reads `status`, the rows, info and settings again now. A command's change signals arrive on the next frame; code that runs a command and reads what it did in the same frame (a context menu built right after the click selected a row, several layers moved one after another, several wheel steps in one frame) calls this in between. |
 | `row(id) -> Dictionary` | The row for a layer, or `{}`. |
 | `current_layer() -> int` | The row last selected, or -1. |
 | `get_info() -> Dictionary` | Document settings and counts. |
@@ -60,12 +62,12 @@ With nothing to redo, `redo` repeats the last move of a copy (see `transform_aga
 | Kind | Fields |
 |---|---|
 | `paint` | `shading` (`"unlit"`, `"lit"`), `max_repeat` (0 loops forever, 1 plays once and holds) |
-| `sequence` | `loop_duration` (flicks, 0 = no loop), `max_repeat` |
+| `sequence` | `loop_duration` (flicks, 0 = no loop, at most 10,000 hours), `max_repeat` |
 | `group` | none |
 | `light` | `kind` (`"point"`, `"spot"`, `"directional"`), `color`, `energy`, `range`, `spot_angle` (degrees, half-angle), `spot_blend` (0 to 1), `shadows` |
 | `camera` | `fov` (vertical, degrees) |
 | `viewpoint` | `floor_level`, `color`, `volume` (`[x, y, z, radius]`), `allow_translation` (`[bool; 3]`), `exporting`, `show_volume` |
-| `sound` | `kind` (`"flat"`, `"positional"`, `"ambisonic"`), `gain`, `looped`, `attenuation` (`{mode: "none"|"linear"|"logarithmic", min, max}`), `modifier` (`"none"`, `{cone: {inner, band, outside}}` or `{frustum: {inner_h, inner_v, band, outside}}`, angles in radians) |
+| `sound` | `kind` (`"flat"`, `"positional"`, `"ambisonic"`), `gain`, `looped`, `attenuation` (`{mode: "none"|"linear"|"logarithmic", min, max}`), `modifier` (`"none"`, `{cone: {inner, band, outside}}` or `{frustum: {inner_h, inner_v, band, outside}}`, angles in radians; a shape may name only some of its values: the rest keep what the sound has, or, when it changes shape, its `band` and `outside` and the new shape's starting angles) |
 | `picture` | `projection` (`"flat"`, `"equirect"`, `"equirect_stereo"`, `"cubemap_cross"`, `"cubemap_strip"`), `viewer_locked` |
 | `model` | `shading`, `wireframe` |
 
@@ -142,7 +144,7 @@ A command is a dictionary with a `cmd` entry. Fields marked optional may be left
 |---|---|---|
 | `add_layer` | `kind` (`group`, `sequence`, `paint`, `viewpoint`, `camera`, `light`), optional `parent`, `index`, `name` | `{layer}` |
 | `delete_layers`, `duplicate_layers` | `layers` (ids) | `{layers}` for duplicate |
-| `set_layer` | `layer`, optional `name`, `visible`, `locked`, `collapsed`, `show_bounds`, `opacity`, `transform`, `pivot` | |
+| `set_layer` | `layer`, optional `name`, `visible`, `locked`, `collapsed`, `show_bounds`, `opacity`, `transform`, `pivot` | A `transform` or `pivot` whose rotation has (nearly) zero length, or whose scale is not above zero, is refused; a rotation of any other length is normalised. |
 | `set_layer_kind` | `layer`, `values` (fields of `props` to change) | |
 | `move_layer` | `layer`, `parent`, `index` | |
 | `step_layer` | `layer`, `up` | |
@@ -165,7 +167,7 @@ Opacity and transform edits write a key at the playhead when the layer is alread
 | `set_color` | `color` |
 
 ### Playback (not undoable)
-`play`, `pause`, `toggle_play`, `seek` (`time`), `step_frames` (`frames`), `rewind`, `fast_forward` (to the chapter mark before or after, else the start or end of the range), `go_to_key_frame` (`layer`, `forward`: the paint layer's key frame before or after), `go_to_key` (`layer`, `track`, `forward`).
+`play`, `pause`, `toggle_play`, `seek` (`time`; kept between 0 and 10,000 hours), `step_frames` (`frames`), `rewind`, `fast_forward` (to the chapter mark before or after, else the start or end of the range), `go_to_key_frame` (`layer`, `forward`: the paint layer's key frame before or after), `go_to_key` (`layer`, `track`, `forward`).
 
 ### Frames of a paint layer
 Each acts on the frame the layer shows at the playhead.
@@ -216,8 +218,8 @@ With `recording` on, any transform or opacity change writes a key at the playhea
 | `delete_selection` | |
 | `selection_to_new_layer` | `copy` (bool) |
 | `optimize` | `scope` (`"layer"` or `"all"`) |
-| `add_strokes` | `strokes` (a list of `{points: [[x, y, z], ...], width, brush?, color?, opacity?, normal?}`), optional `layer` (the paint layer when left out), `space` (`"layer"` or `"viewer"`), `select`. Adds ready-made strokes to the frame the layer shows; returns `{strokes, layer}`. `editor.add_text(text, height, solid)` builds on it. |
-| `bake_lighting` | `layer`: paints the light falling on the lit paint layers in and under it into their strokes and makes them unlit. Returns `{layers, points}`. |
+| `add_strokes` | `strokes` (a list of `{points: [[x, y, z], ...], width, brush?, color?, opacity?, normal?}`), optional `layer` (the paint layer when left out), `space` (`"layer"` or `"viewer"`), `select`. Adds ready-made strokes to the frame the layer shows; returns `{strokes, layer}`. `editor.add_text(text, height, solid, font, align)` builds on it: line breaks start new lines, the block is centred in front of the viewer, `align` is a `HorizontalAlignment` (left, centre, right), and `font` comes from `TextStrokes.font_named(family, bold, italic)` (empty family: the built-in font; `null` when the family is not installed; a family without its own bold or italic face is thickened or slanted). |
+| `bake_lighting` | `layer`: paints the light falling on the lit paint layers in and under it into their strokes and makes them unlit, with the shadows of lights whose `shadows` is on. Returns `{layers, points}`. |
 | `transform_again` | After a copy was moved (a grab or a gimbal drag with the modifier held): makes another copy, moved as far again. With the option `animate_duplicates`, stroke copies land on a new frame each. Fails when there is nothing to repeat; see `status.can_transform_again`. |
 
 ## Hands, grabs and the gimbal
@@ -241,6 +243,8 @@ Things that help while working and are not part of the picture (the grid, the gi
 
 A grip takes hold of, in this order: a handle of the gimbal the hand is at; the selected strokes, when the Selection tool is in hand and its sphere reaches them; with `auto_select` on, the layer (or its group) of the stroke at the hand; the layer chosen with `set_transform_target`; otherwise the view. A second grip adds scale, the held hand's stick zooms, and `allow_translate`, `allow_rotate`, `allow_scale` and `level_horizon` limit the motion. Holding the modifier when the grab begins moves a copy.
 
+Selected strokes carried by a grip, or turned by the trigger on a ring of the gimbal, stay where they are in the document until the grip or trigger lets go; the scene shows them, and their highlight, moved, so a frame of the carry costs the same however much is selected. The move is then written into the strokes once, as one undo step. Anything that reads stroke positions (commands, `layer_details`, saving) sees them where they were until then; the gimbal and the selection's pivot follow the hand all along. In the core this is `Session::selection_motion()`, and `SelectionMotion::split` divides a drawing into what stays and what moves.
+
 The gimbal shows when `show_gimbal` is on and either a layer is the transform object or the Selection tool has a selection. A grip on a handle moves or turns the thing; the trigger on an arrow or the middle moves the pivot, and on a ring turns in `rotation_snap_steps` steps. On the desktop the left button over a handle is the grip, and with Alt the trigger.
 
 ## Files and media
@@ -252,6 +256,18 @@ The gimbal shows when `show_gimbal` is on and either a layer is the transform ob
 
 | `scene.export_file(path, options) -> Dictionary` | Writes the document as `.glb`, `.usda`, `.usdz`, `.fbx` or `.obj`, chosen by the path. Returns `{ok, error, nodes, meshes, vertices, triangles, animation_frames, bytes}`. Options are described in `docs/export.md` and `docs/capture.md`; an unknown option is named in the error. |
 | `scene.save_copy(path) -> Dictionary` | Saves the document and the editor's state to another place without making that the document's home or clearing "edited": what a render in a second process is started from. |
+
+Without system file dialogs (in a headset, and from the Document panel anywhere) documents live in one folder, `Documents.folder()` (`godot/editor/documents.gd`): `Limner` in the user's Documents folder, or `user://documents` on Android. It is made when something is first saved there.
+
+| Call | What it does |
+|---|---|
+| `Documents.path_for(title) -> String` | The `.limnz` file a document named `title` is saved as there, with what a file name cannot hold left out; empty when nothing is left. |
+| `Documents.projects() -> Array[Dictionary]` | The projects there, newest first: `{path, name, time, kind}`, `kind` one of `limnz`, `limn` (a folder) and `quill` (a Quill project folder). `time` is seconds since 1970; `Documents.local_time(time)` writes it as the user's clock does. |
+| `Documents.importable() -> Array[Dictionary]` | Pictures, sounds and models there, and the projects, newest first, with `kind` `picture`, `sound` or `model` for the files. |
+| `Documents.thumbnail(editor) -> PackedByteArray` | A 512 x 288 PNG of the artwork from the current view, taken off screen (no panels in it), or nothing without a display. |
+| `Documents.use_folder(path)` | For tests: another folder; `""` goes back. |
+
+The Document panel's File section is built on these: **Save** (to the document's file, or a name first when it has none of its own), **Save as** (a name box; a name already taken is replaced only on a second press), **New**, **Open** (the projects, newest first, with their dates) and **Import** (anything importable there, as a new layer). Before New or Open replaces a document with unsaved changes the panel asks, in itself: Save (which asks for a name first when there is no file, then goes on), Don't save, Cancel. It emits `document_opened(native)` after opening, so that a shell can frame a Quill project. Both shells mount it; the desktop keeps its File menu and system dialogs besides.
 
 Pictures and video are taken through `LimnerCapture.of(editor)` and `RenderLauncher`; see `docs/capture.md`.
 
@@ -267,14 +283,17 @@ How it behaves, where that is not obvious:
 - A drag on a clip or on keys is replayed from where it began on every pointer move, inside one edit, and committed on release: one undo step, and none when the drag ends where it started. A clip cannot be dragged over its neighbours.
 - Pressing a clip or a key makes its layer current. Pressing a key of another kind switches the key type; the root switches it to chapter marks. Keys of several layers can be selected together; the clip selection is dropped when another layer becomes current.
 - A drag that starts on empty track space selects the keys it passes over. Clips cover most tracks, so Shift, or the "select a range" switch in the Keys group, makes a drag that starts on a clip do the same.
+- While any drag (a clip, keys, an end of the range, scrubbing, a rectangle of keys) holds the pointer within 28 px of the left or right edge of the tracks, or past it, the view scrolls by itself, at 450 px a second on the edge and faster the further in or past (up to 5,000). What is dragged stays at the time under the pointer, because drags are worked out in time from the press, not in pixels. A rectangle of keys scrolls the rows too, near the top or bottom. Turning the wheel or using the trackpad during a drag does the same. `TimelineView.auto_scroll(delta)` is the step, called every frame; `edge_speed` is the rule.
+- Escape during a drag on the tracks or the ruler puts back what the drag did and ends it (`TimelineView.cancel_drag()`): the document (the edit is cancelled, so nothing is left to undo), the keys a rectangle selected, the playhead a scrub moved. What the press selected stays selected. The view takes the key in `_input`, so the desktop shell's own Escape (cancel a stroke, deselect) does not also fire; with no drag under way the key goes on to the shell as before.
+- Trackpad: pinching zooms about the fingers (over the names, about the middle of the tracks). Two fingers move along time and through the rows at once, as a scroll view does, about one pixel of view per point of finger travel on macOS; with Shift they only scroll the rows, with Ctrl or Cmd up and down zooms. Gestures over the scroll bars go to the tracks. This follows Godot's events on macOS: `InputEventMagnifyGesture.factor` is 1 plus the system's magnification for each event, and `InputEventPanGesture.delta` is the system's scroll delta times 0.03 with its sign turned, so positive is later and lower whichever way "natural scrolling" is set. A mouse wheel, and a Windows trackpad (which Godot reports as a wheel with a fractional `factor`), pan along time, with Shift scroll the rows and with Ctrl or Cmd zoom.
 - The context row shows the Frames group for a paint layer, Sequence for a sequence and Chapters for the root. What does not apply is greyed out, not hidden, so buttons stay where they are.
 - Besides the thin grip along its top edge the panel has a resize button, which a controller tip can hit.
 - The arrow at the end of the first row puts the tracks away and sets the `painting_mode` option, as collapsing the timeline does in Quill: the other hand's stick no longer makes, holds, deletes or steps frames, and its click no longer plays. The panel follows the option, so both shells agree.
 
 Left rough:
 
-- The view does not scroll by itself when a drag nears its edge, and Escape does not cancel a drag on the tracks.
-- Pinch and two-finger panning are written but have never been driven by a real trackpad.
+- Pinch and two-finger panning are tested with synthetic events written to match what Godot sends on macOS, but have never been driven by a real trackpad. The speed of a two-finger pan (`PAN_PIXELS`, scaled by the screen's scale) is the number to adjust by feel; on Linux under Wayland the units of a pan are not known here.
+- The auto-scroll speeds are guesses, not tuned by hand.
 - The two button rows wrap, so a narrow panel is taller: about 290 px at 900 wide against 230 at 1440.
 - In the development build, scrubbing a document with some 300 layers and 9,000 keys took 32 ms a frame before the clock query existed. It has not been measured again since.
 
