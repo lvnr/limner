@@ -71,7 +71,8 @@ pub fn scene_to_obj(scene: &ExportScene) -> (String, ExportReport) {
         let NodeContent::Paint(paint) = &node.content else {
             continue;
         };
-        if !scene.is_visible(index, 0) {
+        // Limner does not draw a layer at opacity zero, and OBJ cannot make it see-through.
+        if !scene.is_visible(index, 0) || *node.opacity.first() <= 0.0 {
             continue;
         }
         let meshes: Vec<usize> = paint
@@ -125,6 +126,10 @@ pub fn scene_to_obj(scene: &ExportScene) -> (String, ExportReport) {
         }
     }
     report.bytes = out.len() as u64;
+    report.warnings.extend(crate::common::sounds_left_out(
+        scene,
+        "an .obj file holds only meshes",
+    ));
     (out, report)
 }
 

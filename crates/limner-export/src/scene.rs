@@ -18,12 +18,13 @@ use limner_core::eval::{evaluate, Clock, Content};
 use limner_core::glam::{DAffine3, Vec3};
 use limner_core::math::Xform;
 use limner_core::model::{
-    Document, Drawing, DrawingId, Layer, LayerId, LayerKind, LightKind, MediaId, Shading, Stroke,
-    OPAQUE_THRESHOLD,
+    Attenuation, Document, Drawing, DrawingId, Layer, LayerId, LayerKind, LightKind, MediaId,
+    Shading, SoundKind, SoundModifier, Stroke, OPAQUE_THRESHOLD,
 };
 use limner_core::tess::{point_frame, ring_profile};
 use limner_core::time::{self, Flicks, FrameRate};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// What to export and how to sample it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -79,15 +80,32 @@ impl ExportOptions {
         )
     }
 
+    /// How many instants the range holds at the rate, counted without listing them.
+    /// The exporters refuse more than [`MAX_FRAMES`].
+    pub fn frame_count(&self) -> u64 {
+        if !self.animation || self.end <= self.start || !self.rate.is_valid() {
+            return 1;
+        }
+        let span = self.end.saturating_sub(self.start);
+        (self.rate.frame_at(span).max(0) as u64).saturating_add(1)
+    }
+
     /// The instants [`build_scene`] samples. Never empty; a single instant means a still.
+    /// Never more than [`MAX_FRAMES`]: a range that holds more is cut short here, and
+    /// refused by the `export_*` functions.
     pub fn sample_times(&self) -> Vec<Flicks> {
         if !self.animation || self.end <= self.start || !self.rate.is_valid() {
             return vec![self.start];
         }
-        let mut times = Vec::new();
-        for frame in 0.. {
-            let t = self.start.saturating_add(self.rate.frame_start(frame));
-            if t > self.end {
+        let count = self.frame_count().min(MAX_FRAMES as u64);
+        let mut times: Vec<Flicks> = Vec::with_capacity(count as usize);
+        for frame in 0..count {
+            let t = self
+                .start
+                .saturating_add(self.rate.frame_start(frame as i64));
+            // A range that ends at the very last representable instant stops growing
+            // when the addition saturates.
+            if t > self.end || times.last().is_some_and(|last| t <= *last) {
                 break;
             }
             times.push(t);
@@ -95,6 +113,12 @@ impl ExportOptions {
         times
     }
 }
+
+/// The most frames an export samples. Every frame evaluates the whole document, so a
+/// slip in the rate or the range (24,000 frames per second, a range of hours) would
+/// otherwise keep the machine busy for minutes; 100,000 frames is over 23 minutes at
+/// 72 frames per second.
+pub const MAX_FRAMES: usize = 100_000;
 
 impl Default for ExportOptions {
     fn default() -> Self {
@@ -297,14 +321,62 @@ pub struct ExportMedia {
     pub source_path: String,
 }
 
+/// A sound layer's audio as a file: the encoding it was imported in, or WAV for
+/// audio the document holds as samples.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExportAudio {
+    /// The encoding as a lower-case file extension: `wav`, `mp3` or `ogg`.
+    pub format: String,
+    /// The whole file.
+    pub bytes: Arc<[u8]>,
+    /// Length in seconds, when it can be read without decoding (WAV files).
+    pub duration: Option<f64>,
+}
+
+/// A stretch of the range over which a sound plays on without a jump: from the
+/// frame its clip starts (or the range starts) to the frame before it stops, loops
+/// back with its sequence, or runs out of audio.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ExportPlay {
+    /// First sampled frame on which the sound is heard.
+    pub first: usize,
+    /// Last sampled frame on which it is heard.
+    pub last: usize,
+    /// Seconds into the audio on `first`. For a looping sound of known length this is
+    /// already reduced to a place inside the audio.
+    pub offset: f64,
+}
+
+/// A sound layer: its audio, how it is played, and when it is heard in the range.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExportSound {
+    /// The media item, by reference, as for pictures and models.
+    pub media: ExportMedia,
+    /// The audio itself; `None` when the layer has no media or holds nothing a file
+    /// can carry.
+    pub audio: Option<ExportAudio>,
+    pub kind: SoundKind,
+    /// Limner's linear volume multiplier. The layer's opacity multiplies it as well,
+    /// as it does when Limner plays the sound.
+    pub gain: f32,
+    pub looped: bool,
+    /// Fade with distance; radii in layer units.
+    pub attenuation: Attenuation,
+    /// Directional shaping; angles in radians.
+    pub modifier: SoundModifier,
+    /// When the sound is heard, in order. Empty when it is never heard in the range.
+    pub plays: Vec<ExportPlay>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum NodeContent {
-    /// Groups, sequences, sounds and spawn areas carry nothing a mesh format can hold.
+    /// Groups, sequences and spawn areas carry nothing a file format can hold.
     None,
     Paint(ExportPaint),
     Light(ExportLight),
     Camera(ExportCamera),
     Media(ExportMedia),
+    Sound(ExportSound),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -515,6 +587,8 @@ struct LayerSamples {
     opacity: Vec<f32>,
     /// The drawing a paint layer shows, per frame.
     drawing: Vec<Option<DrawingId>>,
+    /// Time since the layer's clip began, including its trim, per frame.
+    local_time: Vec<Flicks>,
 }
 
 fn collect_layers(
@@ -545,6 +619,7 @@ fn collect_layers(
         visible: Vec::new(),
         opacity: Vec::new(),
         drawing: Vec::new(),
+        local_time: Vec::new(),
     });
     for child in layer.children() {
         collect_layers(doc, *child, Some(index), options, out);
@@ -583,8 +658,12 @@ fn shown_schedule(visible: &[bool], selected: &[bool]) -> Vec<bool> {
 ///   apply.
 /// * **What becomes a node.** With the hierarchy kept, every remaining layer does,
 ///   except paint layers that show no triangle anywhere in the range. Lights and
-///   cameras are left out when their option is off. With `bake_transforms`, groups,
-///   sounds and spawn areas are dropped as well and every node is a root.
+///   cameras are left out when their option is off. With `bake_transforms`, groups
+///   and spawn areas are dropped as well and every node is a root; sounds stay, on
+///   their world transform, since where a sound is matters to formats that play it.
+/// * **Sounds.** A sound node carries its audio file and the stretches of the range
+///   in which it is heard ([`ExportPlay`]), worked out from clips, trims, sequence
+///   loops and, for WAV audio, the audio's length.
 /// * **Drawings.** A paint node lists the drawings that are really on screen on at
 ///   least one sampled frame, each tessellated once. Two layers showing the same
 ///   drawing share its meshes unless the meshes were baked.
@@ -625,6 +704,7 @@ pub fn build_scene(doc: &Document, options: &ExportOptions) -> ExportScene {
                         Content::Paint { drawing, .. } => Some(drawing),
                         Content::None => None,
                     });
+                    samples.local_time.push(state.local_time);
                 }
                 None => {
                     samples.local.push(Xform::IDENTITY);
@@ -633,6 +713,7 @@ pub fn build_scene(doc: &Document, options: &ExportOptions) -> ExportScene {
                     samples.visible.push(false);
                     samples.opacity.push(1.0);
                     samples.drawing.push(None);
+                    samples.local_time.push(0);
                 }
             }
         }
@@ -652,6 +733,17 @@ pub fn build_scene(doc: &Document, options: &ExportOptions) -> ExportScene {
     let mut shared_meshes: HashMap<DrawingId, Vec<usize>> = HashMap::new();
     // Node index of each sampled layer, when it became a node.
     let mut node_of: Vec<Option<usize>> = vec![None; layers.len()];
+    // Whether a light or camera that is exported lies somewhere below each layer.
+    // Children come after their parents, so walking backwards sees them first.
+    let mut holds_lens_or_lamp = vec![false; layers.len()];
+    for index in (0..layers.len()).rev() {
+        let is_one = doc
+            .layer(layers[index].id)
+            .is_some_and(|l| matches!(l.kind, LayerKind::Light(_) | LayerKind::Camera(_)));
+        if let (true, Some(parent)) = (holds_lens_or_lamp[index] || is_one, layers[index].parent) {
+            holds_lens_or_lamp[parent] = true;
+        }
+    }
 
     for (index, samples) in layers.iter().enumerate() {
         let Some(layer) = doc.layer(samples.id) else {
@@ -659,6 +751,11 @@ pub fn build_scene(doc: &Document, options: &ExportOptions) -> ExportScene {
         };
         let kind = NodeKind::of(layer);
         let world_is_static = samples.world.iter().all(|w| *w == samples.world[0]);
+        // Limner does not draw a layer at opacity zero, so on such a frame it is not on
+        // screen, whatever its clips say.
+        let seen: Vec<bool> = (0..frames)
+            .map(|k| samples.visible[k] && samples.opacity[k] > 0.0)
+            .collect();
         let bake_vertices = options.bake_transforms && world_is_static;
 
         let content = match &layer.kind {
@@ -670,7 +767,7 @@ pub fn build_scene(doc: &Document, options: &ExportOptions) -> ExportScene {
                     }
                     let selected: Vec<bool> =
                         samples.drawing.iter().map(|d| *d == Some(*id)).collect();
-                    let on_screen = (0..frames).any(|k| samples.visible[k] && selected[k]);
+                    let on_screen = (0..frames).any(|k| seen[k] && selected[k]);
                     if !on_screen {
                         continue;
                     }
@@ -704,7 +801,7 @@ pub fn build_scene(doc: &Document, options: &ExportOptions) -> ExportScene {
                     drawings.push(ExportDrawing {
                         drawing: *id,
                         ordinal: ordinal as u32,
-                        shown: Sampled::from_samples(shown_schedule(&samples.visible, &selected)),
+                        shown: Sampled::from_samples(shown_schedule(&seen, &selected)),
                         meshes,
                     });
                 }
@@ -743,10 +840,44 @@ pub fn build_scene(doc: &Document, options: &ExportOptions) -> ExportScene {
                 name: media_name(doc, model.media),
                 source_path: model.source_path.clone(),
             }),
-            LayerKind::Group(_) | LayerKind::Sound(_) | LayerKind::Viewpoint(_) => {
-                NodeContent::None
+            LayerKind::Sound(sound) => {
+                let audio = sound
+                    .media
+                    .and_then(|id| doc.media(id))
+                    .and_then(|media| crate::audio::export_audio(media));
+                let plays = sound_plays(
+                    &scene.times,
+                    &samples.visible,
+                    &samples.local_time,
+                    sound.looped,
+                    audio.as_ref().and_then(|a| a.duration),
+                );
+                NodeContent::Sound(ExportSound {
+                    media: ExportMedia {
+                        media: sound.media,
+                        name: media_name(doc, sound.media),
+                        source_path: sound.source_path.clone(),
+                    },
+                    audio,
+                    kind: sound.kind,
+                    gain: sound.gain,
+                    looped: sound.looped,
+                    attenuation: sound.attenuation,
+                    modifier: sound.modifier,
+                    plays,
+                })
             }
+            LayerKind::Group(_) | LayerKind::Viewpoint(_) => NodeContent::None,
         };
+        // A layer at opacity zero throughout shows nothing and, for a sound, is silent;
+        // nor does anything under it, since opacity multiplies down the tree. Paint
+        // layers were already dropped for having nothing on screen. Lights and cameras
+        // ignore opacity, so they stay, and so do the groups they need.
+        let transparent = samples.opacity.iter().all(|o| *o <= 0.0);
+        let ignores_opacity = matches!(content, NodeContent::Light(_) | NodeContent::Camera(_));
+        if transparent && !ignores_opacity && !holds_lens_or_lamp[index] {
+            continue;
+        }
         if options.bake_transforms && content == NodeContent::None {
             continue;
         }
@@ -787,6 +918,54 @@ pub fn build_scene(doc: &Document, options: &ExportOptions) -> ExportScene {
     scene
 }
 
+/// When a sound is heard, from its layer's samples. A frame counts when the layer and
+/// its ancestors are inside their clips and the sound has started (its time since
+/// the clip began is not negative) and, unless it loops, has not run out. Two heard
+/// frames in a row belong to the same play when the sound's own time advanced by
+/// exactly the time between them; a sequence looping back starts a new play. This
+/// is the rule Limner's player follows.
+fn sound_plays(
+    times: &[Flicks],
+    visible: &[bool],
+    local: &[Flicks],
+    looped: bool,
+    duration: Option<f64>,
+) -> Vec<ExportPlay> {
+    let heard = |k: usize| {
+        let seconds = time::to_seconds(local[k]);
+        visible[k]
+            && local[k] >= 0
+            && match duration {
+                Some(length) if length <= 0.0 => false,
+                Some(length) if !looped => seconds < length,
+                _ => true,
+            }
+    };
+    let mut plays: Vec<ExportPlay> = Vec::new();
+    for k in 0..times.len() {
+        if !heard(k) {
+            continue;
+        }
+        let continues = k > 0
+            && plays.last().is_some_and(|p| p.last == k - 1)
+            && local[k] - local[k - 1] == times[k] - times[k - 1];
+        if continues {
+            plays.last_mut().expect("checked above").last = k;
+            continue;
+        }
+        let mut offset = time::to_seconds(local[k]);
+        if let (true, Some(length)) = (looped, duration) {
+            offset = offset.rem_euclid(length);
+        }
+        plays.push(ExportPlay {
+            first: k,
+            last: k,
+            offset,
+        });
+    }
+    plays
+}
+
 fn media_name(doc: &Document, media: Option<MediaId>) -> String {
     media
         .and_then(|id| doc.media(id))
@@ -822,6 +1001,27 @@ mod tests {
     }
 
     #[test]
+    fn sampling_ends_at_the_end_of_time_and_at_the_frame_limit() {
+        let rate = FrameRate::whole(24);
+        let d = rate.frame_duration();
+        let last = ExportOptions::animated(Flicks::MAX - 2 * d, Flicks::MAX, rate);
+        assert_eq!(last.frame_count(), 3);
+        assert_eq!(
+            last.sample_times(),
+            vec![Flicks::MAX - 2 * d, Flicks::MAX - d, Flicks::MAX]
+        );
+        let endless = ExportOptions::animated(0, Flicks::MAX, rate);
+        assert!(endless.frame_count() > MAX_FRAMES as u64);
+        let times = endless.sample_times();
+        assert_eq!(times.len(), MAX_FRAMES, "cut short at the limit");
+        assert_eq!(
+            *times.last().unwrap(),
+            rate.frame_start(MAX_FRAMES as i64 - 1)
+        );
+        assert_eq!(ExportOptions::still(Flicks::MAX).frame_count(), 1);
+    }
+
+    #[test]
     fn sampled_values_collapse_when_constant() {
         assert_eq!(Sampled::from_samples(vec![3, 3, 3]), Sampled::Constant(3));
         let varying = Sampled::from_samples(vec![1, 2, 2]);
@@ -843,5 +1043,63 @@ mod tests {
         assert_eq!(shown_schedule(&all, &alternating), alternating.to_vec());
         // Never visible: never shown.
         assert_eq!(shown_schedule(&[false; 3], &[true; 3]), vec![false; 3]);
+    }
+
+    #[test]
+    fn a_sound_plays_while_its_clip_lasts_and_its_audio_runs() {
+        let d = FrameRate::whole(24).frame_duration();
+        let times: Vec<Flicks> = (0..8).map(|k| k * d).collect();
+        // In a clip from frame 2 to frame 5; the layer's time starts there.
+        let visible = [false, false, true, true, true, true, false, false];
+        let local: Vec<Flicks> = (0..8)
+            .map(|k| if (2..6).contains(&k) { (k - 2) * d } else { 0 })
+            .collect();
+        let play = |first, last, offset| ExportPlay {
+            first,
+            last,
+            offset,
+        };
+        assert_eq!(
+            sound_plays(&times, &visible, &local, false, None),
+            vec![play(2, 5, 0.0)]
+        );
+        // Audio two frames long stops after two frames unless it loops.
+        let two = time::to_seconds(2 * d);
+        assert_eq!(
+            sound_plays(&times, &visible, &local, false, Some(two)),
+            vec![play(2, 3, 0.0)]
+        );
+        assert_eq!(
+            sound_plays(&times, &visible, &local, true, Some(two)),
+            vec![play(2, 5, 0.0)]
+        );
+        // Audio of no length is never heard.
+        assert!(sound_plays(&times, &visible, &local, true, Some(0.0)).is_empty());
+    }
+
+    #[test]
+    fn a_jump_in_the_sound_s_own_time_starts_a_new_play() {
+        let d = FrameRate::whole(24).frame_duration();
+        let times: Vec<Flicks> = (0..6).map(|k| k * d).collect();
+        // A sequence looping every three frames, entered a frame and a half late.
+        let local: Vec<Flicks> = (0..6).map(|k| (k % 3) * d + d / 2).collect();
+        let plays = sound_plays(&times, &[true; 6], &local, false, None);
+        assert_eq!(plays.len(), 2);
+        assert_eq!((plays[0].first, plays[0].last), (0, 2));
+        assert_eq!((plays[1].first, plays[1].last), (3, 5));
+        assert_eq!(plays[1].offset, time::to_seconds(d / 2));
+        // Not started yet: frames with a negative time are silent.
+        let early: Vec<Flicks> = (0..6).map(|k| (k - 2) * d).collect();
+        let plays = sound_plays(&times, &[true; 6], &early, false, None);
+        assert_eq!(
+            (plays[0].first, plays[0].last, plays[0].offset),
+            (2, 5, 0.0)
+        );
+        // A looping sound entered part way through starts inside its audio.
+        let late: Vec<Flicks> = (0..6).map(|k| (k + 7) * d).collect();
+        let three = time::to_seconds(3 * d);
+        let plays = sound_plays(&times, &[true; 6], &late, true, Some(three));
+        assert_eq!(plays.len(), 1);
+        assert!((plays[0].offset - time::to_seconds(d)).abs() < 1e-12);
     }
 }

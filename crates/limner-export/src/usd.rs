@@ -12,7 +12,10 @@
 //!   frame-by-frame drawings as `visibility`, which USD has natively, so nothing is
 //!   scaled to zero here;
 //! * lights as UsdLux prims, cameras as `Camera` prims, and one small
-//!   `UsdPreviewSurface` material per look that reads `displayColor`.
+//!   `UsdPreviewSurface` material per look that reads `displayColor`;
+//! * sounds as UsdMedia `SpatialAudio` prims under their layer's prim, one per
+//!   stretch of the range in which the sound plays, referring to the audio file
+//!   (written beside a `.usda`, packed inside a `.usdz`).
 //!
 //! **Winding.** The scene's triangles are counter-clockwise seen from outside, in a
 //! right-handed space, so every mesh says `orientation = "rightHanded"`: that is USD's
@@ -27,13 +30,16 @@ use crate::common::{
 };
 use crate::gltf::{kept_frames, CAMERA_ZFAR, CAMERA_ZNEAR};
 use crate::scene::{
-    ExportCamera, ExportLight, ExportMedia, ExportNode, ExportPaint, ExportScene, NodeContent,
-    Sampled,
+    ExportAudio, ExportCamera, ExportLight, ExportMedia, ExportNode, ExportPaint, ExportScene,
+    ExportSound, NodeContent, Sampled,
 };
 use crate::{ExportError, ExportReport};
-use limner_core::model::{LightKind, Shading, OPAQUE_THRESHOLD};
-use std::collections::{BTreeSet, HashSet};
+use limner_core::model::{
+    AttenuationMode, LightKind, Shading, SoundKind, SoundModifier, OPAQUE_THRESHOLD,
+};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
+use std::sync::Arc;
 
 /// Height of the camera's film back, in USD's camera units (tenths of a scene unit).
 /// Only its ratio to the focal length matters; 24 is the height of a full-frame sensor
@@ -47,6 +53,30 @@ pub const LIGHT_RADIUS: f32 = 0.01;
 
 /// File data in a USDZ package starts on a multiple of this many bytes.
 pub const USDZ_ALIGNMENT: usize = 64;
+
+/// The audio encodings the USDZ specification allows inside a package, as file
+/// extensions. Limner's sounds arrive as WAV, MP3 or Ogg Vorbis; Ogg is not allowed.
+pub const USDZ_AUDIO_FORMATS: [&str; 3] = ["m4a", "mp3", "wav"];
+
+/// Where a layer's audio files go, relative to the layer.
+const AUDIO_FOLDER: &str = "audio";
+
+/// A file a USD layer refers to: written beside a `.usda`, packed inside a `.usdz`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UsdAsset {
+    /// The path relative to the layer, with forward slashes, as the layer names it.
+    pub path: String,
+    pub bytes: Arc<[u8]>,
+}
+
+/// A USD text layer and the files it refers to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UsdaOutput {
+    pub text: String,
+    /// The audio of sound layers, each file once however many layers play it.
+    pub assets: Vec<UsdAsset>,
+    pub report: ExportReport,
+}
 
 /// Choices that only concern USD.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,10 +192,60 @@ impl Look {
 struct Writer<'a> {
     scene: &'a ExportScene,
     options: &'a UsdOptions,
+    /// Writing the layer of a `.usdz`, which may hold only some audio encodings.
+    package: bool,
     out: String,
     root: String,
     looks: BTreeSet<Look>,
     report: ExportReport,
+    assets: Vec<UsdAsset>,
+    /// The asset path of each media item already written, by media id.
+    asset_paths: HashMap<u64, String>,
+    asset_names: HashSet<String>,
+}
+
+/// The name of a sound's file in the audio folder: the media item's file name made
+/// safe for every file system and asset resolver (ASCII letters, digits, `-` and
+/// `_`), with the extension of the encoding. Unique among the files written.
+fn audio_file_name(name: &str, id: u64, format: &str, taken: &mut HashSet<String>) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let stem = match base.rfind('.') {
+        Some(dot) if dot > 0 => &base[..dot],
+        _ => base,
+    };
+    let mut stem: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if stem.chars().all(|c| c == '_') {
+        stem = "sound".to_owned();
+    }
+    let mut file = format!("{stem}.{format}");
+    if taken.contains(&file) {
+        file = format!("{stem}_{id}.{format}");
+    }
+    let mut counter = 2;
+    while taken.contains(&file) {
+        file = format!("{stem}_{id}_{counter}.{format}");
+        counter += 1;
+    }
+    taken.insert(file.clone());
+    file
+}
+
+/// UsdMedia's name for how a sound is heard: at its place, or around the listener.
+fn aural_mode(kind: SoundKind) -> &'static str {
+    match kind {
+        SoundKind::Positional => "spatial",
+        // An ambisonic recording surrounds the listener; it has no single place.
+        SoundKind::Flat | SoundKind::Ambisonic => "nonSpatial",
+    }
 }
 
 impl<'a> Writer<'a> {
@@ -433,7 +513,7 @@ impl<'a> Writer<'a> {
     }
 
     fn paint(&mut self, depth: usize, node: &ExportNode, prim_name: &str, paint: &ExportPaint) {
-        let opacity = f(*node.opacity.first()).clamp(0.0, 1.0);
+        let opacity = f(crate::common::peak_opacity(node)).clamp(0.0, 1.0);
         // The usual case, a layer showing one drawing throughout, needs no extra prim.
         if let [only] = paint.drawings.as_slice() {
             if only.shown == Sampled::Constant(true) {
@@ -500,6 +580,96 @@ impl<'a> Writer<'a> {
         );
     }
 
+    /// The path the layer gives a sound's audio, writing the file the first time.
+    fn audio_asset(&mut self, sound: &ExportSound, audio: &ExportAudio) -> String {
+        let id = sound.media.media.map_or(0, |m| m.0);
+        if let Some(path) = self.asset_paths.get(&id) {
+            return path.clone();
+        }
+        let file = audio_file_name(&sound.media.name, id, &audio.format, &mut self.asset_names);
+        let path = format!("{AUDIO_FOLDER}/{file}");
+        self.assets.push(UsdAsset {
+            path: path.clone(),
+            bytes: audio.bytes.clone(),
+        });
+        self.asset_paths.insert(id, path.clone());
+        path
+    }
+
+    /// One `SpatialAudio` prim per stretch of the range in which the sound plays.
+    ///
+    /// A play that lasts to the end of the range is open-ended (`onceFromStart` or
+    /// `loopFromStart`): the sound goes on as it would in Limner. One that stops
+    /// before (its clip ends, its sequence loops back, its audio runs out) has an
+    /// `endTime` on the first frame it is no longer heard (`onceFromStartToEnd` or
+    /// `loopFromStartToEnd`). `gain` is Limner's gain times the layer's effective
+    /// opacity, with time samples when the opacity changes, as Limner's player does.
+    fn sound(&mut self, depth: usize, node: &ExportNode, sound: &ExportSound) {
+        if sound.plays.is_empty() {
+            return;
+        }
+        let Some(audio) = &sound.audio else {
+            if sound.media.media.is_some() {
+                self.report.warnings.push(format!(
+                    "the sound layer \"{}\" was left out: its audio cannot be written as a file",
+                    printable(&node.name)
+                ));
+            }
+            return;
+        };
+        if self.package && !USDZ_AUDIO_FORMATS.contains(&audio.format.as_str()) {
+            self.report.warnings.push(format!(
+                "the sound layer \"{}\" was left out: a .usdz package may hold only M4A, MP3 \
+                 and WAV audio, and this sound is {}; export a .usda to keep it, or convert it",
+                printable(&node.name),
+                audio.format.to_ascii_uppercase()
+            ));
+            return;
+        }
+        let path = self.audio_asset(sound, audio);
+        let frames = self.scene.frame_count();
+        // In single precision, which is what Limner holds, so 0.8 is written as 0.8.
+        let gains: Vec<f32> = (0..frames)
+            .map(|k| f(sound.gain * *node.opacity.at(k)).max(0.0))
+            .collect();
+        for (i, play) in sound.plays.iter().enumerate() {
+            // A sound layer has no children, so these names are free.
+            let name = if sound.plays.len() == 1 {
+                "Audio".to_owned()
+            } else {
+                format!("Audio_{i:03}")
+            };
+            self.open(depth, "SpatialAudio", &name, &[]);
+            let d = depth + 1;
+            let open_ended = play.last + 1 >= frames;
+            self.line(
+                d,
+                &format!("uniform token auralMode = \"{}\"", aural_mode(sound.kind)),
+            );
+            if !open_ended {
+                self.line(d, &format!("uniform timecode endTime = {}", play.last + 1));
+            }
+            self.line(d, &format!("uniform asset filePath = @{path}@"));
+            self.sampled(d, "double gain", &gains, false, |g| g.to_string());
+            let offset = if play.offset.is_finite() {
+                play.offset.max(0.0)
+            } else {
+                0.0
+            };
+            self.line(d, &format!("uniform double mediaOffset = {offset}"));
+            let mode = match (sound.looped, open_ended) {
+                (false, true) => "onceFromStart",
+                (false, false) => "onceFromStartToEnd",
+                (true, true) => "loopFromStart",
+                (true, false) => "loopFromStartToEnd",
+            };
+            self.line(d, &format!("uniform token playbackMode = \"{mode}\""));
+            self.line(d, &format!("uniform timecode startTime = {}", play.first));
+            self.close(depth);
+            self.report.sounds += 1;
+        }
+    }
+
     fn node(&mut self, depth: usize, index: usize, taken: &mut HashSet<String>) {
         let scene = self.scene;
         let node = &scene.nodes[index];
@@ -535,6 +705,57 @@ impl<'a> Writer<'a> {
                 field("string name", quoted(&node.name));
                 field("float range", f(light.range).to_string());
                 field("float worldRange", f(light.world_range).to_string());
+            }
+            NodeContent::Sound(sound) => {
+                let media = &sound.media;
+                field("float gain", f(sound.gain).to_string());
+                field("bool looped", u8::from(sound.looped).to_string());
+                field("string media", quoted(&media.name));
+                if let Some(id) = media.media {
+                    field("int64 mediaId", id.0.to_string());
+                }
+                field("string name", quoted(&node.name));
+                let attenuation = &sound.attenuation;
+                let mode = match attenuation.mode {
+                    AttenuationMode::None => "none",
+                    AttenuationMode::Linear => "linear",
+                    AttenuationMode::Logarithmic => "logarithmic",
+                };
+                field("string soundAttenuation", quoted(mode));
+                field("float soundAttenuationMax", f(attenuation.max).to_string());
+                field("float soundAttenuationMin", f(attenuation.min).to_string());
+                let kind = match sound.kind {
+                    SoundKind::Flat => "flat",
+                    SoundKind::Positional => "positional",
+                    SoundKind::Ambisonic => "ambisonic",
+                };
+                field("string soundKind", quoted(kind));
+                match sound.modifier {
+                    SoundModifier::None => field("string soundModifier", quoted("none")),
+                    SoundModifier::Cone {
+                        inner,
+                        band,
+                        outside,
+                    } => {
+                        field("string soundModifier", quoted("cone"));
+                        field("float soundModifierBand", f(band).to_string());
+                        field("float soundModifierInner", f(inner).to_string());
+                        field("float soundModifierOutside", f(outside).to_string());
+                    }
+                    SoundModifier::Frustum {
+                        inner_h,
+                        inner_v,
+                        band,
+                        outside,
+                    } => {
+                        field("string soundModifier", quoted("frustum"));
+                        field("float soundModifierBand", f(band).to_string());
+                        field("float soundModifierInnerH", f(inner_h).to_string());
+                        field("float soundModifierInnerV", f(inner_v).to_string());
+                        field("float soundModifierOutside", f(outside).to_string());
+                    }
+                }
+                field("string sourcePath", quoted(&media.source_path));
             }
             _ => field("string name", quoted(&node.name)),
         }
@@ -573,8 +794,10 @@ impl<'a> Writer<'a> {
         self.xform_ops(d, node);
 
         let mut child_names = HashSet::new();
-        if let NodeContent::Paint(paint) = &node.content {
-            self.paint(d, node, &name, paint);
+        match &node.content {
+            NodeContent::Paint(paint) => self.paint(d, node, &name, paint),
+            NodeContent::Sound(sound) => self.sound(d, node, sound),
+            _ => {}
         }
         for child in &node.children {
             self.node(d, *child, &mut child_names);
@@ -647,7 +870,7 @@ impl<'a> Writer<'a> {
         self.close(depth);
     }
 
-    fn finish(mut self) -> (String, ExportReport) {
+    fn finish(mut self) -> UsdaOutput {
         let scene = self.scene;
         let frames = scene.frame_count();
         let rate = if scene.rate.is_valid() {
@@ -694,31 +917,56 @@ impl<'a> Writer<'a> {
 
         self.report.animation_frames = if scene.is_animated() { frames } else { 0 };
         self.report.bytes = self.out.len() as u64;
-        (self.out, self.report)
+        UsdaOutput {
+            text: self.out,
+            assets: self.assets,
+            report: self.report,
+        }
     }
+}
+
+fn write_layer(scene: &ExportScene, options: &UsdOptions, package: bool) -> UsdaOutput {
+    Writer {
+        scene,
+        options,
+        package,
+        out: String::new(),
+        root: default_prim_name(scene),
+        looks: BTreeSet::new(),
+        report: ExportReport::default(),
+        assets: Vec::new(),
+        asset_paths: HashMap::new(),
+        asset_names: HashSet::new(),
+    }
+    .finish()
 }
 
 /// Writes an export scene as a USD text layer (`.usda`).
 ///
 /// Everything sits under one default prim named after the document. Animation is
 /// written as time samples at one time code per sampled frame, starting at zero.
+/// Sound layers refer to their audio as files under `audio/` beside the layer; use
+/// [`scene_to_usda_with_assets`] to have those files too.
 pub fn scene_to_usda(
     scene: &ExportScene,
     options: &UsdOptions,
 ) -> Result<(String, ExportReport), ExportError> {
-    let writer = Writer {
-        scene,
-        options,
-        out: String::new(),
-        root: default_prim_name(scene),
-        looks: BTreeSet::new(),
-        report: ExportReport::default(),
-    };
-    Ok(writer.finish())
+    scene_to_usda_with_assets(scene, options).map(|output| (output.text, output.report))
 }
 
-/// Writes an export scene as a USDZ package: an uncompressed zip whose first and
-/// only file is the layer [`scene_to_usda`] writes, named after the default prim.
+/// Writes an export scene as a USD text layer together with the audio files its
+/// sound layers refer to, which belong beside it at the paths given.
+pub fn scene_to_usda_with_assets(
+    scene: &ExportScene,
+    options: &UsdOptions,
+) -> Result<UsdaOutput, ExportError> {
+    Ok(write_layer(scene, options, false))
+}
+
+/// Writes an export scene as a USDZ package: an uncompressed zip whose first file is
+/// the layer [`scene_to_usda`] writes, named after the default prim, followed by the
+/// audio files of its sounds. Sounds whose audio a package may not hold (Ogg Vorbis)
+/// are left out with a warning; everything else is the same as in the `.usda`.
 ///
 /// The root layer is text. The USDZ specification allows that, but some consumers
 /// accept only binary (`usdc`) root layers; see `docs/export.md`.
@@ -726,9 +974,15 @@ pub fn scene_to_usdz(
     scene: &ExportScene,
     options: &UsdOptions,
 ) -> Result<(Vec<u8>, ExportReport), ExportError> {
-    let (text, mut report) = scene_to_usda(scene, options)?;
+    let UsdaOutput {
+        text,
+        assets,
+        mut report,
+    } = write_layer(scene, options, true);
     let name = format!("{}.usda", default_prim_name(scene));
-    let bytes = usdz_package(&[(name.as_str(), text.as_bytes())])?;
+    let mut files: Vec<(&str, &[u8])> = vec![(name.as_str(), text.as_bytes())];
+    files.extend(assets.iter().map(|a| (a.path.as_str(), &a.bytes[..])));
+    let bytes = usdz_package(&files)?;
     report.bytes = bytes.len() as u64;
     Ok((bytes, report))
 }
@@ -881,6 +1135,33 @@ mod tests {
         assert_eq!(unique("Arm".to_owned(), 9, &mut taken), "Arm_9");
         assert_eq!(unique("Arm".to_owned(), 9, &mut taken), "Arm_9_2");
         assert_eq!(unique("Arm_9".to_owned(), 1, &mut taken), "Arm_9_1");
+    }
+
+    #[test]
+    fn audio_files_get_safe_unique_names() {
+        let mut taken = HashSet::new();
+        assert_eq!(
+            audio_file_name("Rain.WAV", 7, "wav", &mut taken),
+            "Rain.wav"
+        );
+        assert_eq!(
+            audio_file_name("Rain.wav", 8, "wav", &mut taken),
+            "Rain_8.wav"
+        );
+        assert_eq!(
+            audio_file_name("Rain", 8, "wav", &mut taken),
+            "Rain_8_2.wav"
+        );
+        assert_eq!(
+            audio_file_name("C:\\sounds\\bird song (2).mp3", 1, "mp3", &mut taken),
+            "bird_song__2_.mp3"
+        );
+        assert_eq!(audio_file_name("été.ogg", 2, "ogg", &mut taken), "_t_.ogg");
+        assert_eq!(audio_file_name("", 3, "wav", &mut taken), "sound.wav");
+        assert_eq!(
+            audio_file_name(".hidden", 4, "wav", &mut taken),
+            "_hidden.wav"
+        );
     }
 
     #[test]

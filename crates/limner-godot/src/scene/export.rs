@@ -145,8 +145,9 @@ impl LimnerScene {
     /// `gltf_node_visibility` and `gltf_animate_opacity`.
     ///
     /// Returns `{ok, error, nodes, meshes, vertices, triangles, animation_frames,
-    /// bytes}`. The call returns when the file is written, which takes seconds for
-    /// a large document.
+    /// bytes, warnings}`; `warnings` says in plain words what the format could not
+    /// hold, such as sounds. The call returns when the file is written, which takes
+    /// seconds for a large document.
     #[func]
     fn export_file(&self, path: GString, options: VarDictionary) -> VarDictionary {
         let doc = self.session.doc();
@@ -157,6 +158,7 @@ impl LimnerScene {
             Ok(report) => (report, String::new()),
             Err(error) => (ExportReport::default(), error),
         };
+        let warnings: PackedStringArray = report.warnings.iter().map(GString::from).collect();
         vdict! {
             "ok" => error.is_empty(),
             "error" => error,
@@ -166,6 +168,7 @@ impl LimnerScene {
             "triangles" => report.triangles as i64,
             "animation_frames" => report.animation_frames as i64,
             "bytes" => report.bytes as i64,
+            "warnings" => &warnings,
         }
     }
 

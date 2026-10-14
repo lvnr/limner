@@ -22,7 +22,8 @@ use crate::common::{
 use crate::gltf::{kept_frames, CAMERA_ZFAR, CAMERA_ZNEAR};
 use crate::obj::linear_to_srgb;
 use crate::scene::{
-    ExportCamera, ExportLight, ExportNode, ExportPaint, ExportScene, NodeContent, Sampled,
+    ExportCamera, ExportLight, ExportNode, ExportPaint, ExportScene, ExportSound, NodeContent,
+    Sampled,
 };
 use crate::{ExportError, ExportReport};
 use limner_core::glam::{DMat3, DQuat};
@@ -908,7 +909,7 @@ impl<'a> Builder<'a> {
         node: &ExportNode,
         shading: Shading,
     ) {
-        let opacity = node.opacity.first();
+        let opacity = crate::common::peak_opacity(node);
         let opacity = if opacity.is_finite() {
             opacity.clamp(0.0, 1.0)
         } else {
@@ -1082,7 +1083,7 @@ impl<'a> Builder<'a> {
                 ("Light", Aim::Light)
             }
             NodeContent::Camera(_) => ("Camera", Aim::Camera),
-            NodeContent::Media(media) => {
+            NodeContent::Media(media) | NodeContent::Sound(ExportSound { media, .. }) => {
                 extra.push(p_user("limnerMedia", &media.name));
                 extra.push(p_user("limnerSourcePath", &media.source_path));
                 if let Some(id) = media.media {
@@ -1104,7 +1105,7 @@ impl<'a> Builder<'a> {
             },
             NodeContent::Light(light) => self.light(model, &node.name, light),
             NodeContent::Camera(camera) => self.camera(model, &node.name, camera),
-            NodeContent::Media(_) | NodeContent::None => {}
+            NodeContent::Media(_) | NodeContent::Sound(_) | NodeContent::None => {}
         }
         for child in &node.children {
             self.node(*child, model);
@@ -1227,6 +1228,11 @@ impl<'a> Builder<'a> {
         let bytes = write_file(&nodes)?;
         self.report.animation_frames = if animated { scene.frame_count() } else { 0 };
         self.report.bytes = bytes.len() as u64;
+        self.report.warnings.extend(crate::common::sounds_left_out(
+            scene,
+            "FBX has no place for sound that importers read; the model keeps the name of \
+             the audio file",
+        ));
         Ok((bytes, self.report))
     }
 }

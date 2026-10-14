@@ -11,7 +11,8 @@ mod support;
 use limner_core::glam::{DQuat, DVec3};
 use limner_core::math::{Flip, Xform};
 use limner_core::model::{
-    Brush, Camera, Document, Interp, Key, LayerKind, Light, LightKind, Shading, Track,
+    Brush, Camera, Document, Interp, Key, LayerKind, Light, LightKind, MediaData, MediaKind,
+    Shading, SoundKind, Track,
 };
 use limner_export::{
     write_fbx, write_glb, write_obj, write_usda, write_usdz, ExportOptions, FbxOptions, FbxUnit,
@@ -21,7 +22,9 @@ use std::path::PathBuf;
 use support::fbx::Fbx;
 use support::usda::Usda;
 use support::zip::read_usdz;
-use support::{frames, group, paint, sequence, straight, straight_colored, Glb, FRAME, RATE};
+use support::{
+    frames, group, paint, sequence, sound, straight, straight_colored, Glb, FRAME, RATE,
+};
 
 /// Lights, a camera, a mirrored chain, a keyed layer, clips, a looping frame-by-frame
 /// layer, see-through strokes, a lit layer and a fading layer.
@@ -146,6 +149,60 @@ pub fn everything() -> Document {
     doc
 }
 
+/// A sine tone as 16-bit mono samples, fading in and out so it does not click.
+fn tone(seconds: f64, hz: f64, rate: u32) -> Vec<u8> {
+    let count = (seconds * f64::from(rate)) as usize;
+    (0..count)
+        .flat_map(|i| {
+            let t = i as f64 / f64::from(rate);
+            let fade = (t / 0.02).min((seconds - t) / 0.02).clamp(0.0, 1.0);
+            let value = (t * hz * std::f64::consts::TAU).sin() * fade * 0.3;
+            ((value * 32767.0) as i16).to_le_bytes()
+        })
+        .collect()
+}
+
+/// The fixture scene with two sounds: "Chime", a positional half-second tone at the
+/// bulb's place, heard in a clip from frame 4 to frame 16; and "Drone", a flat tone
+/// that loops for the whole range. Both are held as samples, so they export as WAV.
+pub fn with_sound() -> Document {
+    let mut doc = everything();
+    doc.settings.title = "Limner sound fixture".to_owned();
+    let root = doc.root();
+    let samples = |seconds, hz| MediaData::RawAudio {
+        channels: 1,
+        sample_rate: 22_050,
+        bits_per_sample: 16,
+        float: false,
+        samples: tone(seconds, hz, 22_050).into(),
+    };
+    let chime_audio = doc.add_media("chime.wav", MediaKind::Audio, samples(0.5, 880.0));
+    let chime = sound(
+        &mut doc,
+        root,
+        "Chime",
+        Some(chime_audio),
+        SoundKind::Positional,
+        false,
+    );
+    {
+        let layer = doc.layer_mut(chime).unwrap();
+        layer.transform = Xform::from_translation(DVec3::new(0.0, 2.0, 0.0));
+        layer.anim.visibility =
+            Track::from_keys([Key::step(4 * FRAME, true), Key::step(16 * FRAME, false)]);
+    }
+    let drone_audio = doc.add_media("drone.wav", MediaKind::Audio, samples(0.25, 220.0));
+    sound(
+        &mut doc,
+        root,
+        "Drone",
+        Some(drone_audio),
+        SoundKind::Flat,
+        true,
+    );
+    doc
+}
+
 #[test]
 fn the_fixture_scene_passes_validation_in_every_configuration() {
     let doc = everything();
@@ -181,6 +238,32 @@ fn the_fixture_scene_passes_validation_in_every_configuration() {
             };
             Fbx::checked(&limner_export::export_fbx(&doc, &options, &extra).unwrap());
         }
+    }
+}
+
+#[test]
+fn the_sound_fixture_passes_validation() {
+    let doc = with_sound();
+    doc.validate().unwrap();
+    let range = ExportOptions::animated(0, 24 * FRAME, RATE);
+    for options in [
+        ExportOptions::still(0),
+        range,
+        ExportOptions {
+            bake_transforms: true,
+            ..range
+        },
+    ] {
+        let usd = UsdOptions::default();
+        let (text, report) = limner_export::export_usda_with_report(&doc, &options, &usd).unwrap();
+        Usda::parse(&text).all();
+        // The still is taken before the chime's clip, so only the drone is heard.
+        let heard = if options.animation { 2 } else { 1 };
+        assert_eq!(report.sounds, heard, "{options:?}");
+        let package = limner_export::export_usdz(&doc, &options, &usd).unwrap();
+        assert_eq!(read_usdz(&package).len(), 1 + heard);
+        Glb::checked(&limner_export::export_glb(&doc, &options, &GltfOptions::default()).unwrap());
+        Fbx::checked(&limner_export::export_fbx(&doc, &options, &FbxOptions::default()).unwrap());
     }
 }
 
@@ -233,6 +316,18 @@ fn write_fixture_files() {
     }
     let path = out.join("fixture-animated.usdz");
     let report = write_usdz(&doc, &path, &range, &usd).unwrap();
+    println!("{}: {report:?}", path.display());
+
+    // Sounds: the .usda's audio goes to local/out/export/audio/.
+    let sounding = with_sound();
+    let path = out.join("fixture-sound.usda");
+    let report = write_usda(&sounding, &path, &range, &usd).unwrap();
+    println!("{}: {report:?}", path.display());
+    let path = out.join("fixture-sound.usdz");
+    let report = write_usdz(&sounding, &path, &range, &usd).unwrap();
+    println!("{}: {report:?}", path.display());
+    let path = out.join("fixture-sound.glb");
+    let report = write_glb(&sounding, &path, &range, &GltfOptions::default()).unwrap();
     println!("{}: {report:?}", path.display());
 
     let centimetres = FbxOptions {

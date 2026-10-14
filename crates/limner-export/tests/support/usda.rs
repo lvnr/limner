@@ -76,6 +76,8 @@ fn split_metadata(rest: &str) -> (&str, Option<&str>) {
             })
         }
         Some(b'<') => rest.find('>'),
+        // An asset path.
+        Some(b'@') => rest[1..].find('@').map(|i| i + 1),
         _ => rest.find(' ').map(|i| i - 1).or(Some(rest.len() - 1)),
     }
     .unwrap_or_else(|| panic!("unterminated value: {rest:?}"));

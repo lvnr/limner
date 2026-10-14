@@ -1,6 +1,6 @@
 //! Small decisions the USD and FBX writers share, so the two cannot drift apart.
 
-use crate::scene::{ExportCamera, ExportLight, ExportNode, ExportScene};
+use crate::scene::{ExportCamera, ExportLight, ExportNode, ExportScene, NodeContent, Sampled};
 use limner_core::glam::DQuat;
 use limner_core::math::Xform;
 
@@ -39,6 +39,17 @@ pub(crate) fn transforms(scene: &ExportScene, node: &ExportNode) -> Vec<Xform> {
     (0..scene.frame_count())
         .map(|frame| clean(node.transform.at(frame)))
         .collect()
+}
+
+/// The one opacity a format without animated opacity gives a layer: the largest it
+/// has in the range. The first frame's would make a layer that fades in invisible for
+/// the whole export; the largest shows it as it looks at its fullest. For a layer
+/// whose opacity does not change, this is simply its opacity.
+pub(crate) fn peak_opacity(node: &ExportNode) -> f32 {
+    match &node.opacity {
+        Sampled::Constant(opacity) => *opacity,
+        Sampled::PerFrame(samples) => samples.iter().copied().fold(f32::NAN, f32::max),
+    }
 }
 
 /// The node's own visibility on every sampled frame.
@@ -87,6 +98,30 @@ pub(crate) fn camera_fov(camera: &ExportCamera) -> f32 {
 /// A name without control characters, which no format wants inside a string.
 pub(crate) fn printable(name: &str) -> String {
     name.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// The warning for a format that holds no sound, naming the sound layers that would
+/// have been heard in the range; `None` when there are none. `why` finishes the
+/// sentence.
+pub(crate) fn sounds_left_out(scene: &ExportScene, why: &str) -> Option<String> {
+    let names: Vec<String> = scene
+        .nodes
+        .iter()
+        .filter(|node| match &node.content {
+            NodeContent::Sound(sound) => sound.audio.is_some() && !sound.plays.is_empty(),
+            _ => false,
+        })
+        .map(|node| format!("\"{}\"", printable(&node.name)))
+        .collect();
+    match names.as_slice() {
+        [] => None,
+        [one] => Some(format!("the sound layer {one} was left out: {why}")),
+        _ => Some(format!(
+            "{} sound layers were left out ({}): {why}",
+            names.len(),
+            names.join(", ")
+        )),
+    }
 }
 
 #[cfg(test)]

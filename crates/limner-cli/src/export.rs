@@ -196,7 +196,7 @@ pub fn run(args: &ExportArgs, out: &mut dyn Write) -> Result<()> {
         path.display()
     )?;
     write!(out, "{}", describe(&report))?;
-    for warning in &opened.warnings {
+    for warning in opened.warnings.iter().chain(&report.warnings) {
         writeln!(out, "  warning: {warning}")?;
     }
     Ok(())

@@ -9,7 +9,9 @@
 //! * one mesh per drawing with `POSITION`, `NORMAL` and linear `COLOR_0`;
 //! * one animation: sampled transforms, and visibility as a stepped scale of 0 or 1.
 
-use crate::scene::{ExportLight, ExportNode, ExportPaint, ExportScene, NodeContent, Sampled};
+use crate::scene::{
+    ExportLight, ExportNode, ExportPaint, ExportScene, ExportSound, NodeContent, Sampled,
+};
 use crate::{ExportError, ExportReport};
 use limner_core::math::Xform;
 use limner_core::model::{LightKind, Shading, OPAQUE_THRESHOLD};
@@ -388,7 +390,14 @@ impl<'a> Writer<'a> {
         let scene = self.scene;
         let node = &scene.nodes[node_index];
         let animated = self.extra.animate_opacity && node.opacity.is_animated();
-        let opacity = node.opacity.first().clamp(0.0, 1.0);
+        // Animated, the material starts at the first frame's opacity; otherwise it keeps
+        // the layer's fullest opacity in the range.
+        let opacity = if animated {
+            *node.opacity.first()
+        } else {
+            crate::common::peak_opacity(node)
+        }
+        .clamp(0.0, 1.0);
 
         let mut key = Vec::with_capacity(scene_meshes.len());
         for mesh_index in scene_meshes {
@@ -721,7 +730,7 @@ impl<'a> Writer<'a> {
                     }));
                     self.nodes[index]["camera"] = json!(self.cameras.len() - 1);
                 }
-                NodeContent::Media(media) => {
+                NodeContent::Media(media) | NodeContent::Sound(ExportSound { media, .. }) => {
                     let limner = &mut self.nodes[index]["extras"]["limner"];
                     limner["media"] = json!(media.name);
                     limner["sourcePath"] = json!(media.source_path);
@@ -846,6 +855,14 @@ impl<'a> Writer<'a> {
             },
             animation_channels,
             bytes: bytes.len() as u64,
+            warnings: crate::common::sounds_left_out(
+                scene,
+                "glTF has no ratified extension for sound yet, so the .glb holds none; \
+                 the node keeps the name of the audio file",
+            )
+            .into_iter()
+            .collect(),
+            ..ExportReport::default()
         };
         Ok(GlbOutput { bytes, report })
     }

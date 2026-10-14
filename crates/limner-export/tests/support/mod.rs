@@ -9,7 +9,8 @@ pub mod zip;
 
 use limner_core::glam::{DMat4, DQuat, DVec3, Vec3};
 use limner_core::model::{
-    Brush, Document, Drawing, Group, LayerId, LayerKind, Paint, Point, Sequence, Shading, Stroke,
+    Brush, Document, Drawing, Group, LayerId, LayerKind, MediaData, MediaId, MediaKind, Paint,
+    Point, Sequence, Shading, Sound, SoundKind, Stroke,
 };
 use limner_core::time::{Flicks, FrameRate};
 use serde_json::Value;
@@ -106,6 +107,61 @@ pub fn frames(
         shading: Shading::Unlit,
     };
     let layer = doc.new_layer(name, LayerKind::Paint(paint), 0);
+    doc.insert_layer(layer, parent, usize::MAX).unwrap()
+}
+
+/// A WAV file of `frames` samples of silence: mono, 16-bit, `rate` samples per second.
+/// Written here byte by byte, sharing nothing with the exporter.
+pub fn wav(frames: u32, rate: u32) -> Vec<u8> {
+    let data = frames * 2;
+    let mut out = Vec::new();
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * 2).to_le_bytes());
+    out.extend_from_slice(&2u16.to_le_bytes());
+    out.extend_from_slice(&16u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&data.to_le_bytes());
+    out.resize(out.len() + data as usize, 0);
+    out
+}
+
+/// Embeds an audio file in its original encoding.
+pub fn audio(doc: &mut Document, name: &str, format: &str, bytes: Vec<u8>) -> MediaId {
+    doc.add_media(
+        name,
+        MediaKind::Audio,
+        MediaData::Encoded {
+            format: format.to_owned(),
+            bytes: bytes.into(),
+        },
+    )
+}
+
+/// A sound layer playing `media` at full gain.
+pub fn sound(
+    doc: &mut Document,
+    parent: LayerId,
+    name: &str,
+    media: Option<MediaId>,
+    kind: SoundKind,
+    looped: bool,
+) -> LayerId {
+    let kind = LayerKind::Sound(Sound {
+        media,
+        kind,
+        gain: 1.0,
+        looped,
+        attenuation: Default::default(),
+        modifier: Default::default(),
+        source_path: format!("/sounds/{name}"),
+    });
+    let layer = doc.new_layer(name, kind, 0);
     doc.insert_layer(layer, parent, usize::MAX).unwrap()
 }
 

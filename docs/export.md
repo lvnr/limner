@@ -3,7 +3,7 @@
 Limner writes four interchange formats, all from the same intermediate scene:
 
 - **glTF 2.0 binary (`.glb`)**: hierarchy, animation, lights and cameras in one compact file. The first choice where the receiving tool reads it.
-- **USD (`.usda` text, or a `.usdz` package)**: the same content for USD pipelines.
+- **USD (`.usda` text, or a `.usdz` package)**: the same content for USD pipelines, and the only format here that also carries sound layers.
 - **FBX (binary 7.4, `.fbx`)**: the same content for tools that want FBX, with the limits FBX has.
 - **Wavefront OBJ (`.obj`)**: a still mesh.
 
@@ -32,6 +32,7 @@ write_glb(&doc, path, &options, &GltfOptions) -> Result<ExportReport, ExportErro
 export_obj(&doc, time, include_hidden) -> Result<String, ExportError>
 write_obj(&doc, path, time, include_hidden) -> Result<ExportReport, ExportError>
 export_usda(&doc, &options, &UsdOptions) -> Result<String, ExportError>
+export_usda_with_assets(&doc, &options, &UsdOptions) -> Result<UsdaOutput, ExportError>
 write_usda(&doc, path, &options, &UsdOptions) -> Result<ExportReport, ExportError>
 export_usdz(&doc, &options, &UsdOptions) -> Result<Vec<u8>, ExportError>
 write_usdz(&doc, path, &options, &UsdOptions) -> Result<ExportReport, ExportError>
@@ -39,30 +40,34 @@ export_fbx(&doc, &options, &FbxOptions) -> Result<Vec<u8>, ExportError>
 write_fbx(&doc, path, &options, &FbxOptions) -> Result<ExportReport, ExportError>
 ```
 
-Each `export_*` has an `export_*_with_report` twin that returns the data together with the report; `scene_to_glb`, `scene_to_obj`, `scene_to_usda`, `scene_to_usdz` and `scene_to_fbx` write a scene you built yourself. `ExportReport` counts nodes, meshes, vertices, triangles, sampled animation frames, animation channels and bytes.
+Each `export_*` has an `export_*_with_report` twin that returns the data together with the report; `scene_to_glb`, `scene_to_obj`, `scene_to_usda`, `scene_to_usda_with_assets`, `scene_to_usdz` and `scene_to_fbx` write a scene you built yourself. `ExportReport` counts nodes, meshes, vertices, triangles, sampled animation frames, animation channels, sounds written and bytes, and lists **warnings**: what was left out and why, in plain words (sounds a format cannot hold, audio a package may not contain). An export with warnings has still succeeded. `limner export` prints them; the editor's `export_file` returns them as `warnings`.
+
+The `write_*` functions write each file whole or not at all: the bytes go to a hidden file beside the target (`.<name>.<process>-<n>.part`), which is flushed to disk and then renamed over it. A failure part way, such as a full disk, leaves an earlier export of the same name as it was.
 
 ### Rules shared by all formats
 
 | Topic | Rule |
 |---|---|
 | Units and axes | Metres, +Y up, right-handed. This is Limner's own space, so nothing is converted or rescaled. |
-| Sampling | Frame `k` is evaluated at `start + rate.frame_start(k)`, for as long as that is not past `end`. A range of 0 to 10 s at 24 fps gives 241 samples. |
-| Hidden layers | A layer whose eye toggle is off is left out with everything below it, unless `include_hidden` is set. Clips always apply: a layer outside its clip is hidden either way. |
+| Sampling | Frame `k` is evaluated at `start + rate.frame_start(k)`, for as long as that is not past `end`. A range of 0 to 10 s at 24 fps gives 241 samples. At most `MAX_FRAMES` (100,000) frames: every frame evaluates the whole document, so a slip such as 24,000 fps is refused with `ExportError::TooManyFrames` instead of keeping the machine busy for minutes. |
+| Hidden layers | A layer whose eye toggle is off is left out with everything below it, unless `include_hidden` is set. Clips always apply: a layer outside its clip is hidden either way. This holds for sound layers too, although in Limner the eye toggle of a sound only hides its gizmo. |
+| Opacity zero | Limner does not draw a layer at opacity zero, so a frame on which a layer's effective opacity is zero does not count as on screen. A layer at opacity zero on every sampled frame is left out with everything below it, except lights and cameras (which ignore opacity) and the groups that place them. |
 | What is exported | Only what is on screen on at least one sampled frame. A drawing nobody sees in the range, and a paint layer with no visible triangle, produce nothing. |
 | Geometry | The renderer's tessellation: one cross-section ring per stored point (2 vertices for ribbons and legacy lines, 7 for cylinders and ellipses, 4 for cubes), no resampling, no caps, no welding between strokes. Triangles are counter-clockwise seen from outside. |
 | Normals | Always available. Outward for tubes; for ribbons, the side the stored normal points to. |
 | Colour | The scene holds linear RGB and opacity per vertex as floats. Each format encodes them as its readers expect (below): linear in glTF and USD, sRGB-encoded in OBJ and, by default, in FBX. |
 | Meshes per drawing | Up to four: single- or double-sided (tubes or flat strokes), opaque or see-through. Keeping see-through strokes apart means only they pay for alpha blending. |
-| Opacity | The layer's opacity multiplied by that of every ancestor, because no interchange format inherits opacity. |
+| Opacity | The layer's opacity multiplied by that of every ancestor, because no interchange format inherits opacity. Where a format holds one opacity per layer (glTF without `animate_opacity`, USD, FBX), it is the **largest** the layer has in the range, so a layer that fades in is shown at its fullest rather than invisible; for a layer whose opacity does not change, that is simply its opacity. |
+| Sounds | A sound layer carries its audio (the file as it was imported, or WAV written from the samples the document holds) and the stretches of the range in which it is heard, worked out the way Limner's player does it: from the frame its clip starts (or the range starts) until its clip ends, its sequence loops back, or, for WAV audio that does not loop, the audio runs out. Only USD can hold sound; the other formats leave it out with a warning (below). |
 | Dropped strokes | Strokes erased completely (every point at zero opacity), strokes with fewer than two points, and strokes containing a non-finite number. |
 
 ### Baking transforms
 
-With `bake_transforms` the hierarchy is flattened: groups, sounds and spawn areas disappear and every remaining node is a root.
+With `bake_transforms` the hierarchy is flattened: groups and spawn areas disappear and every remaining node is a root.
 
 - A paint layer whose world placement is the same on every sampled frame has its vertices moved into world space and no transform at all. If the placement mirrors (an odd number of flips up the tree), the winding of every triangle is reversed so that faces still point outward, and normals go through the inverse transpose.
 - A paint layer whose world placement **changes** in the range cannot be turned into static vertices. Its node carries the sampled world transform instead, and its mesh stays in layer space. Nothing is lost; only the hierarchy is.
-- Lights, cameras, pictures and models keep their world transform on a root node.
+- Lights, cameras, pictures, models and sounds keep their world transform on a root node.
 
 With the hierarchy kept, a mirrored layer keeps its flip in the node transform and the winding is **not** touched. glTF and USD both say that a node with a negative determinant reverses the facing of its triangles, and FBX importers treat a negative scale the same way, so consumers handle it; pre-reversing would make them face inward.
 
@@ -87,11 +92,12 @@ One self-contained file: a JSON description and one binary buffer. No axis or un
 | Flat strokes (ribbons, lines) | Their own primitive with a `doubleSided` material. |
 | `Shading::Unlit` | A material with `KHR_materials_unlit`: what was painted is what is shown. Its fallback for readers without the extension is a matte, non-metallic PBR surface. |
 | `Shading::Lit` | A plain PBR material (non-metallic, fully rough) that takes its colour from the vertices. |
-| Layer opacity | `baseColorFactor` alpha of the layer's material, and `alphaMode: "BLEND"` when it is below 1. The value is the effective opacity on the first frame. |
+| Layer opacity | `baseColorFactor` alpha of the layer's material, and `alphaMode: "BLEND"` when it is below 1. The value is the largest effective opacity in the range; with `animate_opacity`, the first frame's, which the animation then changes. |
 | Light layer | `KHR_lights_punctual`: `point`, `spot` or `directional`, colour, `intensity`, `range`, and for spots `innerConeAngle` and `outerConeAngle`. |
 | Camera layer | A perspective camera: `yfov` from the layer's vertical field of view, `aspectRatio` from the document's camera resolution, `znear` 0.01 m, `zfar` 1000 m. |
 | Picture, model layer | An empty node whose `extras.limner` carries `media` (file name), `mediaId` and `sourcePath`. The pixels or mesh are not embedded. |
-| Sound, spawn area | An empty node carrying its transform and kind. |
+| Sound layer | The same: an empty node with the audio's file name. The sound itself is left out, with a warning naming the layers (see "Why glTF has no sound"). |
+| Spawn area | An empty node carrying its transform and kind. |
 
 Materials are shared: every layer with the same shading, sidedness, blending and opacity uses the same one, so a typical file has between one and four.
 
@@ -143,7 +149,7 @@ Both pointer extensions are off by default because support is still uneven and s
 |---|---|
 | Dithered see-through strokes | Become ordinary alpha blending. Limner never blends or sorts strokes; a glTF viewer does, so overlapping faint strokes can show sorting artefacts and do not build up the way they do in Limner. |
 | Directional strokes | Their fade with viewing direction is dropped. A stroke that is opaque head-on is exported opaque. |
-| Opacity keys | Only with `animate_opacity`; otherwise the first frame's opacity. |
+| Opacity keys | Only with `animate_opacity`; otherwise the largest opacity in the range. |
 | Step keys and loop restarts | Sampled once per frame with linear interpolation, so a jump takes one frame instead of being instant when played back faster than the sampling rate. |
 | Keyed light and camera properties (named channels) | The static values are exported. |
 | Light energy | Written unchanged as `intensity`. Limner's energy is a unit-less multiplier, not candela or lux, so importers that convert physical units make lights look dimmer or brighter. The original values are in the light's `extras.limner`. |
@@ -151,10 +157,15 @@ Both pointer extensions are off by default because support is still uneven and s
 | Spot softness | Mapped to the inner cone angle: `inner = outer * (1 - blend)`. Cones wider than 90 degrees are clamped, as glTF requires. |
 | Shadows flag | Kept only in `extras`. |
 | Lit shading's wrap lighting, and flat shading of cube strokes | A standard PBR material; cube strokes have smoothed corner normals. |
-| Pictures, models, sounds | Not embedded; nodes carry a reference. |
+| Pictures, models | Not embedded; nodes carry a reference. |
+| Sounds | Left out, with a warning; the node keeps the audio's file name. |
 | Stops, chapters and loops on the root timeline | Not exported. The animation is the plain range from `start` to `end`. |
 | Colours above 1.0 | Clamped. |
 | Layer lock, collapse, bounds display, palette | Editor state; not exported. |
+
+### Why glTF has no sound
+
+glTF has no ratified extension for sound. Checked in October 2026: Khronos's extension registry lists no audio extension as ratified or as a release candidate; its only audio entry is `KHR_audio_graph`, at the proposal stage. `KHR_audio_emitter`, the merger of `MSFT_audio_emitter` and the Open Metaverse group's `OMI_audio_emitter`, is still an open pull request (KhronosGroup/glTF #2137, opened in 2022): its node property was renamed in April 2026, and reviews in August and September 2026 asked for changes to the channel rules, playback control and the formats it allows (MP3 only, with Opus proposed). `OMI_audio_emitter` is the draft it replaces. Writing either would give files that today's readers ignore and tomorrow's may read differently, so the `.glb` holds no sound and the export says which sound layers were left out. When `KHR_audio_emitter` reaches release-candidate status it can be written behind a `GltfOptions` switch: the audio in the binary buffer, sources from gain and looping, emitters on the sound nodes with the cone and distance from the layer, listed in `extensionsUsed` only.
 
 ### Importing the `.glb`
 
@@ -193,13 +204,13 @@ f 1//1 2//2 8//8
 | Normals | One `vn` per vertex. |
 | Triangles | `f a//a b//b c//c`, one-based indices running through the whole file. |
 | Layer transforms | Baked into the vertices. Under a mirror the winding is reversed so faces point outward. |
-| Hidden layers and clips | A layer hidden by its eye toggle is left out unless `include_hidden`; a layer outside its clip at `time` is always left out. |
+| Hidden layers and clips | A layer hidden by its eye toggle is left out unless `include_hidden`; a layer outside its clip at `time`, or at opacity zero then, is always left out. |
 
 No `.mtl` file is written; there is nothing for it to say.
 
 ### What is lost in OBJ
 
-Everything OBJ cannot hold: animation, hierarchy, opacity (see-through strokes come out solid), the difference between single- and double-sided strokes (enable two-sided rendering for ribbons downstream), lights, cameras, pictures, models and sounds. Colour above 1.0 is clamped.
+Everything OBJ cannot hold: animation, hierarchy, opacity (see-through strokes come out solid), the difference between single- and double-sided strokes (enable two-sided rendering for ribbons downstream), lights, cameras, pictures, models and sounds. Sound layers heard at `time` are named in a warning. Colour above 1.0 is clamped.
 
 ### Importing the `.obj`
 
@@ -217,7 +228,7 @@ A `.usda` file is one USD layer as text. A `.usdz` file is a package: a single f
 |---|---|
 | Document | Layer metadata: `upAxis = "Y"`, `metersPerUnit = 1`, `defaultPrim`, `timeCodesPerSecond` and `framesPerSecond` (the sampling rate), `doc` (the generator), and `customLayerData.limner` with the title, frame rate, start time in seconds, frame count, whether transforms were baked, and the background colour. |
 | Default prim | One `Xform` that holds everything, named after the document title ("Limner_scene" if untitled). It lets another USD file reference the export as one thing. |
-| Layer | One prim under the default prim, in the layer tree's shape. `Xform` for groups, sequences, paint layers, pictures, models, sounds and spawn areas; a light or camera prim for those layers. |
+| Layer | One prim under the default prim, in the layer tree's shape. `Xform` for groups, sequences, paint layers, pictures, models, sounds and spawn areas; a light or camera prim for those layers. The document's root layer is a prim too (`/Scene/Root/...`). |
 | Layer name | USD prim names may hold only ASCII letters, digits and `_`, and may not start with a digit. Other characters become `_` ("Left arm" is `Left_arm`); a name that clashes with a sibling gets the layer id appended. The real name is kept in `customData.limner.name`, beside `layerId` and `kind`. |
 | Layer transform | `xformOp:translate` (`double3`), `xformOp:orient` (`quatf`, real part first as USD writes quaternions) and `xformOp:scale` (`float3`), listed in `xformOpOrder`. An op that would do nothing is left out, so a layer that only moves has only a translate op. |
 | Mirrored layer | A negative scale on the flip axis, for example `(-2, 2, 2)`. |
@@ -226,13 +237,14 @@ A `.usda` file is one USD layer as text. A `.usdz` file is a package: a single f
 | Mesh | `points`, `faceVertexCounts` (all 3), `faceVertexIndices`, `normals` (interpolation `vertex`), `extent` (the exact bounding box), `subdivisionScheme = "none"` so nothing smooths the surface, `doubleSided`, `orientation`. |
 | Winding | `orientation = "rightHanded"`. That is USD's name for "the front is the side from which the corners run counter-clockwise", which is how Limner's triangles are ordered. It stays `rightHanded` under a mirrored layer: USD itself turns the facing round under a transform that mirrors. A baked export arrives at the writer with its winding already reversed where needed. |
 | Colour | `primvars:displayColor`, interpolation `vertex`, **linear** floats as painted. USD defines `displayColor` as linear, so nothing is encoded and colours above 1.0 are kept. |
-| Opacity | `primvars:displayOpacity`, interpolation `vertex`: each vertex's own opacity multiplied by the layer's effective opacity on the first frame. USD has no other place for a layer's opacity that viewers agree on. |
+| Opacity | `primvars:displayOpacity`, interpolation `vertex`: each vertex's own opacity multiplied by the layer's largest effective opacity in the range. USD has no other place for a layer's opacity that viewers agree on. |
 | Flat strokes (ribbons, lines) | `doubleSided = 1`. Tubes have `doubleSided = 0`. |
 | Materials | A `Scope` named `Materials` beside the layers, holding up to four `Material` prims: `unlit`, `unlit_see_through`, `lit`, `lit_see_through`. Each mesh is bound to one (`material:binding`, with `MaterialBindingAPI` applied). |
 | Light layer | UsdLux. Point: `SphereLight` with `treatAsPoint = 1`. Spot: the same with `ShapingAPI`, `inputs:shaping:cone:angle` (degrees off the axis, as in Limner) and `inputs:shaping:cone:softness` (the blend). Directional: `DistantLight`. All have `inputs:color`, `inputs:intensity` and `inputs:shadow:enable` (`ShadowAPI`). |
 | Camera layer | A `Camera` prim: `projection = "perspective"`, `verticalAperture = 24`, `horizontalAperture` = 24 times the aspect ratio of the document's camera resolution, `focalLength` chosen so the vertical field of view is the layer's, `clippingRange = (0.01, 1000)`. |
 | Picture, model layer | An `Xform` whose `customData.limner` carries `media` (file name), `mediaId` and `sourcePath`. The pixels or mesh are not embedded. |
-| Sound, spawn area | An `Xform` carrying its transform and kind. |
+| Sound layer | An `Xform` carrying its transform, with one UsdMedia `SpatialAudio` prim inside for each stretch of the range in which the sound is heard (below). Its `customData.limner` keeps what `SpatialAudio` has no place for: `soundKind`, `gain`, `looped`, `soundAttenuation` (`none`, `linear`, `logarithmic`) with `soundAttenuationMin` and `soundAttenuationMax` (layer units), `soundModifier` (`none`, `cone`, `frustum`) with its angles in radians, and `media`, `mediaId`, `sourcePath`. |
+| Spawn area | An `Xform` carrying its transform and kind. |
 
 Lights and cameras point along their local -Z axis with +Y up in USD, as in Limner, so their prims carry the layer's rotation unchanged.
 
@@ -245,6 +257,26 @@ Many viewers show `displayColor` only on meshes that have no material; others sh
 - **See-through** variants also connect `opacity` to a `UsdPrimvarReader_float` that reads `displayOpacity`. Opaque paint uses the variants without it, so it is never blended.
 
 `UsdOptions { materials: false, .. }` leaves the materials and bindings out, for pipelines that want bare `displayColor`.
+
+### Sounds
+
+Each sound layer's prim holds a `SpatialAudio` prim named `Audio`, or `Audio_000`, `Audio_001`, ... when the sound is heard in more than one stretch (a clip that starts again, a sequence that loops back). The prims follow the UsdMedia schema:
+
+| Property | Value |
+|---|---|
+| `uniform asset filePath` | `@audio/<file>@`: the audio, relative to the layer. The file name is the media item's, made safe (ASCII letters, digits, `-` and `_`) with the extension of the encoding; two layers playing the same media share one file. |
+| `uniform token auralMode` | `spatial` for positional sounds; `nonSpatial` for flat and ambisonic ones (an ambisonic recording surrounds the listener and has no single place). |
+| `uniform timecode startTime` | The first frame on which the sound is heard, in the layer's time codes (frame `k` is time code `k`). |
+| `uniform double mediaOffset` | Seconds into the audio on that frame: the clip's trim, or how far the clip had run when the range began. For a looping WAV sound it is reduced to a place inside the audio. |
+| `uniform token playbackMode` | `onceFromStart` or `loopFromStart` when the sound is still heard on the last frame of the range, so it goes on as it would in Limner; `onceFromStartToEnd` or `loopFromStartToEnd` when it stops earlier. |
+| `uniform timecode endTime` | Only with the `...ToEnd` modes: the first frame on which the sound is no longer heard. |
+| `double gain` | Limner's gain times the layer's effective opacity, as Limner's player does it, with time samples when the opacity changes. |
+
+**Where the audio goes.** `write_usda` writes the files into a folder named `audio` beside the `.usda`, replacing files of the same name there; `export_usda_with_assets` returns them in memory. A `.usdz` holds them after the root layer, each aligned like every file in the package.
+
+**What a package may hold.** The USDZ specification allows only M4A, MP3 and WAV audio. Limner's sounds arrive as WAV, MP3 or Ogg Vorbis (audio the document holds as samples is written as WAV), so an Ogg sound is left out of a `.usdz` with a warning that names the layer; its prim stays, with no `SpatialAudio` and so no reference to a missing file. A `.usda` keeps Ogg sounds, since USD itself does not restrict audio formats, but players may not read them. `usdchecker --arkit` rejects a package that holds an Ogg file (`UnsupportedFileExtensionInPackage`; tried by hand), which is why the writer does not try.
+
+**What is lost.** UsdMedia has no fall-off with distance and no directional cone, so a positional sound is heard at its place with the player's own rules; the attenuation and the cone or frustum are kept in `customData` only. The exact moment a clip ends is rounded to the next sampled frame. Gain above 1 is written as it is; USD does not say whether players amplify.
 
 ### Animation
 
@@ -261,7 +293,7 @@ As in the glTF writer, constant properties get no samples, runs where nothing ch
 
 ### The `.usdz` package
 
-The package follows the USDZ rules exactly: a zip archive, every file stored without compression, no encryption, and every file's data starting on a multiple of 64 bytes from the start of the archive. The padding that achieves the alignment is an extra field in the file's local header (record id `0x1986`, as OpenUSD's own writer does it). The first and only file is the root layer, named after the default prim, for example `Lantern.usda`. The zip is written by hand, CRC-32 included; dates in it are fixed, so the same document always gives the same bytes.
+The package follows the USDZ rules exactly: a zip archive, every file stored without compression, no encryption, and every file's data starting on a multiple of 64 bytes from the start of the archive. The padding that achieves the alignment is an extra field in the file's local header (record id `0x1986`, as OpenUSD's own writer does it). The first file is the root layer, named after the default prim, for example `Lantern.usda`; the audio files of its sounds follow under `audio/`. A document without sound gives a package with the root layer alone. The zip is written by hand, CRC-32 included; dates in it are fixed, so the same document always gives the same bytes.
 
 **The root layer is text (`usda`).** The USDZ specification allows that, but some consumers accept only binary `usdc` layers; older versions of Apple's AR Quick Look are the known case. A binary `usdc` writer is future work. Until then, on a Mac the layer can be converted with Apple's own tools: `usdcat scene.usda -o scene.usdc`, then `usdzip scene.usdz scene.usdc`.
 
@@ -278,11 +310,11 @@ pub struct UsdOptions {
 
 ### What is lost in USD
 
-Everything in the glTF list that concerns the scene itself applies here too: dithered see-through strokes become alpha blending, the directional fade is dropped, step keys are sampled once per frame, keyed light and camera properties export their static values, pictures, models and sounds are references, and stops, chapters and editor state are not exported. In addition, or differently:
+Everything in the glTF list that concerns the scene itself applies here too: dithered see-through strokes become alpha blending, the directional fade is dropped, step keys are sampled once per frame, keyed light and camera properties export their static values, pictures and models are references, and stops, chapters and editor state are not exported. Sounds are kept (see "Sounds" above, for what of them is lost). In addition, or differently:
 
 | Limner feature | What happens |
 |---|---|
-| Opacity keys | Not exported. Opacity is in the vertices, at its value on the first frame. |
+| Opacity keys | Not exported. Opacity is in the vertices, at its largest value in the range. |
 | A drawing shown by two layers | Written twice, once under each layer. (USD could share it with a reference; plain copies are read by every consumer, including simple ones.) |
 | Light range | UsdLux lights have no cut-off distance. `range` and the range in world metres are kept in `customData.limner`. |
 | Light energy | Written unchanged as `inputs:intensity`, with `inputs:normalize = 1` so it does not depend on the light's radius. Limner's energy is not a physical unit, so renderers that use physical units show lights dimmer or brighter. |
@@ -338,13 +370,13 @@ This is the reverse of Quill's own FBX, which holds metres but declares centimet
 | Normals | `LayerElementNormal`, mapped `ByVertice`, `Direct`: one normal per vertex, which is what Limner has. |
 | Colour | `LayerElementColor` named `Color`, RGBA doubles, mapped `ByPolygonVertex` with `IndexToDirect`: every polygon corner points into a colour list through `ColorIndex`. This is the layout Blender's own exporter writes, so it is the one every importer (Blender's, Unity's, Unreal's) has met most often; the per-vertex layout (`ByVertice`) is rarer for colours. The index is the vertex index, so each vertex's colour is still stored once. |
 | Colour encoding | **sRGB-encoded** RGB by default, as in the OBJ writer. FBX does not say what colour numbers mean; Blender's importer assumes sRGB by default, and Unity and Unreal keep vertex colours in 8 bits per channel, where linear values band in the darks. `FbxColorSpace::Linear` writes Limner's linear values unchanged (and unclamped) instead. Alpha is never encoded. |
-| Opacity | The alpha of the vertex colour: each vertex's own opacity multiplied by the layer's effective opacity on the first frame. |
+| Opacity | The alpha of the vertex colour: each vertex's own opacity multiplied by the layer's largest effective opacity in the range. |
 | Kinds of surface | One material slot per kind in the drawing (`LayerElementMaterial`, `ByPolygon`, or `AllSame` when there is one), and one `Material` connected to the model per slot. |
 | Materials | Named `unlit` or `lit`, then `double-sided`, then `see-through`: for example `unlit double-sided see-through`. Shared by every layer with the same look, so a file has at most eight. An FBX material cannot say "unlit", "two-sided", "blend" or "use the vertex colours", so each is a plain white Lambert whose **name** says what to set up after import; the same facts are in the user properties `limnerShading`, `limnerDoubleSided` and `limnerSeeThrough`. |
 | Frame-by-frame paint layer | A `Null` model for the layer and one child `Mesh` model per distinct drawing, named `Layer.000`, `Layer.001`, ... as in the `.glb`, with `limnerDrawing`, `limnerDrawingId` and `limnerLayerId`. Each child is switched on and off (below). |
 | Light layer | A `NodeAttribute` of type `Light`: `LightType` (point, directional, spot), `Color`, `Intensity` (a percentage: energy times 100), `DecayType` 2 (inverse square), `CastShadows`, for point and spot lights `FarAttenuationEnd` (the range in world units), for spots `OuterAngle` (the whole cone, twice Limner's angle) and `InnerAngle` (`outer * (1 - blend)`). The original `limnerEnergy` and `limnerRange` are user properties on the model. |
 | Camera layer | A `NodeAttribute` of type `Camera`: the lens as `FocalLength` in millimetres over a 24 mm high film back (`FilmHeight` and `FilmWidth` in inches, `ApertureMode` 3), `FieldOfView`, `FieldOfViewX` and `FieldOfViewY` repeating it as angles, `AspectWidth` and `AspectHeight` from the document's camera resolution, `NearPlane` 0.01 m, `FarPlane` 1000 m. |
-| Picture, model, sound, spawn area | A `Null` model with the user properties above. Nothing is embedded. |
+| Picture, model, sound, spawn area | A `Null` model with the user properties above. Nothing is embedded. Sound layers are named in a warning. |
 
 **Lights and cameras are turned.** An FBX light shines along its local -Y and an FBX camera looks along its local +X, where Limner (and glTF and USD) use -Z for both. The writer adds a quarter turn to the rotation of those models (about X for lights, about Y for cameras), so they point the right way in every importer; importers that use -Z themselves, such as Blender and Godot, take the quarter turn out again.
 
@@ -380,7 +412,8 @@ The glTF list applies here as well (blending instead of dithering, no directiona
 |---|---|
 | Unlit shading, sidedness, blending | Not expressible in an FBX material. They are in the material's name and user properties, to be set up once per material after import. |
 | Vertex colour in the material | Not expressible either: after import, the material has to be told to use the vertex colour (below). |
-| Opacity keys | Not exported. Opacity is in the vertex alpha, at its value on the first frame. |
+| Opacity keys | Not exported. Opacity is in the vertex alpha, at its largest value in the range. |
+| Sounds | Left out, with a warning. The FBX SDK has audio objects, but no importer this page covers reads them, and the format has no public description of them to write from. |
 | Colours above 1.0 | Clamped with the default sRGB encoding; kept with `FbxColorSpace::Linear`. |
 | Light colour space | Written as Limner's linear numbers. FBX does not say whether light colours are linear, and importers differ (Godot shows them unconverted). |
 | Light range | `FarAttenuationEnd` is written, but most importers ignore it. |
@@ -435,11 +468,14 @@ Verified:
 - **glTF in an independent reader.** The pinned Godot build (4.8 dev 7) loads the sample and fixture files through `GLTFDocument`, with the expected mesh, light, camera and animation track counts, and plays the animation with the expected node transforms.
 - **USD in Apple's tools** (Apple USD Tools 0.25.2 on macOS 26.5, in `/usr/bin`). `usdchecker` reports "Success!" for the fixture `.usda` files (still, animated, baked), the fixture `.usdz` and the sample `.usdz`, also with `--arkit`. `usdcat` loads all of them and prints the same number of prims as were written; `usdtree` shows the expected tree; `usdzip --dump` lists the package's file at offset 64 with equal stored and real sizes, the same as for a package `usdzip` made itself. `usdrecord` renders the animated fixture through its exported camera with the Metal renderer: vertex colours show through the materials, the keyed layer moves, the clip appears on the right frames and the frame-by-frame layer changes drawing. `usdcat scene.usda -o scene.usdc` followed by `usdzip` gives a binary package that `usdchecker --arkit` also accepts. (These tools print "Coding Error ... RegisterBehaviorForPrimTypeId" lines for every file, including an empty one; that is the tools, not the export.) Two ignored tests rerun `usdchecker` and `usdcat`: `cargo test -p limner-export --test usd --test usdz -- --ignored`.
 - **USDZ in other zip readers.** Info-ZIP `unzip -t` (6.00) and Python 3.14's `zipfile.testzip()` accept the packages and agree on the CRC.
+- **Sounds in USD.** `tests/sound.rs` reads the `SpatialAudio` prims back: file path, aural mode, playback mode, start and end time codes, media offset and gain (with its samples), for clips, a looping sequence, a range that starts inside a clip, audio held as samples, shared and same-named files, baking, and the package's contents and its Ogg warning; `scene.rs` and `audio.rs` test when a sound is heard and the WAV writer. In Apple's tools: `usdchecker` reports "Success!" for a `.usda` with sounds (audio written beside it) and for the `.usdz`, also with `--arkit`; `usdcat --flatten` reads the prims back as `SpatialAudio` with the written values; `usdtree` shows them under their layers; `usdzip --dump` lists the audio files at 64-byte offsets with equal stored and real sizes; `afinfo` reads the WAV files written from samples with the right format and length. `cargo test -p limner-export --test sound -- --ignored` reruns the tool checks. Files without sound layers come out byte for byte as before this was added (the fixture files and the owner's sample in every format were compared).
 - **FBX in an independent reader.** The pinned Godot build reads FBX through the ufbx library (`FBXDocument`). The fixture files (still, animated, baked, centimetres) and the sample load without errors. For the animated fixture it reports the same 6 mesh instances, 225 vertices, 334 triangles, 3 lights and 1 camera as for the `.glb` of the same scene; material slots arrive with the right names per surface; vertex colours arrive sRGB-encoded with their alpha; every triangle's winding agrees with its normals; the mirrored group has a negative determinant; lights and the camera point the same way as in the `.glb`, with the same field of view and clip planes; the centimetre variant arrives at the same size as the metre one. The keyed layer's translation, rotation and scale match the exporter's own samples on all 25 frames to four decimals, and the scale tracks switch the clip and the three frame-by-frame drawings on exactly the expected frames. The sample arrives with 948,032 triangles (Godot's importer merges identical vertices, so it counts 478,549 of the 485,292).
 
 Not verified:
 
-- The Khronos glTF validator has not been run on these files. The `gltf-validator` npm package is a library without a command-line entry, so it needs a three-line Node script around `validateBytes`; `cargo test -p limner-export --test fixtures -- --ignored` writes artwork-free files in every format to `local/out/export/` to feed it and the tools below.
+- **No sound has been played from an export.** Nothing has opened the `.usda` or `.usdz` in a player that plays `SpatialAudio` (AR Quick Look or RealityKit on a device, Omniverse). Whether players honour `mediaOffset`, the `...ToEnd` modes, time-sampled `gain` and `nonSpatial`, and how loud and how far a `spatial` sound carries without Limner's fall-off, is not known.
+
+- The Khronos glTF validator has not been run on these files. The `gltf-validator` npm package is a library without a command-line entry, so it needs a three-line Node script around `validateBytes`; `cargo test -p limner-export --test fixtures -- --ignored` writes artwork-free files in every format to `local/out/export/` to feed it and the tools below, including `fixture-sound.usda` (audio in `local/out/export/audio/`), `fixture-sound.usdz` and `fixture-sound.glb`, with two tones made in code.
 - **Blender, Unity and Unreal have not been run on any of these files** (Blender is not installed on the development Mac). The import steps for all formats, and the table of what each FBX importer does with units, are written from those tools' documented behaviour. The FBX files in particular have been read by one parser family only (ufbx, which recent Blender versions also use); Autodesk's FBX SDK, which Unity and Unreal use, has not read them. The writer omits two things the SDK itself writes and Blender's exporter copies, property templates in `Definitions` and `NodeAttribute` objects for empty nodes; readers are expected to fall back to defaults, and ufbx does.
 - **USD `orientation`.** That `rightHanded` is the correct value follows from USD's definition and is checked against the normals in the tests, but no renderer has confirmed it: `usdrecord` draws both sides of every face, so a wrong value would look the same there.
 - **USD in AR Quick Look and RealityKit.** `usdchecker --arkit` accepts the text-layer package, but nothing has been opened in Quick Look on a device. Whether it accepts a text root layer, and whether it shows vertex colours through a primvar reader, is not known.
