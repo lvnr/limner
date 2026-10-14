@@ -18,6 +18,7 @@ extends Node
 ##   -- --text <words>       write some text in strokes; a literal \n starts a new line
 ##   -- --render ...         render a camera to a video and quit; see godot/capture/render_job.gd
 ##   -- --static-dither      keep the dither pattern still (for repeatable screenshots)
+##   -- --scheme light|dark  use that colour scheme for this run, without saving it
 ##   -- --shot <file.png>    save a screenshot after a few frames, then quit
 ##   -- --bench <frames>     print the average frame time over that many frames, then quit
 

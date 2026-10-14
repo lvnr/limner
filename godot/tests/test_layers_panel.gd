@@ -74,3 +74,80 @@ func test_dropping_a_layer_on_a_group_moves_it_inside() -> void:
 	await frames(2)
 	check_eq(row_named("Paint").parent, int(group.layer), "parent after the drop")
 	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+## The names of the root's layers, in list order.
+func _order() -> Array:
+	var root := int(editor.get_info().root)
+	var names := []
+	for row: Dictionary in world.scene.layer_rows():
+		if row.parent != null and int(row.parent) == root:
+			names.append(row.name)
+	return names
+
+
+func test_dropping_two_layers_above_and_below_a_third_keeps_them_together() -> void:
+	var panel := await _panel()
+	var root := int(editor.get_info().root)
+	for layer_name: String in ["A", "B", "C"]:
+		run({"cmd": "add_layer", "kind": "group", "name": layer_name, "parent": root, "index": 0})
+	await frames(2)
+	# Added at the top one after another, so the list reads C, B, A, then the rest.
+	var a := int(row_named("A").id)
+	var b := int(row_named("B").id)
+	var c := int(row_named("C").id)
+	var rest := _order().slice(3)
+	check_eq(_order().slice(0, 3), ["C", "B", "A"], "the order to start with")
+
+	# B and C dropped on the lower edge of A: below it, in their own order.
+	var rect := panel._tree.get_item_area_rect(panel._items[a])
+	var below := Vector2(rect.get_center().x, rect.end.y - 2.0)
+	check_eq(panel._tree.get_drop_section_at_position(below), 1, "the lower edge of a row is below it")
+	panel._drop(below, {"limner_layers": [c, b]})
+	await frames(2)
+	check_eq(_order(), ["A", "C", "B"] + rest, "dropped below A")
+	check_eq(editor.status.undo_label, "Move layers", "as one step")
+
+	# And back above A, on its upper edge.
+	rect = panel._tree.get_item_area_rect(panel._items[a])
+	var above := Vector2(rect.get_center().x, rect.position.y + 2.0)
+	check_eq(panel._tree.get_drop_section_at_position(above), -1, "the upper edge of a row is above it")
+	panel._drop(above, {"limner_layers": [c, b]})
+	await frames(2)
+	check_eq(_order(), ["C", "B", "A"] + rest, "dropped above A")
+	editor.undo()
+	await frames(2)
+	check_eq(_order(), ["A", "C", "B"] + rest, "one undo takes back one drop")
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_the_context_menu_is_for_the_row_clicked() -> void:
+	var panel := await _panel()
+	var light: Dictionary = run({"cmd": "add_layer", "kind": "light", "name": "Lamp"})
+	var paint := int(row_named("Paint").id)
+	run({"cmd": "select_layers", "layers": [paint]})
+	await frames(2)
+	check_eq(editor.current_layer(), paint, "the paint layer is current")
+
+	# A right click on the light: the click selects it, and in the same frame the
+	# menu is built.
+	var lamp: TreeItem = panel._items[int(light.layer)]
+	panel._updating = true
+	panel._items[paint].deselect(0)
+	lamp.select(0)
+	panel._updating = false
+	panel._on_item_mouse_selected(panel._tree.get_item_area_rect(lamp).get_center(), MOUSE_BUTTON_RIGHT)
+	check_eq(editor.current_layer(), int(light.layer), "the light is current at once")
+	check_eq(panel._context.get_item_index(LayersPanel.Menu.MERGE), -1, "a light's menu has no Merge down, which a paint layer's has")
+	check(panel._context.get_item_index(LayersPanel.Menu.FLIP_X) >= 0, "and has what a light has")
+	panel._context.hide()
+
+	# And back to the paint layer.
+	panel._updating = true
+	lamp.deselect(0)
+	panel._items[paint].select(0)
+	panel._updating = false
+	panel._on_item_mouse_selected(panel._tree.get_item_area_rect(panel._items[paint]).get_center(), MOUSE_BUTTON_RIGHT)
+	check(panel._context.get_item_index(LayersPanel.Menu.MERGE) >= 0, "the paint layer's menu has Merge down")
+	panel._context.hide()
+	check(messages.is_empty(), "no errors: %s" % [messages])

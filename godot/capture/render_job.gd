@@ -114,6 +114,21 @@ static func parse(arguments: PackedStringArray) -> Dictionary:
 	return options
 
 
+## The frame rate Movie Maker writes at in this process: Godot's `--fixed-fps`
+## among `arguments` (it takes whole numbers only), or else the project's movie rate.
+static func movie_fps(arguments := OS.get_cmdline_args()) -> int:
+	var at := arguments.find("--fixed-fps")
+	if at >= 0 and at + 1 < arguments.size() and arguments[at + 1].is_valid_int():
+		return maxi(1, int(arguments[at + 1]))
+	return maxi(1, int(ProjectSettings.get_setting("editor/movie_writer/fps", 60)))
+
+
+## How fast sound must play for a video written at `movie` frames a second, one
+## frame of sound each, to stay with a playhead that steps `1 / fps` seconds a frame.
+static func sound_speed(movie: int, fps: float) -> float:
+	return float(movie) / fps
+
+
 ## Starts the job described by the command-line arguments after `--render`.
 func start(arguments: PackedStringArray) -> void:
 	# The settings a launcher left for this process were read when it started.
@@ -224,6 +239,11 @@ func _start_rendering(info: Dictionary) -> void:
 	RenderingServer.canvas_item_add_texture_rect(_screen, Rect2(Vector2.ZERO, Vector2(_size)), _picture.get_rid())
 
 	AudioServer.set_bus_mute(0, not _options.sound)
+	# Movie Maker takes one frame's worth of sound at its own whole-number rate for
+	# every frame, while the job steps the playhead at the document's exact rate. At
+	# 23.976 frames a second in a file labelled 24 the picture would run 0.1% ahead of
+	# the sound; played that much faster, the sound keeps up (by 1.7 cents of pitch).
+	AudioServer.playback_speed_scale = sound_speed(movie_fps(), _fps)
 	world.scene.exec({"cmd": "pause"})
 	world.scene.exec({"cmd": "set_options", "values": {"loop_range": false}})
 	_capture = LimnerCapture.of(editor)

@@ -72,6 +72,8 @@ var button_map: XRPanelSurface
 var over_panel := false
 
 var _preferences: Preferences
+## The line of text shown on the desktop window while the headset is in use.
+var _mirror_hint: Label
 var _markers: Array[XRControllerModel] = []
 var _cursor_holder: Node3D
 ## True from a pull of the trigger (or grip) over a panel until it is let go, so that
@@ -93,6 +95,8 @@ static func is_available() -> bool:
 
 func _ready() -> void:
 	_preferences = Preferences.shared()
+	# The panels' colour scheme follows the preference; each panel re-themes itself.
+	Kit.follow_preferences()
 	var arguments := OS.get_cmdline_user_args()
 	var note := ""
 	if mode == "headset" or (mode == "auto" and not arguments.has("--sim")):
@@ -114,7 +118,12 @@ func _ready() -> void:
 		world.add_child(rig)
 	rig.attention_changed.connect(_on_attention_changed)
 	rig.recentred.connect(_on_recentred)
-	rig.closed.connect(func() -> void: get_tree().quit())
+	# The headset's system ends the session (the user quit from its menu): there is no
+	# moment left to ask about unsaved work, so it is kept for the next start.
+	rig.closed.connect(func() -> void:
+		keep_unsaved_work()
+		get_tree().quit()
+	)
 
 	for side in 2:
 		rig.grips[side].add_child(XRControllerModel.handle())
@@ -150,6 +159,13 @@ func _ready() -> void:
 	palette.editor = editor
 	rig.add_child(palette)
 	palette.button_map_requested.connect(toggle_button_map)
+	var document_panel := palette.surfaces.get("Document") as XRPanelSurface
+	if document_panel != null and document_panel.content.has_signal("document_opened"):
+		# A Quill project opened from the panel has no view of its own: it is framed.
+		document_panel.content.connect("document_opened", func(native: bool) -> void:
+			if not native:
+				frame_all()
+		)
 	pointer = XRPointer.new()
 	pointer.name = "Pointer"
 	rig.add_child(pointer)
@@ -378,6 +394,8 @@ func _show_mirror_hint(text: String) -> void:
 	hint.theme = Kit.make_theme()
 	hint.add_theme_font_size_override("font_size", 13)
 	hint.add_theme_stylebox_override("normal", Kit._box(Kit.BG_SUNKEN, 6, 1, Kit.BORDER, 8))
+	_mirror_hint = hint
+	Kit.events.scheme_changed.connect(_on_scheme_changed)
 	hint.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	hint.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	hint.grow_vertical = Control.GROW_DIRECTION_BEGIN
@@ -386,7 +404,28 @@ func _show_mirror_hint(text: String) -> void:
 	layer.add_child(hint)
 
 
+## The colour scheme changed. The panels in the room re-theme themselves; the line of
+## text on the desktop window is this shell's own.
+func _on_scheme_changed() -> void:
+	if _mirror_hint != null:
+		Kit.apply_theme(_mirror_hint)
+
+
 func _recover() -> void:
 	var title := str(Autosave.pending().get("title", "Untitled"))
 	if autosave.recover():
 		editor.message.emit("Recovered unsaved work on %s. Save it to keep it." % title, false)
+
+
+## Copies unsaved work aside for the next start, which opens it again. For quitting
+## when nobody can be asked: the session ended by the headset's system, or the desktop
+## window closed while someone works in the headset. Returns whether there was any.
+func keep_unsaved_work() -> bool:
+	return autosave != null and autosave.keep_for_next_time()
+
+
+func _notification(what: int) -> void:
+	# The window on the desktop is only a mirror; closing it quits at once (Godot does
+	# that by itself here), so whatever is unsaved is kept first.
+	if what == NOTIFICATION_WM_CLOSE_REQUEST and started:
+		keep_unsaved_work()

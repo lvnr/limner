@@ -451,3 +451,39 @@ func test_sound_shapes_are_told_apart() -> void:
 	check_eq(PropertiesPanel._sound_shape({"frustum": {"inner_h": 0.6, "inner_v": 0.4, "band": 0.1, "outside": 0.0}}), "frustum", "a frustum")
 	check_eq(PropertiesPanel._dig({"attenuation": {"min": 0.25}}, "attenuation.min"), 0.25, "a setting inside another")
 	check_eq(PropertiesPanel._dig({"modifier": "none"}, "modifier.cone.inner"), null, "a setting that is not there")
+
+
+func test_every_cone_and_frustum_control_changes_the_sound() -> void:
+	var panel := await _panel()
+	var folder := LayerTestKit.scratch_dir()
+	var sound := editor.import_file(LayerTestKit.wav(folder.path_join("tone.wav"), 0.2, 1))
+	check(sound >= 0, "a sound layer to work on")
+	if sound < 0:
+		return
+	run({"cmd": "select_layers", "layers": [sound]})
+	await frames(2)
+	check_eq(_shown_sections(panel), ["sound"], "sections for a sound")
+	var direction: OptionButton = panel._controls["sound.direction"]
+	var degrees := 180.0 / PI
+	# Each control, what it is dragged to, and what that is stored as.
+	var cases := {
+		"cone": [["inner", 40.0, 40.0 / degrees], ["band", 12.0, 12.0 / degrees], ["outside", 25.0, 0.25]],
+		"frustum": [["inner_h", 50.0, 50.0 / degrees], ["inner_v", 30.0, 30.0 / degrees], ["band", 8.0, 8.0 / degrees], ["outside", 60.0, 0.6]],
+	}
+	for shape: String in cases:
+		await _choose(direction, shape.capitalize())
+		check(_props(sound).modifier is Dictionary and (_props(sound).modifier as Dictionary).has(shape), "the sound has a %s" % shape)
+		for entry: Array in cases[shape]:
+			var field: String = entry[0]
+			var slider: SliderField = panel._controls["sound.modifier.%s.%s" % [shape, field]]
+			check(slider.is_visible_in_tree(), "the %s %s control is shown" % [shape, field])
+			var before: Dictionary = (_props(sound).modifier as Dictionary)[shape].duplicate()
+			await _drag(slider, [entry[1] * 0.5, entry[1]])
+			var after: Dictionary = (_props(sound).modifier as Dictionary)[shape]
+			check_near(float(after[field]), float(entry[2]), "dragging the %s %s control stores it" % [shape, field])
+			for other: String in before:
+				if other != field:
+					check_near(float(after[other]), float(before[other]), "and leaves the %s's %s alone" % [shape, other])
+			check_eq(editor.status.undo_label, "Change layer settings", "the drag is one step")
+	check(messages.is_empty(), "no errors: %s" % [messages])
+	LayerTestKit.remove(folder)

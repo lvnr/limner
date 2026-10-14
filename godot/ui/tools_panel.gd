@@ -265,7 +265,7 @@ func _controls_for(tool: String) -> Array:
 			return [
 				_fraction(tool, "strength", "Strength", STRENGTH_NOTE),
 				_size(tool),
-				_hint("Hold the modifier to thin instead: Alt on the desktop, the other hand's trigger in a headset."),
+				_hint("Hold the modifier to thin instead: Shift on the desktop, the other hand's trigger in a headset."),
 			]
 		"optimize":
 			return [

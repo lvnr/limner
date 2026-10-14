@@ -129,6 +129,7 @@ func _ready() -> void:
 	_message.outline_modulate = Color(Kit.BG_SUNKEN, 1.0)
 	_message.visible = false
 	add_child(_message)
+	Kit.events.scheme_changed.connect(_on_scheme_changed)
 
 	editor.document_changed.connect(_wake_all)
 	editor.state_changed.connect(_wake_all)
@@ -205,9 +206,19 @@ func touchable() -> Array[XRPanelSurface]:
 ## Shows a line of text above the palette for a few seconds.
 func show_message(text: String, is_problem := false) -> void:
 	_message.text = text
-	_message.modulate = Kit.DANGER.lightened(0.35) if is_problem else Kit.TEXT
+	_message.modulate = Kit.DANGER_TEXT if is_problem else Kit.TEXT
+	_message.outline_modulate = Color(Kit.BG_SUNKEN, _message.outline_modulate.a)
+	_message.set_meta("problem", is_problem)
 	_message_time = PROBLEM_SECONDS if is_problem else MESSAGE_SECONDS
 	_message.visible = true
+
+
+## The colour scheme changed: the message above the palette takes the new colours.
+## The panels re-theme themselves.
+func _on_scheme_changed() -> void:
+	var alpha := _message.modulate.a
+	_message.modulate = Color(Kit.DANGER_TEXT if _message.get_meta("problem", false) else Kit.TEXT, alpha)
+	_message.outline_modulate = Color(Kit.BG_SUNKEN, _message.outline_modulate.a)
 
 
 ## The message showing now, or an empty string.
@@ -309,7 +320,7 @@ func _layout() -> void:
 	for title: String in _strip.buttons:
 		var tab: Button = _strip.buttons[title]
 		var is_pinned_tab := _pinned.has(title)
-		tab.icon = Icons.texture(_icons[title], Kit.ACCENT.lightened(0.35) if is_pinned_tab else Kit.TEXT, 20)
+		tab.icon = Icons.texture(_icons[title], Kit.ACCENT_TEXT if is_pinned_tab else Kit.TEXT, 20)
 		tab.tooltip_text = "%s (pinned in the room; press to bring it back)" % title if is_pinned_tab else title
 	tabs.wake()
 

@@ -88,10 +88,33 @@ static func pending() -> Dictionary:
 	return {"path": "", "native": false, "title": "Untitled", "time": ""}
 
 
+## True once the copy from last time (if there was one) has been recovered,
+## discarded or set aside: from then on copies are written and cleared as usual.
+func is_settled() -> bool:
+	return _settled
+
+
+## The app is about to close without asking, as when the headset's system ends the
+## session: unsaved work is copied now, to be offered again at the next start.
+## Returns whether there was any.
+func keep_for_next_time() -> bool:
+	if not _settled or not editor.scene.status().dirty:
+		return false
+	return save_now()
+
+
 ## Gives up the copy from last time.
 func discard() -> void:
 	clear()
 	_settled = true
+
+
+## The app is quitting on purpose, with nothing unsaved or with the user having said
+## not to save. The copy is removed, unless it is one from last time that the user
+## has not answered for yet: that is offered again at the next start.
+func quitting() -> void:
+	if _settled:
+		clear()
 
 
 ## Puts the copy from last time aside under a name of its own, where File > Open can
@@ -113,12 +136,17 @@ func recover() -> bool:
 	var note := pending()
 	if note.is_empty():
 		return false
-	_settled = true
+	# Opening announces a new, clean document at once, before it is marked as
+	# edited below. Until then the copy must stay unsettled, or it would be cleared
+	# away as "safe" and a second bad ending would lose the work.
+	_settled = false
 	if not editor.open_document(ProjectSettings.globalize_path(DOCUMENT)):
-		_settled = false
 		return false
 	# It is the unsaved state of that document, not a document of its own.
 	editor.path = str(note.get("path", ""))
 	editor.path_is_native = bool(note.get("native", false)) and editor.path != ""
 	editor.scene.mark_edited()
+	_settled = true
+	# The copy stays where it is, and is the recovered work until it is saved.
+	_since_last = 0.0
 	return true

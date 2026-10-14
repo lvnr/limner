@@ -4,7 +4,6 @@ extends VBoxContainer
 ## be typed, and the options and commands of Quill's Transform toolbox.
 
 const AXES := ["X", "Y", "Z"]
-const AXIS_COLORS := [Color(0.94, 0.45, 0.43), Color(0.52, 0.80, 0.44), Color(0.45, 0.65, 0.99)]
 const AUTO_SELECT := ["none", "layer", "group"]
 ## What a layer's placement is when nothing has moved it.
 const IDENTITY := {"rotation": [0.0, 0.0, 0.0, 1.0], "scale": 1.0, "translation": [0.0, 0.0, 0.0], "flip": "none"}
@@ -197,7 +196,7 @@ func _axis_fields(what: String, on_committed: Callable) -> Array[NumberField]:
 	var line := Kit.row()
 	for axis in 3:
 		var letter := Kit.label(AXES[axis])
-		letter.add_theme_color_override("font_color", AXIS_COLORS[axis])
+		letter.add_theme_color_override("font_color", [Kit.AXIS_X, Kit.AXIS_Y, Kit.AXIS_Z][axis])
 		line.add_child(letter)
 		var field := NumberField.new("%s %s" % [what, AXES[axis]])
 		# Three boxes share the row: slightly smaller figures let six digits fit.

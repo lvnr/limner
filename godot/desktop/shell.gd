@@ -70,6 +70,10 @@ var _edit_menu: PopupMenu
 var _file_dialog: FileDialog
 var _dragging := false
 var _panning := false
+## How many thumbnails are being taken now, and whether the panels were shown before
+## the first of them hid them.
+var _thumbnails_taken := 0
+var _ui_shown_before_thumbnail := true
 
 
 func _ready() -> void:
@@ -125,6 +129,9 @@ func _build_interface() -> void:
 	add_child(layer)
 	ui = Control.new()
 	ui.name = "Root"
+	# The colour scheme follows the preference, and a change of it re-themes the panels at once.
+	Kit.follow_preferences()
+	Kit.events.scheme_changed.connect(_on_scheme_changed)
 	ui.theme = Kit.make_theme()
 	ui.set_anchors_preset(Control.PRESET_FULL_RECT)
 	ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -168,11 +175,17 @@ func _build_interface() -> void:
 	details = TabContainer.new()
 	details.name = "Details"
 	details.custom_minimum_size = Vector2(0, 330)
+	# Its File section opens documents too; a Quill project is framed as File > Open does.
+	var document := DocumentPanel.new(editor)
+	document.document_opened.connect(func(native: bool) -> void:
+		if not native:
+			frame_all()
+	)
 	# Tabs show an icon; the panel's name is the tooltip.
 	for entry: Array in [
 		[TransformPanel.new(editor), "move"],
 		[PropertiesPanel.new(editor), "paint_layer"],
-		[DocumentPanel.new(editor), "new_file"],
+		[document, "new_file"],
 		[ExportPanel.new(editor), "export"],
 		[MonitorPanel.new(editor), "film"],
 		[PerformancePanel.new(editor), "chart"],
@@ -201,6 +214,12 @@ func _build_interface() -> void:
 	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_file_dialog.use_native_dialog = true
 	ui.add_child(_file_dialog)
+
+
+## The colour scheme changed: the theme is made again in the new colours and handed to
+## everything that had the old one, and what was built in the old colours follows.
+func _on_scheme_changed() -> void:
+	Kit.apply_theme(ui)
 
 
 ## The Settings panel. Its "Show button map" opens the sheet of what every control
@@ -350,7 +369,7 @@ func _refresh() -> void:
 ## Shows a short message at the bottom of the view for a few seconds.
 func show_message(text: String, is_error := false) -> void:
 	_toast.text = text
-	_toast.add_theme_color_override("font_color", Kit.DANGER.lightened(0.3) if is_error else Kit.TEXT)
+	_toast.add_theme_color_override("font_color", Kit.DANGER_TEXT if is_error else Kit.TEXT)
 	_toast.visible = true
 	_toast.modulate.a = 1.0
 	_toast_timer = 4.0 if is_error else 2.5
@@ -394,9 +413,10 @@ func _notification(what: int) -> void:
 		_after_saving_changes(_quit)
 
 
-## Quits on purpose: whatever is unsaved now was given up knowingly.
+## Quits on purpose: whatever is unsaved now was given up knowingly. A copy from last
+## time that the recovery question has not been answered for is kept for next time.
 func _quit() -> void:
-	autosave.discard()
+	autosave.quitting()
 	get_tree().quit()
 
 
@@ -480,11 +500,19 @@ func _save_to(path: String) -> void:
 
 ## A small picture of the view without the panels, as PNG data.
 func _thumbnail() -> PackedByteArray:
-	var was_visible := ui.visible
-	ui.visible = false
+	# Two saves in one frame each take a picture. Only the first hides the panels
+	# and only the last shows them again, so that the second does not take "hidden"
+	# for how the panels were and leave them that way.
+	if _thumbnails_taken == 0:
+		_ui_shown_before_thumbnail = ui.visible
+		ui.visible = false
+	_thumbnails_taken += 1
 	await RenderingServer.frame_post_draw
-	var image := get_viewport().get_texture().get_image()
-	ui.visible = was_visible
+	# Without a display (an automated run) there is no picture to read.
+	var image: Image = get_viewport().get_texture().get_image() if LimnerCapture.can_render() else null
+	_thumbnails_taken -= 1
+	if _thumbnails_taken == 0:
+		ui.visible = _ui_shown_before_thumbnail
 	if image == null or image.is_empty():
 		return PackedByteArray()
 	image.resize(512, maxi(1, roundi(512.0 * image.get_height() / image.get_width())), Image.INTERPOLATE_LANCZOS)
@@ -663,6 +691,9 @@ func _on_key(event: InputEventKey) -> void:
 
 
 func _scale_tool_size(factor: float) -> void:
+	# Several wheel steps can arrive in one frame, before the signals of the first
+	# have refreshed the settings: each step starts from the size the last one left.
+	editor.catch_up()
 	var tools := editor.get_tools()
 	var tool: String = tools.tool
 	editor.set_tool_setting(tool, "size", clampf(tools[tool].size * factor, 0.0005, 0.5))

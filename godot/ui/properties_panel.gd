@@ -21,6 +21,9 @@ const KIND_NAMES := {
 ## Height in millimetres of the film that focal lengths are quoted for.
 const SENSOR_HEIGHT := 24.0
 const SOUND_SHAPES := ["none", "cone", "frustum"]
+## Settings the document takes only whole (a sound's direction is one shape or the
+## other): a control for one field inside them sends all of it.
+const WHOLE_FIELDS := ["modifier"]
 ## What a sound's cone or frustum starts as: Quill's own starting angles, in radians.
 const SOUND_SHAPE_DEFAULTS := {
 	"cone": {"inner": 0.5, "band": 0.1, "outside": 0.0},
@@ -191,10 +194,29 @@ func _prop(path: String) -> Variant:
 func _write(path: String, value: Variant) -> void:
 	var keys := path.split(".")
 	var values: Variant = value
-	for i in range(keys.size() - 1, -1, -1):
-		values = {keys[i]: values}
+	var current: Variant = _prop(keys[0]) if keys.size() > 1 and WHOLE_FIELDS.has(keys[0]) else null
+	if current is Dictionary:
+		# The document replaces such a setting whole, so one field of it is changed in
+		# a copy of all of it and the copy is sent.
+		var whole: Dictionary = (current as Dictionary).duplicate(true)
+		_put(whole, keys.slice(1), value)
+		values = {keys[0]: whole}
+	else:
+		for i in range(keys.size() - 1, -1, -1):
+			values = {keys[i]: values}
 	if editor.run({"cmd": "set_layer_kind", "layer": _layer, "values": values}) == null:
 		refresh()
+
+
+## Sets the value at the path `keys` inside `target`, making the dictionaries on the
+## way when they are missing.
+static func _put(target: Dictionary, keys: PackedStringArray, value: Variant) -> void:
+	var place := target
+	for i in keys.size() - 1:
+		if not (place.get(keys[i]) is Dictionary):
+			place[keys[i]] = {}
+		place = place[keys[i]]
+	place[keys[keys.size() - 1]] = value
 
 
 func _on_renamed(text: String) -> void:

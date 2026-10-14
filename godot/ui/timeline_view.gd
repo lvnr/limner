@@ -31,8 +31,8 @@ const SCROLL_SPEED_MAX := 5000.0
 ## Pixels a unit of a trackpad's two-finger pan moves the view. Godot on macOS makes
 ## a unit of about 33 points of finger travel, so that the content follows the fingers.
 const PAN_PIXELS := 33.0
-const PLAYHEAD := Color(1.0, 0.58, 0.12)
-const CHOSEN := Color(1.0, 0.85, 0.32)
+## The colour of each kind of layer's clips. They are strong enough to read on the
+## tracks of either colour scheme; what is drawn over them is white.
 const KIND_COLORS := {
 	"paint": Color(0.22, 0.40, 0.72),
 	"group": Color(0.40, 0.42, 0.50),
@@ -298,7 +298,7 @@ func _draw() -> void:
 		_draw_name(index, rows[index], font)
 	draw_rect(Rect2(0.0, area.end.y, size.x, BAR), Kit.BG_SUNKEN)
 	_draw_ruler(area, from, to, font)
-	draw_rect(Rect2(0.0, 0.0, names_width, RULER), Kit.BG_RAISED.darkened(0.3))
+	draw_rect(Rect2(0.0, 0.0, names_width, RULER), Kit.RULER)
 	draw_string(font, Vector2(8.0, RULER * 0.5 + 4.0), "%d layers" % rows.size(), HORIZONTAL_ALIGNMENT_LEFT, names_width - 12.0, 11, Kit.TEXT_DIM)
 	draw_line(Vector2(names_width - 0.5, 0.0), Vector2(names_width - 0.5, size.y), Kit.BORDER)
 	draw_line(Vector2(0.0, RULER - 0.5), Vector2(size.x, RULER - 0.5), Kit.BORDER)
@@ -312,8 +312,8 @@ func _draw_track(index: int, row: Dictionary, area: Rect2, from: int, to: int, f
 	elif row.selected:
 		draw_rect(Rect2(area.position.x, top, area.size.x, ROW), Color(Kit.ACCENT, 0.07))
 	elif index % 2 == 1:
-		draw_rect(Rect2(area.position.x, top, area.size.x, ROW), Color(1.0, 1.0, 1.0, 0.02))
-	draw_line(Vector2(area.position.x, top + ROW - 0.5), Vector2(area.end.x, top + ROW - 0.5), Color(0.0, 0.0, 0.0, 0.25))
+		draw_rect(Rect2(area.position.x, top, area.size.x, ROW), Kit.ROW_ALT)
+	draw_line(Vector2(area.position.x, top + ROW - 0.5), Vector2(area.end.x, top + ROW - 0.5), Kit.ROW_LINE)
 	var line: Dictionary = panel.timeline.get(id, {})
 	if line.is_empty():
 		return
@@ -347,7 +347,7 @@ func _draw_track(index: int, row: Dictionary, area: Rect2, from: int, to: int, f
 			"paint":
 				_draw_frames(id, line, clip, bar, start, end, from, to, fill)
 		if chosen:
-			draw_rect(bar.grow(-0.5), Color.WHITE, false, 2.0)
+			draw_rect(bar.grow(-0.5), Kit.INK, false, 2.0)
 		elif not is_root:
 			draw_rect(bar.grow(-0.5), fill.darkened(0.5), false, 1.0)
 			# The grips at the ends, where a clip is trimmed.
@@ -496,8 +496,8 @@ func _draw_frames(id: int, line: Dictionary, clip: Dictionary, bar: Rect2, start
 			if width >= 10.0 and x >= bar.position.x:
 				draw_line(Vector2(x + 0.5, bar.position.y + 7.0), Vector2(x + 0.5, bar.end.y - 7.0), Color(0.0, 0.0, 0.0, 0.2 * strength), 1.0)
 		if number == current:
-			draw_rect(cell, Color(PLAYHEAD, 0.55))
-			draw_rect(cell.grow(-1.0), PLAYHEAD, false, 2.0)
+			draw_rect(cell, Color(Kit.PLAYHEAD, 0.55))
+			draw_rect(cell.grow(-1.0), Kit.PLAYHEAD, false, 2.0)
 	if not loops:
 		# After the last frame, a layer that plays once goes on showing it.
 		var tail := maxf(x_of(zero + count * duration), bar.position.x)
@@ -539,6 +539,9 @@ func _draw_opacity_keys(id: int, line: Dictionary, top: float, area: Rect2, from
 	if last == keys.size() - 1 and x_before < area.end.x:
 		curve.append(Vector2(area.end.x, y_before))
 	if curve.size() >= 2:
+		# Keys and the curve between them sit over clips of any colour and over the bare
+		# tracks of either scheme: white, edged with a dark line, reads on all of them.
+		draw_polyline(curve, Color(0.0, 0.0, 0.0, 0.3 if active else 0.16), 3.0, true)
 		draw_polyline(curve, Color(1.0, 1.0, 1.0, 0.6 if active else 0.32), 1.0, true)
 	var drawn := -100.0
 	for number in range(first, last + 1):
@@ -551,7 +554,7 @@ func _draw_opacity_keys(id: int, line: Dictionary, top: float, area: Rect2, from
 		drawn = at.x
 		if is_chosen:
 			draw_circle(at, 5.5, Color.WHITE)
-			draw_circle(at, 4.0, CHOSEN)
+			draw_circle(at, 4.0, Kit.CHOSEN)
 		else:
 			draw_circle(at, 4.2, Color(0.0, 0.0, 0.0, 0.7))
 			draw_circle(at, 3.0, Color(1.0, 1.0, 1.0, 1.0 if active else 0.6))
@@ -612,7 +615,7 @@ func _draw_transform_keys(id: int, line: Dictionary, top: float, from: int, to: 
 		drawn = x
 		if is_chosen:
 			_draw_diamond(Vector2(x, middle), 7.5, Color.WHITE)
-			_draw_diamond(Vector2(x, middle), 5.5, CHOSEN)
+			_draw_diamond(Vector2(x, middle), 5.5, Kit.CHOSEN)
 		else:
 			_draw_diamond(Vector2(x, middle), 6.5, Color(0.0, 0.0, 0.0, 0.75))
 			_draw_diamond(Vector2(x, middle), 4.8, Color(1.0, 1.0, 1.0, 1.0 if active else 0.6))
@@ -654,7 +657,7 @@ func _draw_marks(id: int, line: Dictionary, top: float, from: int, to: int, font
 		draw_line(Vector2(x + 0.5, top + 2.0), Vector2(x + 0.5, top + ROW - 2.0), color, 2.0)
 		draw_rect(flag, color)
 		if chosen.has(time):
-			draw_rect(flag.grow(1.5), Color.WHITE, false, 2.0)
+			draw_rect(flag.grow(1.5), Kit.INK, false, 2.0)
 		draw_string(font, Vector2(x + 2.5, top + 13.5), MARK_LETTERS.get(mark.action, "?"), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11, Color(0.05, 0.05, 0.07))
 
 
@@ -678,7 +681,7 @@ func _draw_mark_lines(area: Rect2, from: int, to: int) -> void:
 func _draw_range_shade(area: Rect2) -> void:
 	var start := clampf(x_of(int(panel.info.get("range_start", 0))), area.position.x, area.end.x)
 	var end := clampf(x_of(int(panel.info.get("range_end", 0))), area.position.x, area.end.x)
-	var shade := Color(0.0, 0.0, 0.0, 0.28)
+	var shade := Kit.RANGE_SHADE
 	if start > area.position.x:
 		draw_rect(Rect2(area.position.x, area.position.y, start - area.position.x, area.size.y), shade)
 	if end < area.end.x:
@@ -690,16 +693,16 @@ func _draw_range_shade(area: Rect2) -> void:
 
 func _draw_name(index: int, row: Dictionary, font: Font) -> void:
 	var top := row_top(index)
-	var back := Kit.BG_RAISED.darkened(0.22)
+	var back := Kit.NAMES
 	if row.current:
-		back = Kit.ACCENT.darkened(0.25)
+		back = Kit.SELECTION
 	elif row.selected:
-		back = Kit.ACCENT.darkened(0.55)
+		back = Kit.SELECTION_SOFT
 	draw_rect(Rect2(0.0, top, names_width, ROW), back)
-	draw_line(Vector2(0.0, top + ROW - 0.5), Vector2(names_width, top + ROW - 0.5), Color(0.0, 0.0, 0.0, 0.3))
+	draw_line(Vector2(0.0, top + ROW - 0.5), Vector2(names_width, top + ROW - 0.5), Kit.ROW_LINE)
 	var color := Kit.TEXT if row.shown else Kit.TEXT_DIM
 	if row.current:
-		color = Color.WHITE
+		color = Kit.TEXT_ON_SELECTION
 	var x := 5.0 + int(row.depth) * INDENT
 	var middle := top + ROW * 0.5
 	if int(row.children) > 0:
@@ -720,7 +723,7 @@ func _draw_name(index: int, row: Dictionary, font: Font) -> void:
 
 func _draw_ruler(area: Rect2, from: int, to: int, font: Font) -> void:
 	var foot := RULER - RANGE_BAND
-	draw_rect(Rect2(names_width, 0.0, size.x - names_width, RULER), Kit.BG_RAISED.darkened(0.3))
+	draw_rect(Rect2(names_width, 0.0, size.x - names_width, RULER), Kit.RULER)
 	draw_rect(Rect2(names_width, foot, size.x - names_width, RANGE_BAND), Kit.BG_SUNKEN)
 
 	# Ticks: frames when they are far enough apart, then seconds, then labelled steps.
@@ -743,7 +746,7 @@ func _draw_ruler(area: Rect2, from: int, to: int, font: Font) -> void:
 				ticks.append(Vector2(x + 0.5, foot))
 				var in_second := frame - axis.frame_at(TimelineScale.FLICKS * floori(float(time) / TimelineScale.FLICKS))
 				if frame_width * every >= 34.0 and in_second % every == 0 and in_second != 0 and in_second + every * 0.5 < per_second:
-					draw_string(font, Vector2(x + 4.0, 12.5), "%02d" % in_second, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, Kit.TEXT_DIM.darkened(0.2))
+					draw_string(font, Vector2(x + 4.0, 12.5), "%02d" % in_second, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, Kit.TEXT_DIM.lerp(Kit.RULER, 0.2))
 			frame += 1
 	var step := 3600
 	for candidate: int in [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]:
@@ -767,13 +770,13 @@ func _draw_ruler(area: Rect2, from: int, to: int, font: Font) -> void:
 				ticks.append(Vector2(x + 0.5, foot))
 			second += minor
 	if ticks.size() >= 2:
-		draw_multiline(ticks, Color(1.0, 1.0, 1.0, 0.28), 1.0)
+		draw_multiline(ticks, Color(Kit.INK, 0.28), 1.0)
 	@warning_ignore("integer_division")
 	var second := first_second / step * step
 	while second <= last_second:
 		var x := x_of(second * TimelineScale.FLICKS)
 		if x >= names_width - 40.0:
-			draw_line(Vector2(x + 0.5, 3.0), Vector2(x + 0.5, foot), Color(1.0, 1.0, 1.0, 0.5), 1.0)
+			draw_line(Vector2(x + 0.5, 3.0), Vector2(x + 0.5, foot), Color(Kit.INK, 0.5), 1.0)
 			draw_string(font, Vector2(x + 6.0, 13.0), clock_text(second), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11, Kit.TEXT)
 		second += step
 
@@ -786,7 +789,7 @@ func _draw_ruler(area: Rect2, from: int, to: int, font: Font) -> void:
 	var right := clampf(end_x, names_width, area.end.x)
 	if right > left:
 		draw_rect(Rect2(left, foot + 2.0, right - left, RANGE_BAND - 4.0), Color(Kit.ACCENT, 0.6))
-	var grip := Kit.ACCENT.lightened(0.45)
+	var grip := Kit.ACCENT_TEXT.lerp(Kit.INK, 0.25)
 	if start_x >= names_width - 1.0 and start_x <= area.end.x:
 		draw_rect(Rect2(start_x, foot, 3.0, RANGE_BAND), grip)
 		draw_rect(Rect2(start_x, foot, 7.0, 2.5), grip)
@@ -814,9 +817,9 @@ func _draw_overlay() -> void:
 	if x < names_width - 0.5 or x > area.end.x:
 		return
 	x = roundf(x) + 0.5
-	_overlay.draw_line(Vector2(x, 0.0), Vector2(x, area.end.y), PLAYHEAD, 1.5)
+	_overlay.draw_line(Vector2(x, 0.0), Vector2(x, area.end.y), Kit.PLAYHEAD, 1.5)
 	var handle := PackedVector2Array([Vector2(x - 5.5, 0.0), Vector2(x + 5.5, 0.0), Vector2(x + 5.5, 8.0), Vector2(x, 14.0), Vector2(x - 5.5, 8.0)])
-	_overlay.draw_colored_polygon(handle, PLAYHEAD)
+	_overlay.draw_colored_polygon(handle, Kit.PLAYHEAD)
 
 
 ## Index of the first entry of `keys` (sorted by time) at or after `time`.

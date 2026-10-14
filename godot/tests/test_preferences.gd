@@ -97,7 +97,7 @@ func test_the_settings_panel_edits_the_preferences() -> void:
 	check_eq(panel._autosave._value.text, "off", "and says so")
 	panel._autosave.slider.value = 12.0
 	check_eq(panel._autosave._value.text, "12 min", "or set in minutes")
-	check_eq(panel._theme.item_count, 1, "only the dark scheme is offered")
+	check_eq(panel._theme.item_count, 2, "the dark and the light scheme are offered")
 	# A change made elsewhere shows in the panel.
 	preferences.set_value("dominant_hand", "right")
 	preferences.set_value("ui_volume", 0.9)

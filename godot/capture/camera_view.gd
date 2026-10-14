@@ -29,6 +29,9 @@ var _preview_end := 0.0
 func _init(limner_editor: LimnerEditor) -> void:
 	editor = limner_editor
 	name = "CameraView"
+	# Layer ids start again in every document: the camera followed is gone with the
+	# document it was in, and an id that lives on would name some unrelated layer.
+	editor.document_replaced.connect(stop)
 
 
 ## The camera view that goes with `editor`, made the first time it is asked for.

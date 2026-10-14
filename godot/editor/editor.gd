@@ -91,6 +91,14 @@ func refresh() -> void:
 	_state_stale = true
 
 
+## Brings `status` and the cached rows, info and settings up to date now. The change
+## signals of a command arrive only on the next frame; code that runs a command and
+## then reads what it did, within the same frame, calls this in between.
+func catch_up() -> void:
+	status = scene.status()
+	refresh()
+
+
 func get_rows() -> Array:
 	if _rows_stale:
 		rows = scene.layer_rows()

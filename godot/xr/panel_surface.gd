@@ -114,12 +114,11 @@ func _init(surface_title: String, panel: Control, width: int, body_height := 0, 
 	viewport.gui_embed_subwindows = true
 	add_child(viewport)
 	_root = PanelContainer.new()
-	var theme := Kit.make_theme()
 	# A pop-up panel (a colour picker, say) opens over the panel it belongs to, not
-	# as a window of its own, so it needs a solid back of its own.
-	theme.set_stylebox("panel", "PopupPanel", Kit._box(Color(Kit.BG.lightened(0.03), 1.0), 6, 1, Kit.BORDER, 8))
-	_root.theme = theme
+	# as a window of its own; Kit's theme gives pop-ups a solid back for that.
+	_root.theme = Kit.make_theme()
 	_root.add_theme_stylebox_override("panel", Kit._box(Color(Kit.BG, 1.0), 0, 1, Kit.BORDER, MARGIN))
+	Kit.events.scheme_changed.connect(_on_scheme_changed)
 	viewport.add_child(_root)
 	var column := Kit.column()
 	_root.add_child(column)
@@ -181,7 +180,7 @@ func _init(surface_title: String, panel: Control, width: int, body_height := 0, 
 	add_child(sheet)
 	# The sheet is sized again whenever the panel needs more or less room.
 	content.minimum_size_changed.connect(_queue_fit)
-	visibility_changed.connect(wake)
+	visibility_changed.connect(_on_visibility_changed)
 
 
 func _ready() -> void:
@@ -193,9 +192,22 @@ func _ready() -> void:
 		source = _copies[index]
 	_material.set_shader_parameter("level0", viewport.get_texture())
 	_material.set_shader_parameter("back_color", Kit.BG_SUNKEN)
+	_root.visible = is_visible_in_tree()
 	_fit()
 	# Text that wraps only knows its height once it has been given its width.
 	_queue_fit()
+
+
+## The panel inside is shown exactly when the sheet is. Its viewport is a world of
+## its own, where a hidden sheet would leave the panel "visible", so panels that work
+## only while they are seen (a live viewfinder, say) would go on working unseen.
+func _on_visibility_changed() -> void:
+	var seen := is_visible_in_tree()
+	if _root.visible != seen:
+		_root.visible = seen
+		if seen:
+			_queue_fit()
+	wake()
 
 
 func _process(delta: float) -> void:
@@ -218,6 +230,13 @@ func _process(delta: float) -> void:
 		viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 		for copy in _copies:
 			copy.render_target_update_mode = SubViewport.UPDATE_ONCE
+
+
+## The colour scheme changed: the sheet takes a theme in the new colours and draws again.
+func _on_scheme_changed() -> void:
+	Kit.apply_theme(_root)
+	_material.set_shader_parameter("back_color", Kit.BG_SUNKEN)
+	wake()
 
 
 ## Keeps the sheet redrawing for a short while. Call it when what the panel shows may

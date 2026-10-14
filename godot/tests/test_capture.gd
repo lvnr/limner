@@ -172,6 +172,46 @@ func test_the_launcher_passes_engine_and_render_options() -> void:
 	check(not launcher.running, "and nothing runs")
 
 
+func test_a_rate_that_is_not_whole_keeps_picture_and_sound_together() -> void:
+	# Movie Maker writes whole frame rates only, one frame's worth of sound per frame.
+	check_eq(RenderJob.movie_fps(PackedStringArray(["--write-movie", "/films/take.avi", "--fixed-fps", "24", "--disable-vsync"])), 24, "the rate Godot was given")
+	check_eq(RenderJob.movie_fps(PackedStringArray(["--write-movie", "/films/take.avi"])), int(ProjectSettings.get_setting("editor/movie_writer/fps", 60)), "or the project's movie rate")
+	var line := RenderLauncher.command_line("/work/piece.limnz", {"output": "/films/take.avi", "size": Vector2i(320, 180), "fps": 24000.0 / 1001.0}, "/tmp/s.json")
+	var movie := RenderJob.movie_fps(line)
+	check_eq(movie, 24, "23.976 is written as 24")
+	var fps: float = RenderJob.parse(line.slice(line.find("--") + 1)).fps
+	var speed := RenderJob.sound_speed(movie, fps)
+	check_near(speed, 1.001, "so the sound plays 0.1% faster", 1e-4)
+	# Over ten minutes of frames, the sound heard and the playhead stay together.
+	var frames := roundi(600.0 * fps)
+	var picture_seconds := frames / fps
+	var sound_seconds := frames * (1.0 / movie) * speed
+	check_near(sound_seconds, picture_seconds, "picture and sound agree after ten minutes", 1e-3)
+	check_near(RenderJob.sound_speed(12, 12.0), 1.0, "a whole rate plays sound as it is")
+
+
+func test_rendering_leaves_the_users_file_alone() -> void:
+	run({"cmd": "add_strokes", "strokes": [{"points": [[0, 1, -1], [0.2, 1, -1]], "width": 0.01}]})
+	var path := _scratch("kept.limnz")
+	var picture := Image.create(8, 4, false, Image.FORMAT_RGB8)
+	picture.fill(Color(0.2, 0.4, 0.6))
+	check(editor.save_document(path, picture.save_png_to_buffer()), "a saved document with a picture")
+	await frames(2)
+	var before := FileAccess.get_file_as_bytes(path)
+	var renders := ProjectSettings.globalize_path("user://renders")
+	var copies_before := DirAccess.get_files_at(renders).size() if DirAccess.dir_exists_absolute(renders) else 0
+	var launcher := RenderLauncher.new()
+	add_child(launcher)
+	# A file name that is refused stops the render after the document is put aside
+	# for it and before any process starts.
+	var problem := launcher.render_document(editor, {"output": _scratch("take.mp4"), "size": Vector2i(320, 180), "fps": 12.0})
+	check(problem.contains(".avi"), "the render is refused: %s" % problem)
+	check_eq(FileAccess.get_file_as_bytes(path), before, "the user's file is untouched, picture and all")
+	check_eq(DirAccess.get_files_at(renders).size(), copies_before, "and the copy made for the render is gone")
+	check_eq(editor.path, path, "the document is still that file")
+	DirAccess.remove_absolute(path)
+
+
 func test_a_still_has_the_size_asked_for_and_leaves_the_editor_as_it_was() -> void:
 	if not _can_render("a still"):
 		return

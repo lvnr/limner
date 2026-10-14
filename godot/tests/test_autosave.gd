@@ -96,3 +96,75 @@ func test_work_left_from_a_bad_ending_comes_back_as_unsaved() -> void:
 	DirAccess.remove_absolute(kept)
 	Autosave.clear()
 	Preferences.use_file(Preferences.DEFAULT_PATH)
+
+
+## A session that ends badly leaves a copy; the next one starts on a fresh document
+## with the copy waiting, as at a real start.
+func _next_session_with_a_copy() -> Autosave:
+	var first := await _autosave()
+	await _paint()
+	check(first.save_now(), "a copy from the session that ends badly")
+	first.free()
+	editor.new_document()
+	await frames(2)
+	var autosave := Autosave.new()
+	autosave.editor = editor
+	add_child(autosave)
+	await frames(2)
+	return autosave
+
+
+func test_recovered_work_keeps_its_copy_until_it_is_saved() -> void:
+	var autosave := await _next_session_with_a_copy()
+	check(not autosave.is_settled(), "the copy waits for an answer")
+	check(autosave.recover(), "recovering")
+	check(autosave.is_settled(), "which answers it")
+	check(not Autosave.pending().is_empty(), "the copy is still there right after recovering")
+	await frames(3)
+	check(not Autosave.pending().is_empty(), "and frames later, when the change signals have come")
+	check(editor.status.dirty, "the work is unsaved")
+
+	# A second bad ending before the next autosave: the work is still there.
+	autosave.free()
+	editor.new_document()
+	await frames(2)
+	var again := Autosave.new()
+	again.editor = editor
+	add_child(again)
+	await frames(2)
+	check(again.recover(), "recovered a second time")
+	await frames(2)
+	check_eq(int(world.scene.info().strokes), 1, "with the stroke")
+
+	var saved := OS.get_user_data_dir().path_join("test_autosave_recovered.limnz")
+	check(editor.save_document(saved), "saving the recovered work")
+	await frames(2)
+	check(Autosave.pending().is_empty(), "is what clears the copy")
+	DirAccess.remove_absolute(saved)
+	Autosave.clear()
+	Preferences.use_file(Preferences.DEFAULT_PATH)
+
+
+func test_quitting_before_the_offer_is_answered_keeps_the_copy() -> void:
+	var autosave := await _next_session_with_a_copy()
+	check(not editor.status.dirty, "the document of the new session is clean")
+	autosave.quitting()
+	check(not Autosave.pending().is_empty(), "quitting with the question unanswered keeps the copy for next time")
+	autosave.discard()
+	check(autosave.is_settled() and Autosave.pending().is_empty(), "discarding is an answer, and removes it")
+
+	# Answered, a clean quit leaves nothing behind, and work that would be lost
+	# when the headset's system ends the session is copied first.
+	await _paint()
+	check(autosave.keep_for_next_time(), "unsaved work is kept when the app closes without asking")
+	check(not Autosave.pending().is_empty(), "as a copy")
+	autosave.quitting()
+	check(Autosave.pending().is_empty(), "a deliberate quit removes the copy")
+	var saved := OS.get_user_data_dir().path_join("test_autosave_quit.limnz")
+	editor.save_document(saved)
+	await frames(2)
+	check(not autosave.keep_for_next_time(), "with nothing unsaved there is nothing to keep")
+	check(Autosave.pending().is_empty(), "and no copy is written")
+	DirAccess.remove_absolute(saved)
+	Autosave.clear()
+	Preferences.use_file(Preferences.DEFAULT_PATH)

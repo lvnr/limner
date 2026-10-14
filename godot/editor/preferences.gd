@@ -18,8 +18,8 @@ signal changed(key: String)
 ## - `ui_volume`: loudness of interface sounds, 0 (silent) to 1.
 ## - `show_button_map_at_start`: whether the sheet of controls is shown when a headset session starts.
 ## - `show_gimbal_by_default`: whether a new session starts with the gimbal showing.
-## - `theme`: the colour scheme. Only "dark" exists so far; the setting is kept so
-##   that a light scheme can be added without changing the file.
+## - `theme`: the interface's colour scheme, "dark" or "light". Kit follows it at once
+##   (see `Kit.follow_preferences`).
 ## - `autosave_minutes`: minutes between automatic saves, 0 for never.
 ## - `palette`: the swatches a new document starts with, as linear `[r, g, b]`
 ##   lists: the ones last set in the Colour panel. Empty for the built-in ones.
@@ -41,7 +41,7 @@ const DEFAULTS := {
 ## The values a setting may take, for those that are a choice.
 const CHOICES := {
 	"dominant_hand": ["right", "left"],
-	"theme": ["dark"],
+	"theme": ["dark", "light"],
 }
 ## The lowest and highest value, for those that are a number.
 const RANGES := {

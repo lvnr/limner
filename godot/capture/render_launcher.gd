@@ -143,27 +143,21 @@ static func command_line(document: String, settings: Dictionary, status_path: St
 	return arguments
 
 
-## Renders the document that is open in `editor`. It is saved first: in its own
-## place when it has one and nothing in it is unsaved, and otherwise as a copy in
-## `user://renders/` that is removed when the render ends. Returns an empty string
-## when the render has started, or the reason it could not.
+## Renders the document that is open in `editor`, as it is now (unsaved changes and
+## the view included), from a copy in `user://renders/` that is removed when the
+## render ends. The user's own file is left alone: saving it again here would
+## replace its picture, which only the shell can take. Returns an empty string when
+## the render has started, or the reason it could not.
 func render_document(editor: LimnerEditor, settings: Dictionary) -> String:
 	if running:
 		return "A render is already running"
-	var document := ""
-	if editor.path != "" and editor.path_is_native and not editor.scene.status().dirty:
-		# Saving again costs nothing and brings the saved view up to date.
-		if not editor.save_document(editor.path):
-			return "The document could not be saved"
-		document = editor.path
-	else:
-		var folder := ProjectSettings.globalize_path("user://renders")
-		DirAccess.make_dir_recursive_absolute(folder)
-		document = folder.path_join(LimnerCapture.stamped_name(editor.title(), "limnz"))
-		var saved := editor.scene.save_copy(document)
-		if not saved.ok:
-			return "The document could not be copied for rendering: %s" % saved.error
-		_copy = document
+	var folder := ProjectSettings.globalize_path("user://renders")
+	DirAccess.make_dir_recursive_absolute(folder)
+	var document := folder.path_join(LimnerCapture.stamped_name(editor.title(), "limnz"))
+	var saved := editor.scene.save_copy(document)
+	if not saved.ok:
+		return "The document could not be copied for rendering: %s" % saved.error
+	_copy = document
 	var problem := launch(document, settings)
 	if problem != "":
 		_remove_copy()

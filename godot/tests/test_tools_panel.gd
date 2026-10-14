@@ -97,6 +97,10 @@ func test_each_tool_button_switches_tool_and_context() -> void:
 			check_eq(context.visible, other == tool, "settings of %s shown while using %s" % [other, tool])
 		check(panel.get_combined_minimum_size().x <= 264.0, "%s fits a panel 280 wide, needs %s" % [tool, panel.get_combined_minimum_size().x])
 	check(messages.is_empty(), "no errors: %s" % [messages])
+	# The desktop's modifier is Shift (`DesktopHand._modifier`); Alt is the gimbal's.
+	var hints: Array = panel._contexts["thicken"].find_children("*", "Label", true, false).map(func(label: Label) -> String: return label.text)
+	check(hints.any(func(text: String) -> bool: return text.contains("Shift on the desktop")), "Thicken names the desktop's modifier: %s" % [hints])
+	check(not hints.any(func(text: String) -> bool: return text.contains("Alt")), "and not Alt, which moves the gimbal's pivot")
 
 
 func test_sliders_change_their_settings() -> void:

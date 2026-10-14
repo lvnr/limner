@@ -253,6 +253,28 @@ func test_looking_through_the_camera_moves_the_main_view_behind_it() -> void:
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
+func test_another_document_ends_looking_through_the_camera() -> void:
+	var id := _add_camera("Shot", [2.0, 0.5, -4.0])
+	run({"cmd": "set_layer_kind", "layer": id, "values": {"fov": 37.0}})
+	var panel := await _panel()
+	panel._look_through.button_pressed = true
+	await frames(2)
+	check_eq(CameraView.of(recorder).following, id, "looking through the camera")
+	check_near(head.fov, 37.0, "with its lens")
+
+	# The new document's layers are numbered from the start again, so an id kept
+	# from the old one could name one of them.
+	recorder.new_document()
+	await frames(2)
+	check_eq(CameraView.of(recorder).following, -1, "a new document lets go of the camera")
+	check_near(head.fov, 60.0, "and gives the head its own lens back")
+	check(not panel._look_through.button_pressed, "the box follows")
+	var other := _add_camera("Another", [0.0, 3.0, 0.0])
+	await frames(2)
+	check(not world.scene.layer_transform(other).origin.is_equal_approx(DesktopShell.HEAD), "a camera of the new document is not followed")
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
 func test_the_current_frame_is_saved_at_the_resolution() -> void:
 	_add_camera("Shot", [0.0, 1.45, 1.0])
 	run({"cmd": "set_document", "title": "Sheet", "camera_resolution": [320, 200]})

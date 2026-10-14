@@ -110,8 +110,6 @@ func _init(limner_editor: LimnerEditor) -> void:
 	_progress.custom_minimum_size = Vector2(60, Kit.ROW)
 	_progress.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_progress.show_percentage = false
-	_progress.add_theme_stylebox_override("background", Kit._box(Kit.BG_SUNKEN, 4, 0, Kit.BORDER, 0))
-	_progress.add_theme_stylebox_override("fill", Kit._box(Kit.ACCENT, 4, 0, Kit.BORDER, 0))
 	_progress_text = Kit.label("", true)
 	_progress_row = Kit.column([_progress_text, Kit.row([_progress, Kit.button("Cancel", "Stop the render; what was rendered so far is kept", launcher.cancel)])])
 	_progress_row.visible = false

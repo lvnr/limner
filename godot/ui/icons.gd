@@ -150,9 +150,12 @@ const BODIES := {
 }
 
 static var _cache := {}
+## What each texture made here shows: texture -> [name, colour, pixels].
+static var _made := {}
 
 
 ## The icon `name` as a texture in `color`, drawn `pixels` wide at normal interface scale.
+## Textures are kept and handed out again for the same name, colour and size.
 static func texture(name: String, color: Color = Color(0.9, 0.9, 0.9), pixels: int = 20) -> Texture2D:
 	var key := "%s/%s/%d" % [name, color.to_html(), pixels]
 	if _cache.has(key):
@@ -164,7 +167,27 @@ static func texture(name: String, color: Color = Color(0.9, 0.9, 0.9), pixels: i
 	).replace("{c}", "#" + color.to_html(false))
 	var icon: Texture2D = DPITexture.create_from_string(svg)
 	_cache[key] = icon
+	_made[icon] = [name, color, pixels]
 	return icon
+
+
+## `icon` drawn again in the colour scheme in use: an icon made here in a colour of
+## one of Kit's roles comes back in that role's colour now (see `Kit.recolor`). Any
+## other texture, or none, comes back as it is.
+static func retint(icon: Texture2D) -> Texture2D:
+	if icon == null or not _made.has(icon):
+		return icon
+	var made: Array = _made[icon]
+	var color := Kit.recolor(made[1])
+	if color == made[1]:
+		return icon
+	return texture(made[0], color, made[2])
+
+
+## The name and colour of an icon made here, as [name, colour, pixels], or an empty
+## list for any other texture.
+static func describe(icon: Texture2D) -> Array:
+	return _made.get(icon, []) if icon != null else []
 
 
 static func has(name: String) -> bool:

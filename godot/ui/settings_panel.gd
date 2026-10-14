@@ -50,9 +50,8 @@ func _init(limner_editor: LimnerEditor) -> void:
 	add_child(_button_map_at_start)
 	_gimbal = Kit.toggle("Gimbal shown by default", "Whether a session starts with the gimbal showing, instead of only when asked for", func(on: bool) -> void: preferences.set_value("show_gimbal_by_default", on))
 	add_child(_gimbal)
-	_theme = Kit.option(["Dark"], "The interface's colours. Only the dark scheme exists so far.", func(index: int) -> void: preferences.set_value("theme", Preferences.CHOICES["theme"][index]))
+	_theme = Kit.option(["Dark", "Light"], "The interface's colours: dark panels with light text, or light panels with dark text. A change shows at once.", func(index: int) -> void: preferences.set_value("theme", Preferences.CHOICES["theme"][index]))
 	add_child(Form.row("Colours", [_theme], "The interface's colours"))
-	add_child(Form.note("Only the dark scheme exists so far."))
 
 	add_child(Kit.heading("Saving"))
 	_autosave = SliderRow.new("Autosave", 0.0, AUTOSAVE_SLIDER_MAX, 1.0, "How often the open project is saved by itself. All the way down switches it off.", _autosave_text)

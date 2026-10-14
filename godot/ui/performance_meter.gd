@@ -8,8 +8,6 @@ extends VBoxContainer
 const HEIGHT := 6
 ## Past this share of the limit the bar warns.
 const NEAR := 0.8
-const OK_COLOR := Color(0.35, 0.75, 0.45)
-const NEAR_COLOR := Color(0.95, 0.72, 0.25)
 
 ## The highest value shown since `reset_peak`.
 var peak := 0.0
@@ -83,8 +81,8 @@ static func _level_of(share: float) -> int:
 func _draw_bar() -> void:
 	var size := _bar.size
 	_bar.draw_rect(Rect2(Vector2.ZERO, size), Kit.BG_SUNKEN)
-	var colors: Array[Color] = [OK_COLOR, NEAR_COLOR, Kit.DANGER]
+	var colors: Array[Color] = [Kit.OK, Kit.WARN, Kit.DANGER]
 	_bar.draw_rect(Rect2(0.0, 0.0, size.x * clampf(_fill, 0.0, 1.0), size.y), colors[level()])
 	if _limit > 0.0 and peak > 0.0:
 		var x := clampf(size.x * peak / _limit, 1.0, size.x - 1.0)
-		_bar.draw_line(Vector2(x, -1.0), Vector2(x, size.y + 1.0), colors[peak_level()].lightened(0.3), 2.0)
+		_bar.draw_line(Vector2(x, -1.0), Vector2(x, size.y + 1.0), colors[peak_level()].lerp(Kit.INK, 0.3), 2.0)

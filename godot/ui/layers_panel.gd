@@ -100,6 +100,11 @@ func _ready() -> void:
 	refresh()
 
 
+## The colour scheme changed: the rows take their text colours and icons again.
+func apply_scheme() -> void:
+	refresh()
+
+
 ## Brings the list in line with the document.
 func refresh() -> void:
 	var rows := editor.get_rows()
@@ -144,13 +149,13 @@ func _rebuild(rows: Array) -> void:
 func _update_item(item: TreeItem, row: Dictionary) -> void:
 	if item.get_text(0) != row.name:
 		item.set_text(0, row.name)
-	var tint := Kit.ACCENT.lightened(0.25) if row.paint_target else (Kit.TEXT if row.shown else Kit.TEXT_DIM)
+	var tint := Kit.ACCENT_TEXT if row.paint_target else (Kit.TEXT if row.shown else Kit.TEXT_DIM)
 	item.set_icon(0, Icons.texture(KIND_ICONS.get(row.kind, "dot"), tint, 18))
 	item.set_custom_color(0, Kit.TEXT if row.shown else Kit.TEXT_DIM)
 	item.set_tooltip_text(0, _describe(row))
-	item.set_button(0, RowButton.TARGET, Icons.texture("move", Kit.ACCENT.lightened(0.2) if row.transform_target else Kit.TEXT_DIM.darkened(0.25), 16))
+	item.set_button(0, RowButton.TARGET, Icons.texture("move", Kit.ACCENT_TEXT if row.transform_target else Kit.TEXT_DISABLED, 16))
 	item.set_button(0, RowButton.EYE, Icons.texture("eye" if row.visible else "eye_off", Kit.TEXT if row.visible else Kit.TEXT_DIM, 16))
-	item.set_button(0, RowButton.LOCK, Icons.texture("lock" if row.locked else "unlock", Kit.DANGER.lightened(0.2) if row.locked else Kit.TEXT_DIM.darkened(0.25), 16))
+	item.set_button(0, RowButton.LOCK, Icons.texture("lock" if row.locked else "unlock", Kit.DANGER_TEXT if row.locked else Kit.TEXT_DISABLED, 16))
 	if item.collapsed != row.collapsed and row.children > 0:
 		item.collapsed = row.collapsed
 	if row.selected != item.is_selected(0):
@@ -271,6 +276,9 @@ func _on_item_mouse_selected(mouse_position: Vector2, mouse_button: int) -> void
 	if mouse_button != MOUSE_BUTTON_RIGHT:
 		return
 	_apply_selection()
+	# The selection was changed just now; its signals come next frame. The menu is
+	# built for the row clicked, so read the state that command left.
+	editor.catch_up()
 	var row := editor.row(editor.current_layer())
 	if row.is_empty():
 		return
@@ -359,6 +367,7 @@ func _drop(at: Vector2, data: Variant) -> void:
 	var target := _tree.get_item_at_position(at)
 	if target == null:
 		return
+	editor.catch_up()
 	var target_row := editor.row(target.get_metadata(0))
 	var section := _tree.get_drop_section_at_position(at)
 	var into_group: bool = section == 0 and target_row.kind in ["group", "sequence"]
@@ -378,6 +387,9 @@ func _drop(at: Vector2, data: Variant) -> void:
 		if not into_group:
 			index = _index_of(int(target_row.id), id) + (1 if section > 0 else 0)
 		editor.run({"cmd": "move_layer", "layer": id, "parent": parent, "index": index})
+		# The next layer's place is counted in the list as this move left it, not as
+		# it was before the drop: the rows are read again now, not next frame.
+		editor.catch_up()
 	editor.commit()
 
 

@@ -547,6 +547,92 @@ func test_feedback_from_the_core_reaches_sounds_and_messages() -> void:
 	check_eq(shell.palette.message(), "Layer \"Paint\" is locked", "why the tool did nothing is shown near the palette")
 
 
+func test_the_document_panel_saves_and_opens_in_the_headset() -> void:
+	if not await _start():
+		return
+	var folder := LayerTestKit.scratch_dir().path_join("Limner")
+	Documents.use_folder(folder)
+	LimnerDemo.stroke(world.scene, [Vector3(0, 1, -1), Vector3(0.1, 1, -1)])
+	await frames(2)
+	var surface := await _open("Document")
+	var panel: DocumentPanel = surface.content
+	for key: String in ["save", "save_as", "new", "open", "import"]:
+		check(panel._file_buttons[key].is_visible_in_tree(), "the %s button is on the palette's Document panel" % key)
+
+	await _poke(surface, panel._file_buttons.save)
+	await frames(3)
+	check_eq(panel.file_mode, "save_as", "Save on a new document asks for a name, in the panel")
+	var field := panel._save_name
+	var rect := field.get_global_rect()
+	await sim.play(sim.poke_steps(RIGHT, surface.world_point(Vector2(rect.position.x + rect.size.x * 0.9, rect.get_center().y)), _normal(surface)))
+	await frames(3)
+	check_eq(shell.palette.keyboard.visible, true, "the name box brings up the keyboard")
+	# Whatever the box holds is cleared with the keyboard's own backspace.
+	while field.text != "" and field.caret_column > 0:
+		await _poke(shell.palette.keyboard, _key("Delete the character before the caret"))
+	for caption: String in ["Capital letter next", "S", "k", "y"]:
+		await _poke(shell.palette.keyboard, _key(caption))
+	check_eq(field.text, "Sky", "a name typed with the keyboard")
+	await _poke(shell.palette.keyboard, _key("Enter"))
+	await frames(3)
+	check(FileAccess.file_exists(folder.path_join("Sky.limnz")), "Enter saves it in the documents folder")
+	check_eq(editor.path, folder.path_join("Sky.limnz"), "as the document's file")
+
+	await _poke(surface, panel._file_buttons.new)
+	await frames(3)
+	check_eq(_strokes(), 0, "New starts an empty document; nothing was unsaved, so nothing was asked")
+	await _poke(surface, panel._file_buttons.open)
+	await frames(3)
+	var entry: Button = null
+	for node: Node in panel._drawer.find_children("*", "Button", true, false):
+		if (node as Button).text == "Sky" and (node as Button).is_visible_in_tree():
+			entry = node
+	check(entry != null, "Open lists the project saved")
+	if entry != null:
+		await _poke(surface, entry)
+		await frames(3)
+		check_eq(editor.path, folder.path_join("Sky.limnz"), "poking it opens it")
+		check_eq(_strokes(), 1, "with its stroke")
+	Documents.use_folder("")
+	LayerTestKit.remove(folder.get_base_dir())
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_a_panel_on_a_hidden_sheet_does_no_work() -> void:
+	run({"cmd": "add_layer", "kind": "camera", "name": "Shot"})
+	if not await _start():
+		return
+	var surface := await _open("Monitor")
+	var panel: MonitorPanel = surface.content
+	await frames(2)
+	check(panel.is_visible_in_tree(), "the panel on the sheet in front is shown")
+	check(panel.viewfinder.is_live(), "and the Monitor's picture is rendered")
+	shell.palette.show_panel("Tools")
+	await frames(2)
+	check(not surface.visible, "another panel in front hides the Monitor's sheet")
+	check(not panel.is_visible_in_tree(), "and the panel on it, though it is in a viewport of its own")
+	check(not panel.viewfinder.is_live(), "so its picture is not rendered")
+	shell.palette.show_panel("Monitor")
+	await frames(3)
+	check(panel.viewfinder.is_live(), "until it is in front again")
+	shell.palette.set_shown(false)
+	await frames(2)
+	check(not panel.viewfinder.is_live(), "putting the palette away stops it too")
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_unsaved_work_is_kept_when_the_session_ends_without_asking() -> void:
+	if not await _start():
+		return
+	Autosave.clear()
+	check(not shell.keep_unsaved_work(), "nothing to keep in a clean document")
+	LimnerDemo.stroke(world.scene, [Vector3(0, 1, -1), Vector3(0.1, 1, -1)])
+	await frames(2)
+	check(shell.keep_unsaved_work(), "unsaved work is copied before the app closes")
+	check(not Autosave.pending().is_empty(), "and will be opened again at the next start")
+	Autosave.clear()
+
+
 func test_asking_for_a_headset_leaves_nothing_half_started() -> void:
 	var openxr := OpenXRRig.find_interface()
 	check(openxr != null, "this build of Godot has OpenXR")

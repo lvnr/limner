@@ -463,7 +463,7 @@ func _build_transport() -> void:
 	_button("play", "play", "Play", func() -> void: editor.run({"cmd": "toggle_play"}))
 	var record := _option_toggle("recording", "record", "Record: while on, moving a layer or changing its opacity writes a key at the playhead")
 	record.add_theme_stylebox_override("pressed", Kit._box(Kit.DANGER))
-	record.add_theme_stylebox_override("hover_pressed", Kit._box(Kit.DANGER.lightened(0.12)))
+	record.add_theme_stylebox_override("hover_pressed", Kit._box(Kit.DANGER_TEXT))
 	_button("next_frame", "next_frame", "Go to the next frame", func() -> void: editor.run({"cmd": "step_frames", "frames": 1}))
 	_button("fast_forward", "forward", "Forward to the next chapter, or the end of the range", func() -> void: editor.run({"cmd": "fast_forward"}))
 
@@ -604,7 +604,7 @@ func _update_controls() -> void:
 	for key: String in _option_buttons:
 		Kit.set_quiet(_option_buttons[key], bool(options.get(key, false)))
 	var recording: bool = options.get("recording", false)
-	(controls.recording as Button).icon = Icons.texture("record", Color.WHITE if recording else Kit.DANGER.lightened(0.15), 20)
+	(controls.recording as Button).icon = Icons.texture("record", Kit.TEXT_ON_ACCENT if recording else Kit.DANGER_TEXT, 20)
 	(controls.mute as Button).icon = Icons.texture("mute" if options.get("mute", false) else "sound", Kit.TEXT, 20)
 	var onion := int(options.get("onion_frames", 1))
 	(controls.onion_frames as Button).text = "All" if onion == 0 else str(onion)
@@ -745,7 +745,7 @@ func _show_rates() -> void:
 
 func _draw_grip() -> void:
 	var middle := _grip.size * 0.5
-	_grip.draw_rect(Rect2(middle.x - 22.0, middle.y - 1.5, 44.0, 3.0), Color(1.0, 1.0, 1.0, 0.22))
+	_grip.draw_rect(Rect2(middle.x - 22.0, middle.y - 1.5, 44.0, 3.0), Color(Kit.INK, 0.22))
 
 
 # ---- the size of the panel ----
