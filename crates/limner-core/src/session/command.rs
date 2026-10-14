@@ -6,9 +6,11 @@
 //! with a `cmd` field naming it, for example `{"cmd": "set_layer", "layer": 4, "visible": false}`.
 //! Times are in flicks, colours are linear RGB, and layers are named by their numeric id.
 
+use super::animation::KeyTrack;
 use super::tools::ToolKind;
 use crate::math::{Flip, Xform};
-use crate::model::LayerId;
+use crate::model::{Action, Interp, LayerId};
+use crate::ops::frames::NewFrame;
 use crate::ops::layers::NewLayerKind;
 use crate::ops::OpError;
 use crate::time::{Flicks, FrameRate};
@@ -154,6 +156,144 @@ pub enum Command {
         layer: LayerId,
     },
 
+    // ---- frames of a paint layer ----
+    /// Adds a frame after the one shown and moves on to it.
+    AddFrame {
+        layer: LayerId,
+        kind: NewFrame,
+    },
+    /// Makes the frame shown last one frame longer.
+    AddHoldFrame {
+        layer: LayerId,
+        #[serde(default = "yes")]
+        after: bool,
+    },
+    /// Removes the frame shown; the animation gets shorter.
+    DeleteFrame {
+        layer: LayerId,
+    },
+    /// Replaces the key frame shown by a hold of the drawing before it.
+    RemoveKeyFrame {
+        layer: LayerId,
+    },
+    /// Removes all animation, leaving the first frame.
+    ClearFrames {
+        layer: LayerId,
+    },
+    DoubleFrames {
+        layer: LayerId,
+    },
+    ReverseFrames {
+        layer: LayerId,
+    },
+    /// Copies the selected strokes into the frame shown, or into every frame.
+    CopySelectionToFrames {
+        #[serde(default)]
+        all: bool,
+    },
+
+    // ---- clips ----
+    /// Ends the layer's clip at `time` (the playhead when left out), or starts a new one there.
+    ToggleClip {
+        layer: LayerId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        time: Option<Flicks>,
+    },
+    /// Cuts the clip at `time` in two.
+    SplitClip {
+        layer: LayerId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        time: Option<Flicks>,
+    },
+    /// Moves clip number `clip` (counted from zero) to start at `start`.
+    MoveClip {
+        layer: LayerId,
+        clip: usize,
+        start: Flicks,
+    },
+    /// Changes where a clip starts or ends without shifting its content.
+    TrimClip {
+        layer: LayerId,
+        clip: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<Flicks>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end: Option<Flicks>,
+        /// Removes the clip's end, so that it never stops.
+        #[serde(default)]
+        open_end: bool,
+    },
+    DeleteClip {
+        layer: LayerId,
+        clip: usize,
+    },
+    /// Shows a clip's content again, starting at `start`.
+    DuplicateClip {
+        layer: LayerId,
+        clip: usize,
+        start: Flicks,
+    },
+
+    // ---- keys ----
+    /// Keys the layer's present transform or opacity at `time` (the playhead when left out).
+    SetKey {
+        layer: LayerId,
+        track: KeyTrack,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        time: Option<Flicks>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interp: Option<Interp>,
+        /// Also key every layer inside this one.
+        #[serde(default)]
+        children: bool,
+    },
+    /// Deletes the keys at `times`, or the one at the playhead when none are given.
+    DeleteKeys {
+        layer: LayerId,
+        track: KeyTrack,
+        #[serde(default)]
+        times: Vec<Flicks>,
+    },
+    MoveKeys {
+        layer: LayerId,
+        track: KeyTrack,
+        times: Vec<Flicks>,
+        delta: Flicks,
+    },
+    SetKeyInterp {
+        layer: LayerId,
+        track: KeyTrack,
+        times: Vec<Flicks>,
+        interp: Interp,
+    },
+    /// Plays the keys at `times` backwards within the span they cover.
+    ReverseKeys {
+        layer: LayerId,
+        track: KeyTrack,
+        times: Vec<Flicks>,
+    },
+    /// Pastes the keys last copied, the first of them at `time` (the playhead when left out).
+    PasteKeys {
+        layer: LayerId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        time: Option<Flicks>,
+    },
+    /// Puts a chapter mark (stop, play or loop) on the root timeline, or removes the one there.
+    SetAction {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        time: Option<Flicks>,
+        action: Option<Action>,
+    },
+    /// Makes a sequence loop at the playhead, or stops it looping.
+    SetLoopPoint {
+        layer: LayerId,
+        enabled: bool,
+    },
+    /// Turns one loop of a looping sequence into a frame-by-frame paint layer.
+    BakeSequence {
+        layer: LayerId,
+    },
+
     // ---- strokes ----
     /// Deletes the selected strokes.
     DeleteSelection,
@@ -195,6 +335,23 @@ pub enum Command {
     },
 
     // ---- playback (not undoable) ----
+    /// Remembers the keys at `times` for pasting.
+    CopyKeys {
+        layer: LayerId,
+        track: KeyTrack,
+        times: Vec<Flicks>,
+    },
+    /// Moves the playhead to the key frame before or after the one shown.
+    GoToKeyFrame {
+        layer: LayerId,
+        forward: bool,
+    },
+    /// Moves the playhead to the key before or after it.
+    GoToKey {
+        layer: LayerId,
+        track: KeyTrack,
+        forward: bool,
+    },
     Play,
     Pause,
     TogglePlay,
@@ -246,12 +403,44 @@ impl Command {
             ResetTransform { .. } => "Reset transform",
             ResetPivot { .. } => "Reset pivot",
             MakePivotOrigin { .. } => "Make pivot origin",
+            AddFrame {
+                kind: NewFrame::Blank,
+                ..
+            } => "Add frame",
+            AddFrame {
+                kind: NewFrame::Duplicate,
+                ..
+            } => "Duplicate frame",
+            AddHoldFrame { .. } => "Hold frame",
+            DeleteFrame { .. } => "Delete frame",
+            RemoveKeyFrame { .. } => "Remove key frame",
+            ClearFrames { .. } => "Delete all frames",
+            DoubleFrames { .. } => "Double frames",
+            ReverseFrames { .. } => "Reverse frames",
+            CopySelectionToFrames { .. } => "Copy strokes to frames",
+            ToggleClip { .. } | TrimClip { .. } => "Change clip",
+            SplitClip { .. } => "Split clip",
+            MoveClip { .. } => "Move clip",
+            DeleteClip { .. } => "Delete clip",
+            DuplicateClip { .. } => "Duplicate clip",
+            SetKey { .. } => "Add key",
+            DeleteKeys { .. } => "Delete keys",
+            MoveKeys { .. } => "Move keys",
+            SetKeyInterp { .. } => "Change key easing",
+            ReverseKeys { .. } => "Reverse keys",
+            PasteKeys { .. } => "Paste keys",
+            SetAction { .. } => "Change chapter mark",
+            SetLoopPoint { .. } => "Change loop point",
+            BakeSequence { .. } => "Bake sequence",
             DeleteSelection => "Delete strokes",
             SelectionToNewLayer { copy: true } => "Copy strokes to new layer",
             SelectionToNewLayer { copy: false } => "Move strokes to new layer",
             Optimize { .. } => "Optimize strokes",
             Undo
             | Redo
+            | CopyKeys { .. }
+            | GoToKeyFrame { .. }
+            | GoToKey { .. }
             | SelectAll
             | Deselect
             | SelectLayers { .. }
@@ -288,6 +477,10 @@ impl Command {
             }
         )
     }
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]

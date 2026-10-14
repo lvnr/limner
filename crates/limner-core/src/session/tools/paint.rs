@@ -4,7 +4,8 @@ use super::settings::BrushStyle;
 use super::space::{LayerSpace, PaintTarget};
 use super::stroke_builder::{build_points, Sample, StrokeStyle, MAX_STROKE_POINTS};
 use super::Taper;
-use crate::model::{Stroke, StrokeAddr};
+use crate::eval::{Content, RenderFrame};
+use crate::model::{DrawingId, Stroke, StrokeAddr};
 use crate::session::input::InputFrame;
 use crate::session::Session;
 use glam::DVec3;
@@ -33,14 +34,40 @@ fn style(
     }
 }
 
+/// A piece of a stroke that has been finished: which drawing it is in and the frame it was drawn on.
+struct Piece {
+    drawing: DrawingId,
+    stroke: u32,
+    frame: usize,
+}
+
 /// A freehand stroke being drawn.
+///
+/// When the document is playing, the frame under the brush changes as the stroke is
+/// drawn. The stroke is then laid down in pieces, each on the frame that was showing
+/// when it was drawn: this is how motion is painted straight into an animation.
 pub(crate) struct PaintGesture {
     target: PaintTarget,
+    /// The frame of the layer the current piece is drawn on.
+    frame: usize,
     addr: StrokeAddr,
-    /// Points laid down so far.
+    stroke: u32,
+    /// Points laid down so far in the current piece.
     samples: Vec<Sample>,
     /// Where the last of them was laid, in viewer space.
     last_laid: DVec3,
+    /// Pieces finished on earlier frames.
+    pieces: Vec<Piece>,
+    /// Whether the document played at any time during the gesture.
+    played: bool,
+}
+
+/// The frame of a paint layer that is showing in an evaluated frame.
+fn frame_showing(frame: &RenderFrame, layer: crate::model::LayerId) -> usize {
+    match frame.get(layer).map(|s| s.content) {
+        Some(Content::Paint { frame, .. }) => frame as usize,
+        _ => 0,
+    }
 }
 
 impl PaintGesture {
@@ -60,6 +87,38 @@ impl PaintGesture {
         }
     }
 
+    /// Starts a stroke in `target` from `samples`, in a chunk of its own so that only
+    /// it is redrawn while it grows.
+    fn open(
+        session: &mut Session,
+        target: PaintTarget,
+        space: &LayerSpace,
+        samples: &[Sample],
+    ) -> Result<(StrokeAddr, u32), String> {
+        let settings = session.tools.paint;
+        let points = build_points(
+            samples,
+            &style(
+                settings.brush,
+                settings.width_taper,
+                settings.opacity_taper,
+                space,
+            ),
+        );
+        let drawing = session
+            .strokes_mut()
+            .drawing_mut(target.drawing)
+            .ok_or("That frame no longer exists")?;
+        let id = drawing.next_stroke_id();
+        let addr = drawing.push_stroke_in_new_chunk(Stroke::new(
+            id,
+            settings.brush.brush(),
+            settings.directional,
+            points,
+        ));
+        Ok((addr, id))
+    }
+
     pub(crate) fn begin(session: &mut Session, input: &InputFrame) -> Result<Self, String> {
         let target = session.paint_target()?;
         let frame = session.evaluate();
@@ -67,32 +126,16 @@ impl PaintGesture {
             .layer_space(&frame, target.layer)
             .ok_or("That layer cannot be drawn on here")?;
         let first = Self::sample(session, &space, input);
-        let settings = session.tools.paint;
-        let points = build_points(
-            &[first],
-            &style(
-                settings.brush,
-                settings.width_taper,
-                settings.opacity_taper,
-                &space,
-            ),
-        );
-        let drawing = session
-            .strokes_mut()
-            .drawing_mut(target.drawing)
-            .ok_or("That frame no longer exists")?;
-        let stroke = Stroke::new(
-            drawing.next_stroke_id(),
-            settings.brush.brush(),
-            settings.directional,
-            points,
-        );
-        let addr = drawing.push_stroke_in_new_chunk(stroke);
+        let (addr, stroke) = Self::open(session, target, &space, &[first])?;
         Ok(Self {
             target,
+            frame: frame_showing(&frame, target.layer),
             addr,
+            stroke,
             samples: vec![first],
             last_laid: input.main.position,
+            pieces: Vec::new(),
+            played: session.playback.playing,
         })
     }
 
@@ -103,6 +146,24 @@ impl PaintGesture {
         let Some(space) = session.layer_space(&frame, self.target.layer) else {
             return false;
         };
+        self.played |= session.playback.playing;
+        // Playback has moved on to another frame: finish this piece and carry on there.
+        match session.editable_drawing(&frame, self.target.layer) {
+            Ok(target) if target.drawing != self.target.drawing => {
+                self.close_piece(session);
+                let from = *self.samples.last().expect("never empty");
+                let Ok((addr, stroke)) = Self::open(session, target, &space, &[from]) else {
+                    return false;
+                };
+                (self.target, self.addr, self.stroke) = (target, addr, stroke);
+                self.frame = frame_showing(&frame, target.layer);
+                self.samples = vec![from];
+            }
+            Ok(_) => {}
+            // Off screen for the moment (between clips): wait for it to come back.
+            Err(_) => return true,
+        }
+
         let now = Self::sample(session, &space, input);
         let moved = input.main.position.distance(self.last_laid);
         if moved >= SAMPLE_SPACING {
@@ -140,9 +201,73 @@ impl PaintGesture {
         !full
     }
 
-    pub(crate) fn end(self, session: &mut Session) {
+    fn close_piece(&mut self, session: &mut Session) {
         if let Some(drawing) = session.strokes_mut().drawing_mut(self.target.drawing) {
             drawing.merge_tail();
+        }
+        self.pieces.push(Piece {
+            drawing: self.target.drawing,
+            stroke: self.stroke,
+            frame: self.frame,
+        });
+    }
+
+    pub(crate) fn end(mut self, session: &mut Session) {
+        self.close_piece(session);
+        if self.played {
+            self.linger(session);
+        }
+    }
+
+    /// Painted during playback, each piece of the stroke also shows on the frames
+    /// that follow the one it was drawn on, for as long as the brush's "animated
+    /// brush duration" says. On a looping layer that wraps around the end.
+    fn linger(&self, session: &mut Session) {
+        let Some(paint) = session
+            .doc()
+            .layer(self.target.layer)
+            .and_then(|l| l.as_paint())
+            .cloned()
+        else {
+            return;
+        };
+        let count = paint.frames.len();
+        let extra =
+            (session.tools.paint.anim_duration as f64 * paint.rate.as_f64()).round() as usize;
+        if count < 2 || extra == 0 {
+            return;
+        }
+        for piece in &self.pieces {
+            let Some(stroke) = session
+                .doc()
+                .drawing(piece.drawing)
+                .and_then(|d| d.strokes().find(|s| s.id == piece.stroke).cloned())
+            else {
+                continue;
+            };
+            let mut reached = vec![piece.drawing];
+            for step in 1..=extra.min(count - 1) {
+                let at = piece.frame + step;
+                let at = if paint.max_repeat == 0 {
+                    at % count
+                } else if at < count {
+                    at
+                } else {
+                    break;
+                };
+                let Some(drawing_id) = paint.drawing_at_frame(at) else {
+                    continue;
+                };
+                if reached.contains(&drawing_id) {
+                    continue;
+                }
+                reached.push(drawing_id);
+                if let Some(drawing) = session.strokes_mut().drawing_mut(drawing_id) {
+                    let mut copy = (*stroke).clone();
+                    copy.id = drawing.next_stroke_id();
+                    drawing.push_stroke(copy);
+                }
+            }
         }
     }
 }

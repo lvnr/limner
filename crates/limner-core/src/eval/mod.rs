@@ -219,6 +219,28 @@ pub fn evaluate(doc: &Document, clock: Clock) -> RenderFrame {
     frame
 }
 
+/// Evaluates only the layers under `parent`, as they are when the time inside
+/// `parent` is `time`: the frames of a sequence's loop, taken on their own. Placement
+/// is relative to `parent`, and its own visibility and opacity are left out.
+pub fn evaluate_children(doc: &Document, parent: LayerId, time: Flicks) -> RenderFrame {
+    let mut frame = RenderFrame {
+        clock: Clock::at(time),
+        layers: Vec::new(),
+        index: HashMap::new(),
+    };
+    let context = Context {
+        timeline_time: time,
+        held: 0,
+        visible: true,
+        opacity: 1.0,
+        world: DAffine3::IDENTITY,
+    };
+    for child in doc.children(parent) {
+        visit(doc, *child, &context, false, &mut frame);
+    }
+    frame
+}
+
 fn visit(doc: &Document, id: LayerId, context: &Context, is_root: bool, frame: &mut RenderFrame) {
     let Some(layer) = doc.layer(id) else {
         return;

@@ -4,10 +4,12 @@
 //! The session is the one place edits happen. Interfaces send it [`Command`]s and
 //! controller input, and ask it what to show.
 
+mod animation;
 mod command;
 mod gesture;
 mod history;
 pub mod input;
+pub mod media;
 mod options;
 mod playback;
 mod props;
@@ -17,6 +19,7 @@ mod strokes;
 pub mod tools;
 mod view;
 
+pub use animation::{KeyTrack, OnionSkin};
 pub use command::{Command, CommandError, OptimizeScope, SelectMode};
 pub use gesture::Cursor;
 pub use history::History;
@@ -76,6 +79,8 @@ pub struct Session {
     last_input: InputFrame,
     /// The selected strokes.
     selection: Selection,
+    /// Keys copied for pasting.
+    key_clipboard: Option<animation::KeyClipboard>,
 }
 
 impl Session {
@@ -100,6 +105,7 @@ impl Session {
             controls: gesture::Controls::default(),
             last_input: InputFrame::default(),
             selection: Selection::default(),
+            key_clipboard: None,
         };
         session.go_to_default_viewpoint();
         session.adopt_document();
@@ -930,6 +936,96 @@ impl Session {
                 layers::make_pivot_origin(self.doc_mut(), id)?;
                 Ok(Value::Null)
             }
+            Command::AddFrame { layer, kind } => self.add_frame(layer, kind),
+            Command::AddHoldFrame { layer, after } => self.add_hold_frame(layer, after),
+            Command::DeleteFrame { layer } => {
+                self.edit_frames(layer, crate::ops::frames::delete_frame)
+            }
+            Command::RemoveKeyFrame { layer } => {
+                self.edit_frames(layer, crate::ops::frames::remove_key_frame)
+            }
+            Command::ClearFrames { layer } => self.edit_frames(layer, |doc, id, _| {
+                crate::ops::frames::clear_frames(doc, id)
+            }),
+            Command::DoubleFrames { layer } => self.edit_frames(layer, |doc, id, _| {
+                crate::ops::frames::double_frames(doc, id)
+            }),
+            Command::ReverseFrames { layer } => self.edit_frames(layer, |doc, id, _| {
+                crate::ops::frames::reverse_frames(doc, id)
+            }),
+            Command::CopySelectionToFrames { all } => self.copy_selection_to_frames(all),
+            Command::ToggleClip { layer, time } => self.edit_clips(
+                layer,
+                animation::clip_op(layer, animation::toggle_clip_at),
+                time,
+            ),
+            Command::SplitClip { layer, time } => self.edit_clips(
+                layer,
+                animation::clip_op(layer, animation::split_clip),
+                time,
+            ),
+            Command::MoveClip { layer, clip, start } => self.edit_clips(
+                layer,
+                move |doc, _| animation::move_clip(doc, layer, clip, start),
+                Some(0),
+            ),
+            Command::TrimClip {
+                layer,
+                clip,
+                start,
+                end,
+                open_end,
+            } => {
+                let end = if open_end { Some(None) } else { end.map(Some) };
+                self.edit_clips(
+                    layer,
+                    move |doc, _| animation::trim_clip(doc, layer, clip, start, end),
+                    Some(0),
+                )
+            }
+            Command::DeleteClip { layer, clip } => self.edit_clips(
+                layer,
+                move |doc, _| animation::delete_clip(doc, layer, clip),
+                Some(0),
+            ),
+            Command::DuplicateClip { layer, clip, start } => self.edit_clips(
+                layer,
+                move |doc, _| animation::duplicate_clip(doc, layer, clip, start),
+                Some(0),
+            ),
+            Command::SetKey {
+                layer,
+                track,
+                time,
+                interp,
+                children,
+            } => self.set_key(layer, track, time, interp, children),
+            Command::DeleteKeys {
+                layer,
+                track,
+                times,
+            } => self.edit_track(layer, track, times, animation::TrackEdit::Delete),
+            Command::MoveKeys {
+                layer,
+                track,
+                times,
+                delta,
+            } => self.edit_track(layer, track, times, animation::TrackEdit::Move(delta)),
+            Command::SetKeyInterp {
+                layer,
+                track,
+                times,
+                interp,
+            } => self.edit_track(layer, track, times, animation::TrackEdit::SetInterp(interp)),
+            Command::ReverseKeys {
+                layer,
+                track,
+                times,
+            } => self.edit_track(layer, track, times, animation::TrackEdit::Reverse),
+            Command::PasteKeys { layer, time } => self.paste_keys(layer, time),
+            Command::SetAction { time, action } => self.set_action(time, action),
+            Command::SetLoopPoint { layer, enabled } => self.set_loop_point(layer, enabled),
+            Command::BakeSequence { layer } => self.bake_sequence(layer),
             Command::DeleteSelection => self.delete_selection(),
             Command::SelectionToNewLayer { copy } => self.selection_to_new_layer(copy),
             Command::Optimize { scope } => self.optimize(scope),
@@ -941,6 +1037,23 @@ impl Session {
         let result = match command {
             Command::Undo => json!({ "undone": self.undo() }),
             Command::Redo => json!({ "redone": self.redo() }),
+            Command::CopyKeys {
+                layer,
+                track,
+                times,
+            } => self.copy_keys(layer, track, times)?,
+            Command::GoToKeyFrame { layer, forward } => {
+                self.go_to_key_frame(layer, forward)?;
+                Value::Null
+            }
+            Command::GoToKey {
+                layer,
+                track,
+                forward,
+            } => {
+                self.go_to_key(layer, track, forward)?;
+                Value::Null
+            }
             Command::SelectAll => {
                 self.select_all();
                 json!({ "selected": self.selection.count() })
@@ -1057,5 +1170,7 @@ impl Session {
     }
 }
 
+#[cfg(test)]
+mod animation_tests;
 #[cfg(test)]
 mod tests;

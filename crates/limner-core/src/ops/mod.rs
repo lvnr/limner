@@ -4,7 +4,10 @@
 //! document before running one and restores it on failure, so an operation that fails
 //! half-way never leaves a half-edited document behind.
 
+pub mod clips;
 pub mod color;
+pub mod frames;
+pub mod keys;
 pub mod layers;
 pub mod simplify;
 pub mod strokes;
