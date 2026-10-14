@@ -331,6 +331,7 @@ func _place_button_map() -> void:
 
 func _follow_document() -> void:
 	world.show_grid = editor.get_options().show_grid
+	world.show_brush_grid = editor.get_options().show_brush_grid
 	get_window().title = "%s%s — Limner (headset)" % [editor.title(), " (edited)" if editor.status.get("dirty", false) else ""]
 
 

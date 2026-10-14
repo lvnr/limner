@@ -24,7 +24,8 @@ Small steps from what exists:
 - Mirror the Grab and Selection tools too.
 - Text: several lines, a font chooser, a single-line stroke font for small labels.
 - Saved views ("home" positions) beside the spawn areas.
-- A brush grid helper.
+- A light colour scheme beside the dark one. The colours are constants in `godot/ui/kit.gd` and in the widgets that draw themselves; they would have to become something a preference can swap.
+- A count of sounds playing, and peaks, in the Performance panel.
 - Shadows in baked lighting; baking per ring vertex instead of per point.
 - Sounds in glTF and USD exports.
 - Curved turning for smooth keys (they curve position and size now; turning takes the shortest way).

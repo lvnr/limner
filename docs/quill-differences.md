@@ -61,6 +61,7 @@ These were chosen to feel right and are constants in the code, easy to change af
 | Light range | The layer's range × its scale | `scene/lights.rs` |
 | Undo depth | 200 steps, not kept across save and open | `session/history.rs` |
 | The blink on the stroke at the hand | Shows what the lower button would delete: the nearest stroke of the layer being painted, within 1 cm of the tool's sphere. Not shown while a tool or a grip is at work, nor after it until the hand has left every stroke, nor while strokes are selected. Can be switched off in the Tools panel | `session/gesture.rs` `update_at_hand`, `REACH` |
+| The brush grid | Lines one cell apart on all three axes, on the world's own grid, reaching three cells from the hand and fading on the way. A cell is 1, 2 or 5 times a power of ten in world units, whichever looks nearest to 5 cm at the current zoom. What Quill's looks like was not found in any source | `godot/world/world.gd` `BRUSH_GRID_SEEN`, `BRUSH_GRID_CELLS` |
 | Pulling the start of a clip out past the beginning of its content | The start stops there; the content never moves. Move the clip to start it earlier. | `ops/clips.rs` `trim_clip` |
 
 ## Not carried over

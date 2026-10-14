@@ -337,6 +337,7 @@ func _refresh() -> void:
 	_edit_menu.set_item_disabled(_edit_menu.get_item_index(EditMenu.REDO), not status.can_redo)
 	var options := editor.get_options()
 	world.show_grid = options.show_grid
+	world.show_brush_grid = options.show_brush_grid
 	_view_menu.set_item_checked(_view_menu.get_item_index(ViewMenu.GRID), options.show_grid)
 	_view_menu.set_item_checked(_view_menu.get_item_index(ViewMenu.EXTRAS), options.show_extras)
 	_view_menu.set_item_checked(_view_menu.get_item_index(ViewMenu.GIMBAL), options.show_gimbal)

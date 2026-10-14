@@ -11,7 +11,7 @@ Limner was built end to end on a Mac that has no headset. Everything that can be
 | 3. Headset | OpenXR rig, hand-held palette with every panel, pinning, poking and far pointing, keyboard, button map, haptics, sounds; a simulated rig for working without a headset | 17 tests of the headset layer on the simulated rig, and screenshots of it | Everything on a real headset (see below) |
 | 4. Lights | Sun, point and spot light layers; lit paint layers and models; shadows per light; ambient light; baking light into paint | Tests; live and baked lighting compared by screenshot | Stereo rendering, speed in a headset |
 | 5. Own format and export | `.limn` folders and `.limnz` files, crash-safe saving, autosave and recovery; export to glTF, USD/USDZ, FBX, OBJ from the app and the command line | Round-trip and crash tests; exports read back by strict readers written for the tests, and by outside ones: Godot's glTF and FBX importers, Apple's USD tools | Opening the exports in Blender, Unity and Unreal |
-| 6. Painting and editing | Nine tools, seven brushes, tapers, 14 colour modes, selection, layers, undo; grabbing the world, a layer or the selection; two-hand scale; the gimbal; duplicate-and-repeat; the blink on the stroke about to be deleted; mirrored working; text | Core tests driving the tools as controllers would; desktop screenshots | How any of it feels in the hand |
+| 6. Painting and editing | Nine tools, seven brushes, tapers, 14 colour modes, selection, layers, undo; grabbing the world, a layer or the selection; two-hand scale; the gimbal; duplicate-and-repeat; the blink on the stroke about to be deleted; the brush grid; mirrored working; text | Core tests driving the tools as controllers would; desktop screenshots | How any of it feels in the hand |
 | 7. Animating | Frames, holds, onion skin, clips, keys with six easings, recording, marks, loop points, baking a sequence, painting during playback, the Timeline panel, painting mode | Core and panel tests | Timing by feel, long recordings |
 | 8. Capture | Stills, 360 stills, stereo, transparent background, camera renders to AVI, OGV or PNG sequence with sound, the Monitor | Windowed tests and screenshots; rendered files inspected | Sound in a render, Windows and Linux |
 | 9. Beyond Quill | Smooth keys, mirrored working, text, Performance panel, persistent swatches, autosave, importing another project as a group | Tests | |
@@ -69,7 +69,9 @@ Things a Quill user may look for and not find, or that are simpler than they cou
 - Moving a very large selection re-draws its strokes every frame and will be slow in the tens of thousands of strokes.
 - Text is one line, in the built-in font, and has no font chooser.
 - The upper button picks a colour from the nearest stroke of any visible layer, but the blink at the hand shows what the lower button would delete, which is always a stroke of the layer being painted. A stroke on another layer is picked from without blinking first.
-- No saved "home" views (there is "Go to initial spawn area") and no brush grid helper.
+- No saved "home" views (there is "Go to initial spawn area").
+- Only the dark colour scheme exists; Quill also has a light one.
+- The Performance panel has no count of sounds playing and keeps no peaks, both of which Quill's shows.
 - Baked lighting has no shadows, and a tube gets one brightness all the way round.
 - Sounds are not exported to 3D formats; ambisonic sound is reduced to its first channels.
 - The Timeline does not scroll by itself while a drag nears its edge, Escape does not cancel a drag on its tracks, and pinch and two-finger panning have never met a real trackpad ("The Timeline panel" in `docs/interface-api.md`).

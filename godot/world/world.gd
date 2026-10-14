@@ -27,6 +27,7 @@ const LAYER_SHADERS := {
 	"line": preload("res://shaders/line.gdshader"),
 }
 const GRID_SHADER := preload("res://shaders/grid.gdshader")
+const BRUSH_GRID_SHADER := preload("res://shaders/brush_grid.gdshader")
 ## Render layer of everything that helps while working and is not part of the
 ## picture: the grid, the gimbal, the mirror, the tool at the hand. Cameras that take
 ## pictures see layer 1 only.
@@ -34,10 +35,16 @@ const HELPER_LAYERS := 2
 const HIGHLIGHT_SHADER := preload("res://shaders/highlight.gdshader")
 ## Half the side of the grid plane, in grid cells of the coarse spacing.
 const GRID_EXTENT := 40.0
+## How many cells the brush grid reaches each way from the hand.
+const BRUSH_GRID_CELLS := 3
+## How large a cell of the brush grid should look, in metres as seen.
+const BRUSH_GRID_SEEN := 0.05
 
 ## When true the dither pattern of see-through strokes changes every frame.
 var animate_dither := true
 var show_grid := true
+## The brush grid: a small grid in the air around the drawing hand.
+var show_brush_grid := false
 
 var scene: LimnerScene
 var environment: Environment
@@ -49,6 +56,8 @@ var _noise_texture: ImageTexture
 var _frame := 0
 var _grid: MeshInstance3D
 var _grid_material: ShaderMaterial
+var _brush_grid: MeshInstance3D
+var _brush_grid_material: ShaderMaterial
 var _gimbal: GimbalView
 var _mirror: MeshInstance3D
 var _mirror_material: ShaderMaterial
@@ -71,6 +80,7 @@ func _ready() -> void:
 	add_child(scene)
 	_setup_materials()
 	_setup_grid()
+	_setup_brush_grid()
 	_gimbal = GimbalView.new()
 	_gimbal.name = "Gimbal"
 	_gimbal.scene = scene
@@ -166,6 +176,7 @@ func _process(_delta: float) -> void:
 			material.set_shader_parameter("frame_index", 0)
 	_update_grid()
 	_update_mirror()
+	_update_brush_grid()
 
 
 ## Moves the dither pattern of see-through strokes on by one step. Once a frame is
@@ -210,6 +221,67 @@ func _update_grid() -> void:
 	var background := environment.background_color
 	var ink := Color.BLACK if background.get_luminance() > 0.35 else Color.WHITE
 	_grid_material.set_shader_parameter("line_color", Color(ink.r, ink.g, ink.b, 0.3))
+
+
+## Builds the lattice of the brush grid once: lines one cell apart along all three
+## axes, filling a block `BRUSH_GRID_CELLS` cells each way from its middle.
+func _setup_brush_grid() -> void:
+	var reach := float(BRUSH_GRID_CELLS)
+	var points := PackedVector3Array()
+	for a in range(-BRUSH_GRID_CELLS, BRUSH_GRID_CELLS + 1):
+		for b in range(-BRUSH_GRID_CELLS, BRUSH_GRID_CELLS + 1):
+			points.append_array([Vector3(-reach, a, b), Vector3(reach, a, b)])
+			points.append_array([Vector3(a, -reach, b), Vector3(a, reach, b)])
+			points.append_array([Vector3(a, b, -reach), Vector3(a, b, reach)])
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = points
+	var lattice := ArrayMesh.new()
+	lattice.add_surface_from_arrays(Mesh.PRIMITIVE_LINES, arrays)
+	_brush_grid_material = ShaderMaterial.new()
+	_brush_grid_material.shader = BRUSH_GRID_SHADER
+	# Faded out half a cell before the block ends, wherever in its cell the hand is.
+	_brush_grid_material.set_shader_parameter("reach", reach - 0.5)
+	_brush_grid = MeshInstance3D.new()
+	_brush_grid.name = "BrushGrid"
+	_brush_grid.mesh = lattice
+	_brush_grid.material_override = _brush_grid_material
+	_brush_grid.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_brush_grid.layers = HELPER_LAYERS
+	_brush_grid.visible = false
+	add_child(_brush_grid)
+
+
+## The size of a cell of the brush grid, in world units: 1, 2 or 5 times a power of
+## ten, whichever looks nearest to `BRUSH_GRID_SEEN` at this zoom. Every such grid
+## shares lines with the floor grid.
+static func brush_grid_spacing(world_per_metre: float) -> float:
+	var wanted := BRUSH_GRID_SEEN * world_per_metre
+	var decade := pow(10.0, floorf(log(wanted) / log(10.0)))
+	var best := decade
+	for step: float in [2.0, 5.0, 10.0]:
+		if absf(log(decade * step / wanted)) < absf(log(best / wanted)):
+			best = decade * step
+	return best
+
+
+## Keeps the brush grid around the drawing hand. The lattice sits on the world's own
+## grid lines and moves a whole cell at a time, so its lines stay where they are
+## while the hand moves among them.
+func _update_brush_grid() -> void:
+	var cursor := scene.tool_cursor() if show_brush_grid else {}
+	_brush_grid.visible = cursor.get("tracked", false)
+	if not _brush_grid.visible:
+		return
+	var viewer_from_world := scene.viewer_from_world()
+	var spacing := brush_grid_spacing(scene.view_scale())
+	var hand: Vector3 = viewer_from_world.affine_inverse() * (cursor.position as Vector3)
+	var cell := (hand / spacing).round()
+	_brush_grid.transform = viewer_from_world * Transform3D(Basis.from_scale(Vector3.ONE * spacing), cell * spacing)
+	_brush_grid_material.set_shader_parameter("center", hand / spacing - cell)
+	var background := environment.background_color
+	var ink := Color.BLACK if background.get_luminance() > 0.35 else Color.WHITE
+	_brush_grid_material.set_shader_parameter("line_color", Color(ink.r, ink.g, ink.b, 0.45))
 
 
 func _apply_document_settings() -> void:

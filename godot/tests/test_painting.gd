@@ -75,3 +75,38 @@ func test_the_stroke_the_lower_button_would_delete_blinks_first() -> void:
 	check_eq(row_named("Paint").strokes, 1, "one stroke left")
 	check(world.scene.stroke_at_hand().is_empty(), "and none under the hand")
 	check(not blink.visible, "the blink has gone")
+
+
+func test_the_brush_grid_stays_with_the_hand_on_the_worlds_own_lines() -> void:
+	var grid: MeshInstance3D = world.find_child("BrushGrid", true, false)
+	check(grid != null and not grid.visible, "hidden until it is asked for")
+	world.show_brush_grid = true
+	world.scene.input_hand(0, Vector3(0.11, 1.21, -0.72), Quaternion.IDENTITY, 0.0, 0.0, Vector2.ZERO, 0)
+	world.scene.input_commit(0.011)
+	await frames(2)
+	check(grid.visible, "shown around a hand that is there")
+	check_eq(grid.layers, LimnerWorld.HELPER_LAYERS, "on the layer that pictures and renders leave out")
+	check_near(LimnerWorld.brush_grid_spacing(world.scene.view_scale()), 0.05, "five centimetres at the scale of a new document")
+	var origin := grid.transform.origin
+	check(origin.is_equal_approx(Vector3(0.1, 1.2, -0.7)), "on the nearest crossing of the world's lines: %s" % origin)
+	# A move within the cell leaves the lines where they are.
+	world.scene.input_hand(0, Vector3(0.12, 1.19, -0.71), Quaternion.IDENTITY, 0.0, 0.0, Vector2.ZERO, 0)
+	world.scene.input_commit(0.011)
+	await frames(2)
+	check(grid.transform.origin.is_equal_approx(origin), "the lines stay put: %s" % grid.transform.origin)
+	var material: ShaderMaterial = grid.material_override
+	var center: Vector3 = material.get_shader_parameter("center")
+	check(center.is_equal_approx(Vector3(0.4, -0.2, -0.2)), "and the fade follows the hand among them: %s" % center)
+	# Into the next cell, the lattice comes along by a whole cell.
+	world.scene.input_hand(0, Vector3(0.16, 1.2, -0.7), Quaternion.IDENTITY, 0.0, 0.0, Vector2.ZERO, 0)
+	world.scene.input_commit(0.011)
+	await frames(2)
+	check(grid.transform.origin.is_equal_approx(Vector3(0.15, 1.2, -0.7)), "a cell along: %s" % grid.transform.origin)
+	world.scene.input_hand_absent(0)
+	world.scene.input_commit(0.011)
+	await frames(2)
+	check(not grid.visible, "gone with the hand")
+	# Cells are 1, 2 or 5 times a power of ten, whichever looks nearest to five centimetres.
+	check_near(LimnerWorld.brush_grid_spacing(10.0), 0.5, "zoomed out ten times")
+	check_near(LimnerWorld.brush_grid_spacing(3.0), 0.2, "zoomed out three times")
+	check_near(LimnerWorld.brush_grid_spacing(0.02), 0.001, "zoomed far in")

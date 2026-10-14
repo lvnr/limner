@@ -60,6 +60,9 @@ pub struct Options {
     pub painting_mode: bool,
     /// Blink the stroke the lower button would delete when the hand comes to it.
     pub show_stroke_at_hand: bool,
+    /// The brush grid: a small grid in the air around the drawing hand, lined up
+    /// with the world.
+    pub show_brush_grid: bool,
 }
 
 impl Default for Options {
@@ -89,6 +92,7 @@ impl Default for Options {
             default_interp: Interp::Linear,
             painting_mode: false,
             show_stroke_at_hand: true,
+            show_brush_grid: false,
         }
     }
 }

@@ -156,7 +156,7 @@ Measured on the development Mac (M1 Max, Godot 4.8 dev 7) with everything above 
 | `cargo test --workspace` | 517 passed, 0 failed, 3 ignored; 232 of them are in `limner-core` |
 | The three ignored tests | Two run Apple's USD tools on exported files and pass when asked for with `-- --ignored`; the third writes sample files for outside tools |
 | `cargo clippy --workspace --all-targets`, `cargo fmt --all -- --check` | Clean |
-| Interface tests, headless (`scripts/test.sh`) | 176 passed, 0 failed |
+| Interface tests, headless (`scripts/test.sh`) | 177 passed, 0 failed |
 | Interface tests that need a window (`-- capture export_panel monitor`) | 26 passed, 0 failed |
 | `scripts/package.sh` | A 74 MB macOS package. The packaged app starts, loads the extension, draws, and runs the simulated headset interface |
 | Frame time on the owner's sample project (53 layers, 948,032 triangles) at 1440 x 900, V-Sync off | 3.2 ms in the packaged release build, 3.3 ms in the development build |

@@ -118,7 +118,7 @@ symmetry: "off" | "x" | "y" | "z"     mirrored working, across the pivot of the 
 
 ### Options
 
-`show_grid`, `onion_skin`, `onion_frames` (0 = all), `snap_to_frames`, `snap_to_clips`, `create_layers_at_playhead`, `loop_range`, `recording`, `select_in_all_layers`, `select_in_all_frames`, `auto_select` (`"none"`, `"layer"`, `"group"`), `show_gimbal`, `rotation_snap_steps`, `allow_translate`, `allow_rotate`, `allow_scale`, `level_horizon`, `animate_duplicates`, `mute`, `preview_spawn_area`, `show_extras`, `default_interp` (`"step"`, `"linear"`, `"ease_in"`, `"ease_out"`, `"ease_in_out"`, `"smooth"`), `painting_mode` (the other hand's stick and its click do nothing; the Timeline panel sets it when its tracks are put away), `show_stroke_at_hand` (blink the stroke the lower button would delete).
+`show_grid`, `onion_skin`, `onion_frames` (0 = all), `snap_to_frames`, `snap_to_clips`, `create_layers_at_playhead`, `loop_range`, `recording`, `select_in_all_layers`, `select_in_all_frames`, `auto_select` (`"none"`, `"layer"`, `"group"`), `show_gimbal`, `rotation_snap_steps`, `allow_translate`, `allow_rotate`, `allow_scale`, `level_horizon`, `animate_duplicates`, `mute`, `preview_spawn_area`, `show_extras`, `default_interp` (`"step"`, `"linear"`, `"ease_in"`, `"ease_out"`, `"ease_in_out"`, `"smooth"`), `painting_mode` (the other hand's stick and its click do nothing; the Timeline panel sets it when its tracks are put away), `show_stroke_at_hand` (blink the stroke the lower button would delete), `show_brush_grid` (a small grid in the air around the drawing hand; the shells pass it on to `LimnerWorld.show_brush_grid`).
 
 ## Commands
 
