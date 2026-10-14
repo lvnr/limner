@@ -212,7 +212,7 @@ static func _count(number: int, noun: String) -> String:
 func _build_paint() -> void:
 	var section := _section("paint")
 	_choice("paint", "shading", "Shading", "Lit layers are shaded by the scene's lights", ["unlit", "lit"], ["Unlit", "Lit"])
-	var bake := Kit.button("Bake lighting into paint", "Paints the light that falls on this layer now into its strokes, on every frame, and makes it unlit: it then looks the same without the lights, here and in anything it is exported to. Shadows are not baked.", func() -> void: editor.run({"cmd": "bake_lighting", "layer": _layer}))
+	var bake := Kit.button("Bake lighting into paint", "Paints the light that falls on this layer now into its strokes, on every frame, and makes it unlit: it then looks the same without the lights, here and in anything it is exported to. Lights that cast shadows leave their shadows in the paint too.", func() -> void: editor.run({"cmd": "bake_lighting", "layer": _layer}))
 	bake.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_controls["paint.bake"] = bake
 	section.add_child(bake)

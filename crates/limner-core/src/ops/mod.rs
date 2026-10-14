@@ -10,6 +10,7 @@ pub mod frames;
 pub mod keys;
 pub mod layers;
 pub mod lighting;
+pub mod occlusion;
 pub mod simplify;
 pub mod strokes;
 
