@@ -116,6 +116,14 @@ impl LimnerScene {
         self.signals().document_replaced().emit();
     }
 
+    /// Brings a picture, a sound or a model into the document as a new layer.
+    /// Returns `{ok, error, layer}`.
+    #[func]
+    fn import_file(&mut self, path: GString) -> VarDictionary {
+        let _ = path;
+        vdict! { "ok" => false, "error" => "importing files is not available in this build yet", "layer" => -1 }
+    }
+
     // ----- commands and queries -----
 
     /// Runs a command, given as a dictionary with a `cmd` entry. Returns

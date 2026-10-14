@@ -29,7 +29,13 @@ const TOOL_KEYS := {
 const LEFT_DOCK_WIDTH := 292
 const RIGHT_DOCK_WIDTH := 324
 
-enum FileMenu { NEW, OPEN, SAVE, SAVE_AS, QUIT }
+enum FileMenu { NEW, OPEN, SAVE, SAVE_AS, IMPORT, EXPORT, QUIT }
+## What File > Import offers: pictures, sounds and models become layers.
+const IMPORT_FILTERS := [
+	"*.png, *.jpg, *.jpeg ; Pictures",
+	"*.wav, *.ogg, *.mp3 ; Sounds",
+	"*.obj, *.glb, *.gltf, *.fbx ; Models",
+]
 enum EditMenu { UNDO, REDO, DUPLICATE, DELETE, RENAME }
 enum ViewMenu { FRAME_ALL, HOME, GRID, EXTRAS, PANELS, FULLSCREEN }
 
@@ -44,6 +50,8 @@ var hand: DesktopHand
 var left_dock: VBoxContainer
 var right_dock: VBoxContainer
 var bottom_dock: VBoxContainer
+## The tabbed panels under the layer list.
+var details: TabContainer
 
 var _free_area: Control
 var _title: Label
@@ -133,13 +141,26 @@ func _build_interface() -> void:
 
 	layers_panel = LayersPanel.new(editor)
 	right_dock.add_child(layers_panel)
-	var tabs := TabContainer.new()
-	tabs.name = "Details"
-	tabs.custom_minimum_size = Vector2(0, 330)
-	tabs.add_child(_scrolling(TransformPanel.new(editor)))
-	tabs.add_child(_scrolling(PropertiesPanel.new(editor)))
-	tabs.add_child(_scrolling(DocumentPanel.new(editor)))
-	right_dock.add_child(tabs)
+	details = TabContainer.new()
+	details.name = "Details"
+	details.custom_minimum_size = Vector2(0, 330)
+	# Tabs show an icon; the panel's name is the tooltip.
+	for entry: Array in [
+		[TransformPanel.new(editor), "move"],
+		[PropertiesPanel.new(editor), "paint_layer"],
+		[DocumentPanel.new(editor), "new_file"],
+		[ExportPanel.new(editor), "export"],
+		[MonitorPanel.new(editor), "film"],
+		[PerformancePanel.new(editor), "chart"],
+		[SettingsPanel.new(editor), "gear"],
+	]:
+		var panel: Control = entry[0]
+		var index := details.get_tab_count()
+		details.add_child(_scrolling(panel))
+		details.set_tab_title(index, "")
+		details.set_tab_icon(index, Icons.texture(entry[1], Kit.TEXT, 18))
+		details.set_tab_tooltip(index, panel.name)
+	right_dock.add_child(details)
 
 	_toast = Kit.label("")
 	_toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -202,6 +223,9 @@ func _build_top_bar() -> Control:
 	file.add_separator()
 	file.add_item("Save", FileMenu.SAVE, KEY_MASK_CMD_OR_CTRL | KEY_S)
 	file.add_item("Save As…", FileMenu.SAVE_AS, KEY_MASK_CMD_OR_CTRL | KEY_MASK_SHIFT | KEY_S)
+	file.add_separator()
+	file.add_item("Import…", FileMenu.IMPORT, KEY_MASK_CMD_OR_CTRL | KEY_I)
+	file.add_item("Export…", FileMenu.EXPORT, KEY_MASK_CMD_OR_CTRL | KEY_E)
 	file.add_separator()
 	file.add_item("Quit", FileMenu.QUIT, KEY_MASK_CMD_OR_CTRL | KEY_Q)
 	file.id_pressed.connect(_on_file_menu)
@@ -306,6 +330,10 @@ func _on_file_menu(id: int) -> void:
 			save()
 		FileMenu.SAVE_AS:
 			save_as()
+		FileMenu.IMPORT:
+			_ask_for_path(FileDialog.FILE_MODE_OPEN_FILE, "Import a picture, a sound or a model as a new layer", PackedStringArray(IMPORT_FILTERS), editor.import_file)
+		FileMenu.EXPORT:
+			show_details("Export")
 		FileMenu.QUIT:
 			_after_saving_changes(get_tree().quit)
 
@@ -440,6 +468,13 @@ func _on_view_menu(id: int) -> void:
 			var window := get_window()
 			window.mode = Window.MODE_WINDOWED if window.mode == Window.MODE_FULLSCREEN else Window.MODE_FULLSCREEN
 	_refresh()
+
+
+## Brings one of the tabbed panels under the layer list to the front, by name.
+func show_details(panel_name: String) -> void:
+	for index in details.get_tab_count():
+		if details.get_tab_control(index).name == panel_name:
+			details.current_tab = index
 
 
 ## Shows or hides the docks, leaving the menu bar.

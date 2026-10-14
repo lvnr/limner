@@ -179,6 +179,16 @@ func save_document(file_path: String, thumbnail := PackedByteArray()) -> bool:
 	return true
 
 
+## Brings a picture, a sound or a model into the document as a new layer.
+## Returns the new layer's id, or -1 after reporting why it failed.
+func import_file(file_path: String) -> int:
+	var result := scene.import_file(file_path)
+	if not result.ok:
+		message.emit("Could not import %s: %s" % [file_path.get_file(), result.error], true)
+		return -1
+	return int(result.layer)
+
+
 func title() -> String:
 	var name: String = get_info().get("title", "")
 	if name == "":
