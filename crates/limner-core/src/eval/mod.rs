@@ -11,7 +11,7 @@
 
 use crate::math::Xform;
 use crate::model::{
-    Document, DrawingId, Interp, Layer, LayerAnim, LayerId, LayerKind, Sequence, Track,
+    Document, DrawingId, Interp, Key, Layer, LayerAnim, LayerId, LayerKind, Sequence, Track,
 };
 use crate::time::Flicks;
 use glam::DAffine3;
@@ -155,12 +155,36 @@ pub fn sequence_time(sequence: &Sequence, local: Flicks) -> Flicks {
     }
 }
 
+/// The keys around a moment that lies between two of them, for curves that pass
+/// through their neighbours.
+pub struct Span<'a, T> {
+    pub before: Option<&'a Key<T>>,
+    pub from: &'a Key<T>,
+    pub to: &'a Key<T>,
+    pub after: Option<&'a Key<T>>,
+    /// How far from `from` to `to` the moment is, 0 to 1.
+    pub t: f64,
+}
+
 /// Evaluates a keyed value. Before the first key the first value holds; after the
-/// last, the last. Between two keys the earlier key's interpolation decides.
+/// last, the last. Between two keys the earlier key's interpolation decides. A
+/// smooth key moves as a linear one here; see [`eval_track_with`].
 pub fn eval_track<T: Clone>(
     track: &Track<T>,
     time: Flicks,
     mix: impl Fn(&T, &T, f64) -> T,
+) -> Option<T> {
+    eval_track_with(track, time, &mix, |span| {
+        mix(&span.from.value, &span.to.value, span.t)
+    })
+}
+
+/// As [`eval_track`], with `curve` deciding how a smooth key moves to the next.
+pub fn eval_track_with<T: Clone>(
+    track: &Track<T>,
+    time: Flicks,
+    mix: impl Fn(&T, &T, f64) -> T,
+    curve: impl Fn(&Span<T>) -> T,
 ) -> Option<T> {
     let keys = track.keys();
     let first = keys.first()?;
@@ -175,20 +199,83 @@ pub fn eval_track<T: Clone>(
         return Some(last.value.clone());
     }
     let t = (time - last.time) as f64 / (next.time - last.time) as f64;
+    if last.interp == Interp::Smooth {
+        return Some(curve(&Span {
+            before: i.checked_sub(1).map(|b| &keys[b]),
+            from: last,
+            to: next,
+            after: keys.get(i + 2),
+            t,
+        }));
+    }
     Some(mix(&last.value, &next.value, last.interp.ease(t)))
+}
+
+/// A curve through the values of a span's keys that arrives at each key at its
+/// time and passes it without a corner: a cubic whose slope at a key is that of
+/// the straight line between the key's neighbours. `value` reads the quantity to
+/// curve from a key.
+pub fn curve_through<T, V>(span: &Span<T>, value: impl Fn(&T) -> V) -> V
+where
+    V: Copy
+        + std::ops::Add<Output = V>
+        + std::ops::Sub<Output = V>
+        + std::ops::Mul<f64, Output = V>,
+{
+    let (p0, p1) = (value(&span.from.value), value(&span.to.value));
+    let length = (span.to.time - span.from.time) as f64;
+    let straight = p1 - p0;
+    // Slopes are per unit of time, and scaled by the length of this stretch below.
+    let slope = |a: &Key<T>, b: &Key<T>| {
+        let between = (b.time - a.time) as f64;
+        if between > 0.0 {
+            (value(&b.value) - value(&a.value)) * (length / between)
+        } else {
+            straight
+        }
+    };
+    let m0 = span
+        .before
+        .map_or(straight, |before| slope(before, span.to));
+    let m1 = span.after.map_or(straight, |after| slope(span.from, after));
+    let t = span.t;
+    let (t2, t3) = (t * t, t * t * t);
+    p0 * (2.0 * t3 - 3.0 * t2 + 1.0)
+        + m0 * (t3 - 2.0 * t2 + t)
+        + p1 * (-2.0 * t3 + 3.0 * t2)
+        + m1 * (t3 - t2)
 }
 
 /// A layer's own transform at `time` (the time of its enclosing sequence).
 pub fn layer_transform_at(layer: &Layer, time: Flicks) -> Xform {
-    eval_track(&layer.anim.transform, time, |a, b, t| {
-        Xform::mix_about_pivot(a, b, &layer.pivot, t)
-    })
+    let pivot = &layer.pivot;
+    eval_track_with(
+        &layer.anim.transform,
+        time,
+        |a, b, t| Xform::mix_about_pivot(a, b, pivot, t),
+        |span| {
+            // The pivot travels a curve through where the keys put it, and the size
+            // changes as smoothly. Turning stays the shortest way round at an even pace.
+            let turned = Xform::mix_about_pivot(&span.from.value, &span.to.value, pivot, span.t);
+            let mut placed = turned.mul(pivot);
+            placed.translation = curve_through(span, |x: &Xform| x.mul(pivot).translation);
+            placed.scale = curve_through(span, |x: &Xform| x.mul(pivot).scale)
+                .max(span.from.value.scale.min(span.to.value.scale) * 1e-3);
+            placed.mul(&pivot.inverse())
+        },
+    )
     .unwrap_or(layer.transform)
 }
 
 /// A layer's own opacity at `time` (the time of its enclosing sequence).
 pub fn layer_opacity_at(layer: &Layer, time: Flicks) -> f32 {
-    eval_track(&layer.anim.opacity, time, |a, b, t| a + (b - a) * t as f32).unwrap_or(layer.opacity)
+    eval_track_with(
+        &layer.anim.opacity,
+        time,
+        |a, b, t| a + (b - a) * t as f32,
+        |span| curve_through(span, |v: &f32| *v as f64).clamp(0.0, 1.0) as f32,
+    )
+    .unwrap_or(layer.opacity)
 }
 
 struct Context {

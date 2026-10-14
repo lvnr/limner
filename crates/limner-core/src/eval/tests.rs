@@ -444,3 +444,93 @@ fn every_layer_is_reported_parents_first() {
     assert_eq!(frame.clock, Clock::at(0));
     assert!(frame.get(LayerId(9_999)).is_none());
 }
+
+#[test]
+fn smooth_keys_pass_through_their_values_without_a_corner() {
+    use crate::model::Interp;
+    let mut doc = Document::new();
+    let layer = doc.find_by_path("Root/Paint").unwrap();
+    let at = |x: f64, y: f64| Xform::from_translation(glam::DVec3::new(x, y, 0.0));
+    {
+        let layer = doc.layer_mut(layer).unwrap();
+        layer.anim.transform.set(0, at(0.0, 0.0), Interp::Smooth);
+        layer.anim.transform.set(100, at(1.0, 1.0), Interp::Smooth);
+        layer.anim.transform.set(200, at(2.0, 0.0), Interp::Smooth);
+        layer.anim.opacity.set(0, 0.0, Interp::Smooth);
+        layer.anim.opacity.set(100, 1.0, Interp::Smooth);
+        layer.anim.opacity.set(200, 1.0, Interp::Smooth);
+    }
+    let place = |time: Flicks| layer_transform_at(doc.layer(layer).unwrap(), time).translation;
+    // Each key is reached at its time.
+    assert!((place(100) - glam::DVec3::new(1.0, 1.0, 0.0)).length() < 1e-12);
+    assert!((place(200) - glam::DVec3::new(2.0, 0.0, 0.0)).length() < 1e-12);
+    // Half way to the top the path bulges above the straight line.
+    let half = place(50);
+    assert!(
+        (half.x - 0.5).abs() < 1e-9 && (half.y - 0.625).abs() < 1e-9,
+        "{half:?}"
+    );
+    // Through the middle key the motion keeps its direction and speed.
+    let before = place(100) - place(99);
+    let after = place(101) - place(100);
+    assert!(
+        (before - after).length() < 1e-3,
+        "{before:?} then {after:?}"
+    );
+    assert!(after.y.abs() < 1e-3, "level at the top");
+
+    // The same keys set to linear make a corner there.
+    let mut straight = doc.clone();
+    for time in [0, 100, 200] {
+        straight
+            .layer_mut(layer)
+            .unwrap()
+            .anim
+            .transform
+            .get_mut(time)
+            .unwrap()
+            .interp = Interp::Linear;
+    }
+    let corner =
+        |time: Flicks| layer_transform_at(straight.layer(layer).unwrap(), time).translation;
+    assert!(((corner(100) - corner(99)) - (corner(101) - corner(100))).length() > 0.01);
+
+    // Opacity curves too, and never leaves the range it can have.
+    let opacity = |time: Flicks| layer_opacity_at(doc.layer(layer).unwrap(), time);
+    assert_eq!(opacity(100), 1.0);
+    assert!(opacity(50) > 0.5 && opacity(50) <= 1.0);
+    assert!((0..=200).all(|t| (0.0..=1.0).contains(&opacity(t))));
+}
+
+#[test]
+fn a_smooth_key_turns_about_the_pivot_as_the_other_modes_do() {
+    use crate::model::Interp;
+    let mut doc = Document::new();
+    let layer = doc.find_by_path("Root/Paint").unwrap();
+    let pivot = glam::DVec3::new(1.0, 0.0, 0.0);
+    {
+        let layer = doc.layer_mut(layer).unwrap();
+        layer.pivot = Xform::from_translation(pivot);
+        // A quarter turn about the pivot: the pivot itself stays where it is.
+        let turned = Xform::from_translation(pivot)
+            .mul(&Xform::from_rotation(glam::DQuat::from_rotation_z(
+                std::f64::consts::FRAC_PI_2,
+            )))
+            .mul(&Xform::from_translation(-pivot));
+        layer.anim.transform.set(0, Xform::IDENTITY, Interp::Smooth);
+        layer.anim.transform.set(100, turned, Interp::Smooth);
+    }
+    for time in [0, 25, 50, 75, 100] {
+        let now = layer_transform_at(doc.layer(layer).unwrap(), time);
+        assert!(
+            (now.transform_point(pivot) - pivot).length() < 1e-9,
+            "at {time}"
+        );
+    }
+    let half = layer_transform_at(doc.layer(layer).unwrap(), 50);
+    assert!(
+        half.rotation
+            .angle_between(glam::DQuat::from_rotation_z(std::f64::consts::FRAC_PI_4))
+            < 1e-9
+    );
+}

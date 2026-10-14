@@ -34,9 +34,16 @@ pub enum DocumentError {
     RootIsFixed,
     #[error("a layer cannot be moved into itself or its own descendants")]
     WouldCreateCycle,
+    #[error("layers cannot be nested more than {MAX_LAYER_DEPTH} deep")]
+    TooDeep,
     #[error("document is inconsistent: {0}")]
     Inconsistent(String),
 }
+
+/// The deepest a layer may sit below the root. The file format holds no more (see
+/// `docs/format.md`), so the document refuses to grow past it instead of becoming
+/// something that cannot be saved.
+pub const MAX_LAYER_DEPTH: usize = 48;
 
 impl Default for Document {
     fn default() -> Self {
@@ -224,6 +231,9 @@ impl Document {
         index: usize,
     ) -> Result<LayerId, DocumentError> {
         let id = layer.id;
+        if self.layers.contains_key(&parent) && self.depth(parent) >= MAX_LAYER_DEPTH {
+            return Err(DocumentError::TooDeep);
+        }
         let parent_layer = self
             .layers
             .get_mut(&parent)
@@ -310,6 +320,17 @@ impl Document {
         }
         if self.is_ancestor_or_self(id, new_parent) {
             return Err(DocumentError::WouldCreateCycle);
+        }
+        // The layer brings everything inside it along, however deep that goes.
+        let own_depth = self.depth(id);
+        let height = self
+            .subtree(id)
+            .iter()
+            .map(|l| self.depth(*l) - own_depth)
+            .max()
+            .unwrap_or(0);
+        if self.depth(new_parent) + 1 + height > MAX_LAYER_DEPTH {
+            return Err(DocumentError::TooDeep);
         }
         let old_parent = self.parent_of(id).ok_or(DocumentError::NoSuchLayer(id))?;
         if let Some(group) = self.layer_mut(old_parent).and_then(|l| l.as_group_mut()) {
@@ -520,8 +541,18 @@ impl Document {
                 self.layers.len() - unique.len()
             ));
         }
+        if let Some(viewpoint) = self.settings.default_viewpoint {
+            if !self.layers.contains_key(&viewpoint) {
+                return bad(format!(
+                    "the initial spawn area, layer {viewpoint}, does not exist"
+                ));
+            }
+        }
         for id in &reachable {
             let layer = self.layer(*id).expect("walk only yields existing layers");
+            if self.depth(*id) > MAX_LAYER_DEPTH {
+                return bad(format!("layer {id} is nested too deep"));
+            }
             if layer.id != *id {
                 return bad(format!("layer stored under {id} carries id {}", layer.id));
             }

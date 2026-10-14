@@ -9,7 +9,7 @@ mod media;
 mod settings;
 mod stroke;
 
-pub use document::{Document, DocumentError};
+pub use document::{Document, DocumentError, MAX_LAYER_DEPTH};
 pub use drawing::{Drawing, StrokeAddr, StrokeChunk, MAX_CHUNK_VERTICES};
 pub use ids::{DrawingId, LayerId, MediaId};
 pub use keys::{Interp, Key, Track};

@@ -260,10 +260,7 @@ impl LayerNodes {
             let Some(layer) = doc.layer(state.id) else {
                 continue;
             };
-            let has_content = match &layer.kind {
-                LayerKind::Paint(_) | LayerKind::Group(_) => false,
-                _ => true,
-            };
+            let has_content = !matches!(&layer.kind, LayerKind::Paint(_) | LayerKind::Group(_));
             if !has_content && !layer.show_bounds {
                 if let Some(entry) = self.entries.remove(&state.id) {
                     entry.free();

@@ -810,3 +810,53 @@ fn framing_counts_flat_pictures_and_models_but_not_what_surrounds_the_viewer() {
     assert!((center - DVec3::new(3.0, 1.0, 0.0)).length() < 1e-9);
     assert!((radius - 2f64.sqrt()).abs() < 1e-6);
 }
+
+#[test]
+fn layers_cannot_be_nested_deeper_than_the_format_holds() {
+    use crate::model::MAX_LAYER_DEPTH;
+    let mut session = Session::new(Document::new());
+    let mut parent = session.doc().root();
+    let mut groups = Vec::new();
+    for _ in 0..MAX_LAYER_DEPTH {
+        let result = session
+            .exec_json(&json!({"cmd": "add_layer", "kind": "group", "parent": parent}))
+            .unwrap();
+        parent = LayerId(result["layer"].as_u64().unwrap());
+        groups.push(parent);
+    }
+    assert_eq!(session.doc().depth(parent), MAX_LAYER_DEPTH);
+    let count = session.doc().layer_count();
+    let refused = session
+        .exec_json(&json!({"cmd": "add_layer", "kind": "paint", "parent": parent}))
+        .unwrap_err();
+    assert!(refused.to_string().contains("nested"), "{refused}");
+    assert_eq!(session.doc().layer_count(), count);
+
+    // Moving a group counts what is inside it: the second group holds 46 more levels.
+    let refused = session
+        .exec_json(
+            &json!({"cmd": "move_layer", "layer": groups[1], "parent": groups[0], "index": 0}),
+        )
+        .is_ok();
+    assert!(refused, "moving it to where it already is changes no depth");
+    let top = LayerId(
+        session
+            .exec_json(
+                &json!({"cmd": "add_layer", "kind": "group", "parent": session.doc().root()}),
+            )
+            .unwrap()["layer"]
+            .as_u64()
+            .unwrap(),
+    );
+    let inner = LayerId(
+        session
+            .exec_json(&json!({"cmd": "add_layer", "kind": "group", "parent": top}))
+            .unwrap()["layer"]
+            .as_u64()
+            .unwrap(),
+    );
+    assert!(session
+        .exec_json(&json!({"cmd": "move_layer", "layer": groups[0], "parent": inner, "index": 0}))
+        .is_err());
+    session.doc().validate().unwrap();
+}
