@@ -347,6 +347,8 @@ func _build_viewpoint() -> void:
 	var initial := Kit.toggle("Initial spawn area", "The viewer starts here when the document opens", func(on: bool) -> void: editor.run({"cmd": "set_default_viewpoint", "layer": _layer if on else null}))
 	_add("viewpoint", "initial", initial)
 	section.add_child(Kit.button("Stand here", "Moves your view to this spawn area", func() -> void: editor.scene.view_go_to_viewpoint(_layer), "viewpoint"))
+	# Spawn areas are the saved views: this keeps the one you have now.
+	section.add_child(Kit.button("Move it here", "Moves this spawn area to where you stand now, upright and at this zoom, so that standing in it gives this view back", func() -> void: editor.run({"cmd": "place_viewpoint_here", "layer": _layer}), "viewpoint"))
 	_toggle("viewpoint", "exporting", "Include when publishing", "Viewers of the published piece can use this spawn area")
 	_toggle("viewpoint", "show_volume", "Show volume", "Shows the space the viewer may move in")
 	_color("viewpoint", "color", "Colour", "The colour of the ring and its volume")

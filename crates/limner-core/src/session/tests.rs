@@ -1400,3 +1400,49 @@ fn the_eraser_removes_only_strokes_it_erased_itself() {
     let ids: Vec<u32> = strokes(&session, paint).iter().map(|s| s.id).collect();
     assert_eq!(ids, [1]);
 }
+
+#[test]
+fn a_spawn_area_moved_here_gives_this_view_back_upright() {
+    let mut session = Session::new(Document::new());
+    let spawn = layer_id(&run(
+        &mut session,
+        json!({ "cmd": "add_layer", "kind": "viewpoint" }),
+    ));
+    // Somewhere else, turned, tilted and zoomed.
+    session.view.world_from_viewer = Xform {
+        rotation: DQuat::from_rotation_y(0.7) * DQuat::from_rotation_x(-0.3),
+        scale: 2.5,
+        translation: DVec3::new(3.0, 0.5, -2.0),
+        flip: Flip::None,
+    };
+    run(
+        &mut session,
+        json!({ "cmd": "place_viewpoint_here", "layer": spawn }),
+    );
+    assert_eq!(session.status()["undo_label"], "Move spawn area here");
+    session.view.world_from_viewer = Xform::IDENTITY;
+    session.go_to_viewpoint(spawn);
+    let view = session.view.world_from_viewer;
+    assert!((view.translation - DVec3::new(3.0, 0.5, -2.0)).length() < 1e-9);
+    assert!((view.scale - 2.5).abs() < 1e-9);
+    // The turn about the vertical is kept, the tilt is not.
+    assert!(view.rotation.angle_between(DQuat::from_rotation_y(0.7)) < 1e-9);
+
+    // Inside a moved group it still lands in the same place in the world.
+    let group = layer_id(&run(&mut session, json!({ "cmd": "add_layer", "kind": "group" })));
+    run(
+        &mut session,
+        json!({ "cmd": "set_layer", "layer": group, "transform": { "rotation": [0.0, 0.0, 0.0, 1.0], "scale": 0.5, "translation": [1.0, 0.0, 0.0] } }),
+    );
+    run(&mut session, json!({ "cmd": "move_layer", "layer": spawn, "parent": group, "index": 0 }));
+    session.view.world_from_viewer = Xform::from_translation(DVec3::new(-1.0, 1.6, 4.0));
+    run(&mut session, json!({ "cmd": "place_viewpoint_here", "layer": spawn }));
+    session.view.world_from_viewer = Xform::IDENTITY;
+    session.go_to_viewpoint(spawn);
+    assert!(
+        (session.view.world_from_viewer.translation - DVec3::new(-1.0, 1.6, 4.0)).length() < 1e-9
+    );
+
+    // Only spawn areas.
+    fail(&mut session, json!({ "cmd": "place_viewpoint_here", "layer": group }));
+}

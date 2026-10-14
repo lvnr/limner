@@ -335,6 +335,22 @@ func test_spawn_area_settings() -> void:
 	await frames(2)
 	check_eq(editor.get_info().default_viewpoint, null, "switched off, no spawn area is the initial one")
 
+	# "Move it here" keeps the view you have now; "Stand here" gives it back.
+	world.scene.view_pan(Vector3(0.4, 0.0, -0.3))
+	var kept := world.scene.viewer_from_world()
+	var move_here: Button = null
+	for button: Button in panel.find_children("*", "Button", true, false):
+		if button.text == "Move it here":
+			move_here = button
+	check(move_here != null, "a Move it here button")
+	if move_here != null:
+		move_here.pressed.emit()
+		await frames(2)
+		check_eq(editor.status.undo_label, "Move spawn area here", "one undo step")
+		world.scene.view_pan(Vector3(-2.0, 0.0, 1.0))
+		editor.scene.view_go_to_viewpoint(area)
+		check(world.scene.viewer_from_world().origin.is_equal_approx(kept.origin), "standing in it gives the view back: %s against %s" % [world.scene.viewer_from_world().origin, kept.origin])
+
 	var exporting: CheckBox = panel._controls["viewpoint.exporting"]
 	exporting.button_pressed = false
 	await frames(2)

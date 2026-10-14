@@ -134,6 +134,7 @@ A command is a dictionary with a `cmd` entry. Fields marked optional may be left
 |---|---|
 | `set_document` | optional `title`, `description`, `background`, `ambient_light` (the light lit paint gets from everywhere), `rate` (`{num, den}`), `range_start`, `range_end`, `camera_resolution` (`[w, h]`) |
 | `set_default_viewpoint` | `layer` (id or `null`) |
+| `place_viewpoint_here` | `layer` (a spawn area): moves it to where the viewer stands now, upright and at the current zoom, so that standing in it gives this view back |
 | `set_palette_color` | `index` (0 to 15), `color` |
 
 ### Layers

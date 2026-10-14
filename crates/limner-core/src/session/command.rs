@@ -107,6 +107,11 @@ pub enum Command {
     SetDefaultViewpoint {
         layer: Option<LayerId>,
     },
+    /// Moves a spawn area to where the viewer stands now, upright and at the current
+    /// zoom, so that standing in it later gives this view back.
+    PlaceViewpointHere {
+        layer: LayerId,
+    },
     SetPaletteColor {
         index: usize,
         color: [f32; 3],
@@ -435,6 +440,7 @@ impl Command {
         Some(match self {
             SetDocument { .. } => "Change document settings",
             SetDefaultViewpoint { .. } => "Set initial spawn area",
+            PlaceViewpointHere { .. } => "Move spawn area here",
             SetPaletteColor { .. } => "Change palette",
             AddLayer { .. } => "Add layer",
             DeleteLayers { .. } => "Delete layer",

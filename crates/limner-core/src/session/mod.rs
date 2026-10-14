@@ -816,6 +816,33 @@ impl Session {
                 }
                 Ok(Value::Null)
             }
+            Command::PlaceViewpointHere { layer } => {
+                let spawn = self.doc.layer(layer).ok_or_else(|| no_layer(layer))?;
+                if !matches!(spawn.kind, LayerKind::Viewpoint(_)) {
+                    return Err(CommandError::invalid(
+                        "only a spawn area can be moved to where you stand",
+                    ));
+                }
+                let parent = spawn.parent;
+                self.require_unlocked(layer)?;
+                let mut here = self.view.world_from_viewer;
+                // Upright: of the viewer's turn only the part about the vertical is kept.
+                let forward = here.rotation * DVec3::NEG_Z;
+                let yaw = if forward.x.abs() + forward.z.abs() > 1e-9 {
+                    (-forward.x).atan2(-forward.z)
+                } else {
+                    // Looking straight up or down: face the way the top of the view points.
+                    let up = here.rotation * DVec3::Y;
+                    (up.x * forward.y.signum()).atan2(up.z * forward.y.signum())
+                };
+                here.rotation = glam::DQuat::from_rotation_y(yaw);
+                here.flip = crate::math::Flip::None;
+                let frame = self.evaluate();
+                let parent_world =
+                    parent.map_or(crate::math::Xform::IDENTITY, |p| frame.world_xform(&self.doc, p));
+                self.write_transform_as(layer, parent_world.inverse().mul(&here), false)?;
+                Ok(Value::Null)
+            }
             Command::SetDefaultViewpoint { layer } => {
                 if let Some(id) = layer {
                     if !matches!(
