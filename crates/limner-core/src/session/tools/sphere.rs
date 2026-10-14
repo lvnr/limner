@@ -166,13 +166,26 @@ impl SphereGesture {
             let drawing_id = target.target.drawing;
             let center = space.point(input.main.position).as_vec3();
             let radius = space.length(tools.size() as f64) as f32;
+            // With mirrored working on, the tool is also at work at the hand's
+            // reflection: a point feels whichever of the two is nearer.
+            let twin = session
+                .mirror_in(target.target.layer)
+                .map(|mirror| (mirror, mirror.transform_point(center.as_dvec3()).as_vec3()));
+            let near = |p: &Point| -> f32 {
+                let distance = reach(p, center);
+                twin.map_or(distance, |(_, other)| distance.min(reach(p, other)))
+            };
             let touched = &mut self.touched;
             let simplified = &mut self.simplified;
             let tool = self.tool;
             let mut changed = false;
             session.edit_drawing(drawing_id, |drawing| {
                 let count = drawing.edit_strokes(
-                    |bounds| bounds.intersects_sphere(center, radius),
+                    |bounds| {
+                        bounds.intersects_sphere(center, radius)
+                            || twin
+                                .is_some_and(|(_, other)| bounds.intersects_sphere(other, radius))
+                    },
                     |stroke| {
                         if !target.allows(stroke) {
                             return None;
@@ -189,7 +202,7 @@ impl SphereGesture {
                                     settings.strength * pressure
                                 };
                                 strengthen(touched, drawing_id, stroke, |p| {
-                                    push * falloff(reach(p, center), radius, inner)
+                                    push * falloff(near(p), radius, inner)
                                 })
                                 .map(|entry| {
                                     rebuild(entry, stroke, |original, weight| {
@@ -211,8 +224,7 @@ impl SphereGesture {
                             ToolKind::Eraser => {
                                 let strength = tools.eraser.strength * pressure;
                                 strengthen(touched, drawing_id, stroke, |p| {
-                                    strength
-                                        * falloff(reach(p, center), radius, radius * ERASER_CORE)
+                                    strength * falloff(near(p), radius, radius * ERASER_CORE)
                                 })
                                 .map(|entry| {
                                     rebuild(entry, stroke, |original, weight| Point {
@@ -226,7 +238,7 @@ impl SphereGesture {
                                     / THICKEN_SECONDS
                                     * if thin { -1.0 } else { 1.0 };
                                 reshape(stroke, |p| {
-                                    let weight = falloff(reach(p, center), radius, 0.0);
+                                    let weight = falloff(near(p), radius, 0.0);
                                     (weight > 0.0 && p.width > 0.0).then(|| Point {
                                         width: p.width * (rate * weight).exp(),
                                         ..*p
@@ -239,8 +251,19 @@ impl SphereGesture {
                                 if push == Vec3::ZERO {
                                     return None;
                                 }
+                                // On the far side of the mirror the push is mirrored too.
+                                let twin_push = twin.map(|(mirror, other)| {
+                                    (other, mirror.transform_vector(push.as_dvec3()).as_vec3())
+                                });
                                 reshape(stroke, |p| {
-                                    let weight = falloff(reach(p, center), radius, 0.0);
+                                    let here = reach(p, center);
+                                    let (distance, push) = match twin_push {
+                                        Some((other, mirrored)) if reach(p, other) < here => {
+                                            (reach(p, other), mirrored)
+                                        }
+                                        _ => (here, push),
+                                    };
+                                    let weight = falloff(distance, radius, 0.0);
                                     (weight > 0.0).then(|| Point {
                                         pos: (p.position() + push * weight).to_array(),
                                         ..*p
@@ -249,7 +272,7 @@ impl SphereGesture {
                             }
                             ToolKind::Optimize => {
                                 if simplified.contains(&(drawing_id, stroke.id))
-                                    || !stroke.points().iter().any(|p| reach(p, center) < radius)
+                                    || !stroke.points().iter().any(|p| near(p) < radius)
                                 {
                                     return None;
                                 }

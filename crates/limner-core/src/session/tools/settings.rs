@@ -271,6 +271,30 @@ impl Default for OptimizeSettings {
     }
 }
 
+/// Mirrored working: what the tools do on one side of a plane they also do on the
+/// other. The plane passes through the pivot of the paint layer, square to the named
+/// axis of the pivot, so it is placed by moving the pivot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Symmetry {
+    #[default]
+    Off,
+    X,
+    Y,
+    Z,
+}
+
+impl Symmetry {
+    pub fn flip(self) -> Option<crate::math::Flip> {
+        match self {
+            Symmetry::Off => None,
+            Symmetry::X => Some(crate::math::Flip::X),
+            Symmetry::Y => Some(crate::math::Flip::Y),
+            Symmetry::Z => Some(crate::math::Flip::Z),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToolSettings {
@@ -288,6 +312,9 @@ pub struct ToolSettings {
     pub thicken: SphereSettings,
     pub nudge: SphereSettings,
     pub optimize: OptimizeSettings,
+    /// Paint, Line, Colorize, Eraser, Thicken, Nudge and Optimize work on both sides
+    /// of the mirror plane at once.
+    pub symmetry: Symmetry,
 }
 
 impl Default for ToolSettings {
@@ -317,6 +344,7 @@ impl Default for ToolSettings {
                 ..SphereSettings::default()
             },
             optimize: OptimizeSettings::default(),
+            symmetry: Symmetry::Off,
         }
     }
 }

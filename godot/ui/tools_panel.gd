@@ -79,6 +79,7 @@ var _contexts := {}
 var _settings := {}
 ## The toggle showing each editor option, by key.
 var _options := {}
+var _mirror: ChoiceRow
 var _selection_status: Label
 ## The buttons that need a selection to act on.
 var _selection_buttons: Array[Button] = []
@@ -109,6 +110,12 @@ func _init(limner_editor: LimnerEditor) -> void:
 
 	add_child(Kit.heading("Guides"))
 	add_child(_option("show_grid", "Floor grid", "Show a grid on the floor of the world"))
+	_mirror = ChoiceRow.new()
+	_mirror.add_text("off", "Off", "Tools work where the hand is and nowhere else")
+	for axis: String in ["x", "y", "z"]:
+		_mirror.add_text(axis, axis.to_upper(), "Paint and edit on both sides of a mirror square to the layer's %s axis" % axis.to_upper())
+	_mirror.chosen.connect(func(key: String) -> void: editor.run({"cmd": "set_tool_settings", "values": {"symmetry": key}}))
+	add_child(_titled("Mirror", "What the tools do on one side of the mirror they also do on the other. The mirror stands at the pivot of the layer being painted on: move the pivot to move it.", _mirror))
 
 
 func _ready() -> void:
@@ -149,6 +156,7 @@ func refresh() -> void:
 	var options := editor.get_options()
 	for key: String in _options:
 		Kit.set_quiet(_options[key], options[key])
+	_mirror.set_value(tools.symmetry)
 
 
 func _show_selection(count: int) -> void:

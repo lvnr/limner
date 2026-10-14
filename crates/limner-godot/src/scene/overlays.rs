@@ -19,6 +19,10 @@ const TINT: f32 = 0.75;
 /// How solid the nearest skin is; each frame further away is fainter still.
 const SKIN_OPACITY: f32 = 0.45;
 
+/// The render layer of things that help while working and are not part of the
+/// picture; cameras that take pictures do not see it.
+const HELPER_LAYERS: u32 = 2;
+
 /// One chunk of an onion skin on screen.
 struct Skin {
     node: Gd<MeshInstance3D>,
@@ -99,6 +103,7 @@ impl Overlays {
                     let mut node = MeshInstance3D::new_alloc();
                     node.set_visible(false);
                     node.set_name("OnionSkin");
+                    node.set_layer_mask(HELPER_LAYERS);
                     parent.add_child(&node);
                     self.skins.push(Skin {
                         node,
@@ -206,6 +211,7 @@ impl Overlays {
                     };
                     let mut node = MeshInstance3D::new_alloc();
                     node.set_name("Selected");
+                    node.set_layer_mask(HELPER_LAYERS);
                     node.set_mesh(&built.mesh);
                     if let Some(material) = &self.highlight_material {
                         for surface in 0..built.kinds.len() {

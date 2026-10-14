@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 limner-core = { version = "0.1.0", path = "../limner-core" }
+limner-export = { version = "0.1.0", path = "../limner-export" }
 limner-format = { version = "0.1.0", path = "../limner-format" }
 limner-quill = { version = "0.1.0", path = "../limner-quill" }
 thiserror = "2.0.21"

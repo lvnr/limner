@@ -19,6 +19,8 @@ const TIP_RADIUS := 0.045
 const TIP_LENGTH := 0.13
 
 var scene: LimnerScene
+## The render layers the handles are drawn on.
+var layers := 1
 
 ## Handle name to the material its parts share.
 var _materials := {}
@@ -58,6 +60,7 @@ func _part(mesh: Mesh, material: Material, at: Transform3D) -> void:
 	node.material_override = material
 	node.transform = at
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	node.layers = layers
 	add_child(node)
 
 

@@ -4,6 +4,7 @@
 //! the result. It holds no product logic: what is visible, where, and what an edit
 //! does are all decided in the core.
 
+mod export;
 mod gizmos;
 mod import;
 mod lights;
@@ -509,6 +510,22 @@ impl LimnerScene {
             "plane_near" => PLANE_NEAR,
             "plane_far" => PLANE_FAR,
             "center_radius" => CENTER_RADIUS,
+        }
+    }
+
+    /// The mirror of mirrored working, in viewer space, or an empty dictionary when
+    /// it is off: `{position, rotation, size}`. The mirror's face looks along the Z
+    /// axis of `rotation`; `size` is half the side of a square of it worth drawing.
+    #[func]
+    fn mirror_plane(&self) -> VarDictionary {
+        let Some((position, turn)) = self.session.mirror_plane() else {
+            return VarDictionary::new();
+        };
+        let size = (position.distance(self.input.head) * 0.8).max(0.5);
+        vdict! {
+            "position" => crate::convert::vector3(position),
+            "rotation" => Quaternion::new(turn.x as f32, turn.y as f32, turn.z as f32, turn.w as f32),
+            "size" => size,
         }
     }
 

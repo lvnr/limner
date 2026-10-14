@@ -978,3 +978,102 @@ fn the_other_hand_switches_to_selection_steps_frames_and_plays() {
     }));
     assert!(session.playback.playing);
 }
+
+#[test]
+fn mirrored_working_paints_and_edits_on_both_sides_of_the_pivot_plane() {
+    use crate::session::tools::Symmetry;
+    let (mut session, layer) = session();
+    session.tools.paint.brush = BrushStyle::Ribbon;
+    session.tools.paint.size = 0.005;
+    session.tools.color = [1.0, 1.0, 1.0];
+    assert!(session.mirror_plane().is_none(), "off until asked for");
+    session.tools.symmetry = Symmetry::X;
+    // The mirror stands at the layer's pivot: here half a metre to the right.
+    session
+        .exec_json(&serde_json::json!({
+            "cmd": "set_layer", "layer": layer,
+            "pivot": Xform::from_translation(DVec3::new(0.5, 0.0, 0.0)),
+        }))
+        .unwrap();
+    let (on_plane, turn) = session.mirror_plane().expect("a mirror");
+    assert!((on_plane - DVec3::new(0.5, 0.0, 0.0)).length() < 1e-12);
+    assert!((turn * DVec3::Z - DVec3::X).length() < 1e-12, "square to X");
+
+    drag(
+        &mut session,
+        DVec3::new(0.1, 1.0, -0.5),
+        DVec3::new(0.3, 1.0, -0.5),
+        20,
+    );
+    let drawn = strokes(&session, layer);
+    assert_eq!(drawn.len(), 2, "the stroke and its twin");
+    assert_eq!(drawn[0].len(), drawn[1].len());
+    for (p, q) in drawn[0].points().iter().zip(drawn[1].points()) {
+        assert!((q.pos[0] - (1.0 - p.pos[0])).abs() < 1e-6, "mirrored in x");
+        assert_eq!((q.pos[1], q.pos[2], q.width), (p.pos[1], p.pos[2], p.width));
+        assert_eq!(q.normal, [-p.normal[0], p.normal[1], p.normal[2]]);
+    }
+    assert_eq!(
+        session.history().undo_depth(),
+        2,
+        "the pivot, then one stroke"
+    );
+    session.undo();
+    assert!(strokes(&session, layer).is_empty(), "one undo takes both");
+    session.redo();
+
+    // A line gets a twin as well.
+    session.tools.select_tool(ToolKind::Line);
+    drag(
+        &mut session,
+        DVec3::new(0.1, 1.2, -0.5),
+        DVec3::new(0.3, 1.3, -0.5),
+        4,
+    );
+    let drawn = strokes(&session, layer);
+    assert_eq!(drawn.len(), 4);
+    let (line, twin) = (&drawn[2], &drawn[3]);
+    let (end, twin_end) = (line.points().last().unwrap(), twin.points().last().unwrap());
+    assert!((twin_end.pos[0] - (1.0 - end.pos[0])).abs() < 1e-6);
+    assert!((twin_end.pos[1] - end.pos[1]).abs() < 1e-6);
+
+    // Colour laid on one side lands on the other too, and so does the eraser.
+    session.tools.select_tool(ToolKind::Colorize);
+    session.tools.color = [1.0, 0.0, 0.0];
+    session.tools.colorize.size = 0.02;
+    session.tools.colorize.inner = 1.0;
+    session.tools.colorize.strength = 1.0;
+    let at = DVec3::new(0.2, 1.0, -0.5);
+    drag(&mut session, at, at, 1);
+    let drawn = strokes(&session, layer);
+    assert_eq!(drawn[0].points()[10].color, [1.0, 0.0, 0.0]);
+    assert_eq!(
+        drawn[1].points()[10].color,
+        [1.0, 0.0, 0.0],
+        "the twin took the colour"
+    );
+    assert_eq!(drawn[0].points()[0].color, [1.0, 1.0, 1.0]);
+
+    session.tools.select_tool(ToolKind::Eraser);
+    session.tools.eraser.size = 0.4;
+    session.tools.eraser.strength = 1.0;
+    // Over the strokes on the near side, and too far from the twins to reach them:
+    // those are erased by the eraser's own reflection.
+    let at = DVec3::new(0.2, 1.1, -0.5);
+    drag(&mut session, at, at, 1);
+    assert!(
+        strokes(&session, layer).is_empty(),
+        "both sides erased from one side"
+    );
+
+    // With mirroring off again a stroke is alone.
+    session.tools.symmetry = Symmetry::Off;
+    session.tools.select_tool(ToolKind::Paint);
+    drag(
+        &mut session,
+        DVec3::new(0.1, 1.0, -0.5),
+        DVec3::new(0.3, 1.0, -0.5),
+        5,
+    );
+    assert_eq!(strokes(&session, layer).len(), 1);
+}

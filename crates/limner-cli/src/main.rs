@@ -1,6 +1,7 @@
 //! `limner`: command-line access to Limner documents.
 
 mod dump;
+mod export;
 mod inspect;
 
 use anyhow::{bail, Context, Result};
@@ -14,7 +15,7 @@ use std::path::{Path, PathBuf};
 #[command(
     name = "limner",
     version,
-    about = "Inspect and convert Limner and Quill documents"
+    about = "Inspect, convert and export Limner and Quill documents"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -42,6 +43,12 @@ enum Command {
         /// Where to write: a path ending in .limn (a folder) or .limnz (one file).
         output: PathBuf,
     },
+    /// Export a document to an interchange file: glTF, OBJ, USD or FBX.
+    ///
+    /// Writes a still at the start of the working range, or with --animated the
+    /// working range sampled at the document's frame rate. docs/export.md says what
+    /// each format holds.
+    Export(export::ExportArgs),
     /// Write the world-space cross-section rings of every paint layer's first frame
     /// to a binary file, for checking geometry against other exporters.
     #[command(hide = true)]
@@ -120,6 +127,7 @@ fn run(command: Command, out: &mut dyn Write) -> Result<()> {
             }
         }
         Command::Convert { input, output } => convert(&input, &output, out)?,
+        Command::Export(args) => export::run(&args, out)?,
         Command::DumpRings { path, out: file } => {
             let opened = limner::open(&path)?;
             std::fs::write(&file, dump::rings(&opened.document))
@@ -282,5 +290,156 @@ mod tests {
 
         assert!(limner(&["convert", &path(&quill)]).is_err());
         assert!(limner(&["inspect", &path(dir.path())]).is_err());
+    }
+
+    /// The number printed before `word` on the report line, without its separators.
+    fn reported(printed: &str, word: &str) -> usize {
+        let before = printed.split(&format!(" {word}")).next().unwrap();
+        let number = before.rsplit([' ', '\n']).next().unwrap();
+        number.replace(',', "").parse().unwrap()
+    }
+
+    #[test]
+    fn export_writes_every_format_and_reports_what_went_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let quill = dir.path().join("walk");
+        quill_project(&quill);
+        let path = |p: &Path| p.to_str().unwrap().to_owned();
+        let source = path(&quill);
+
+        // A still as OBJ: the file holds exactly the vertices and triangles reported.
+        let obj = dir.path().join("walk.obj");
+        let printed = limner(&["export", &source, &path(&obj)]).unwrap();
+        assert!(printed.contains("(Quill project) ->"), "{printed}");
+        assert!(!printed.contains("animation:"), "{printed}");
+        let text = std::fs::read_to_string(&obj).unwrap();
+        let lines = |prefix: &str| text.lines().filter(|l| l.starts_with(prefix)).count();
+        assert!(reported(&printed, "vertices") > 0, "{printed}");
+        assert_eq!(lines("v "), reported(&printed, "vertices"));
+        assert_eq!(lines("f "), reported(&printed, "triangles"));
+        assert_eq!(lines("o "), reported(&printed, "nodes"));
+
+        // Animated glTF: the description inside the file agrees with the report.
+        let glb = dir.path().join("walk.glb");
+        let printed = limner(&[
+            "export",
+            &source,
+            &path(&glb),
+            "--animated",
+            "--start",
+            "0",
+            "--end",
+            "0.5",
+            "--fps",
+            "12",
+        ])
+        .unwrap();
+        assert!(printed.contains("animation: 7 frames"), "{printed}");
+        let bytes = std::fs::read(&glb).unwrap();
+        assert_eq!(&bytes[0..4], b"glTF");
+        assert_eq!(bytes.len() as u64, std::fs::metadata(&glb).unwrap().len());
+        let json_length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        let gltf: Value = serde_json::from_slice(&bytes[20..20 + json_length]).unwrap();
+        assert_eq!(
+            gltf["nodes"].as_array().unwrap().len(),
+            reported(&printed, "nodes")
+        );
+        assert_eq!(gltf["animations"].as_array().unwrap().len(), 1);
+        // The Walk layer shows two drawings in the range; each is a child of its own.
+        let names: Vec<&str> = gltf["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|node| node["name"].as_str())
+            .collect();
+        assert!(
+            names.contains(&"Walk.000") && names.contains(&"Walk.001"),
+            "{names:?}"
+        );
+
+        // The same still in the other formats, each with its own signature.
+        for (name, signature) in [
+            ("walk.usda", &b"#usda 1.0"[..]),
+            ("walk.usdz", &b"PK"[..]),
+            ("walk.fbx", &b"Kaydara FBX Binary"[..]),
+        ] {
+            let file = dir.path().join(name);
+            let printed = limner(&["export", &source, &path(&file), "--bake"]).unwrap();
+            assert!(
+                std::fs::read(&file).unwrap().starts_with(signature),
+                "{name}"
+            );
+            assert_eq!(
+                reported(&printed, "vertices"),
+                lines("v "),
+                "{name}: {printed}"
+            );
+        }
+
+        // Hidden layers are left out unless asked for.
+        let hidden = dir.path().join("hidden.obj");
+        let all = limner(&["export", &source, &path(&hidden), "--include-hidden"]).unwrap();
+        assert_eq!(reported(&all, "vertices"), lines("v "));
+
+        // With the layer tree kept, two layers showing one drawing share its mesh.
+        let cm = dir.path().join("cm.fbx");
+        let printed = limner(&[
+            "export",
+            &source,
+            &path(&cm),
+            "--fbx-unit",
+            "centimetres",
+            "--fbx-colors",
+            "linear",
+            "--no-lights",
+            "--no-cameras",
+        ])
+        .unwrap();
+        let shared = reported(&printed, "triangles");
+        assert!(shared > 0 && shared < lines("f "), "{printed}");
+        assert!(std::fs::read(&cm)
+            .unwrap()
+            .starts_with(b"Kaydara FBX Binary"));
+    }
+
+    #[test]
+    fn export_checks_its_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let quill = dir.path().join("walk");
+        quill_project(&quill);
+        let path = |p: &Path| p.to_str().unwrap().to_owned();
+        let source = path(&quill);
+        let refused = |args: &[&str], reason: &str| {
+            let mut all = vec!["export", source.as_str()];
+            all.extend_from_slice(args);
+            let error = format!("{:#}", limner(&all).unwrap_err());
+            assert!(error.contains(reason), "{args:?}: {error}");
+        };
+
+        let limn = path(&dir.path().join("out.limn"));
+        refused(&[&limn], ".glb, .obj, .usda, .usdz or .fbx");
+        let obj = path(&dir.path().join("out.obj"));
+        refused(&[&obj, "--animated"], "holds a still");
+        let glb = path(&dir.path().join("out.glb"));
+        refused(&[&glb, "--end", "2"], "--end only applies with --animated");
+        refused(
+            &[&glb, "--animated", "--start", "2", "--end", "1"],
+            "before it starts",
+        );
+        refused(&[&glb, "--start", "-1"], "zero or later");
+        refused(&[&glb, "--animated", "--fps", "0"], "above zero");
+        refused(&[&glb, "--fbx-unit", "inches"], "invalid value 'inches'");
+        refused(&[&glb, "--fbx-colors", "p3"], "invalid value 'p3'");
+        refused(&[&glb, "--loud"], "unexpected argument '--loud'");
+        for name in ["out.obj", "out.glb", "out.limn"] {
+            assert!(!dir.path().join(name).exists(), "{name} was written");
+        }
+
+        // A folder that is not there is reported, not created.
+        let nowhere = path(&dir.path().join("missing").join("out.glb"));
+        refused(&[&nowhere], "cannot export to");
+        let missing = limner(&["export", &path(&dir.path().join("none")), &glb]).unwrap_err();
+        assert!(missing.to_string().contains("does not exist"), "{missing}");
+        assert!(limner(&["export", &source]).is_err());
     }
 }

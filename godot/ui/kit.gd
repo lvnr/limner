@@ -311,3 +311,13 @@ static func narrow(button: Button, margin := 3) -> void:
 		box.content_margin_left = margin
 		box.content_margin_right = margin
 		button.add_theme_stylebox_override(state, box)
+
+
+## A drop-down that takes the width its row has left and cuts long entries short,
+## where `option` makes one as wide as its longest entry. For menus whose entries
+## are descriptions that would push a panel wider than a narrow dock.
+static func fitted_option(items: Array, tooltip: String, on_selected: Callable) -> OptionButton:
+	var node := option(items, tooltip, on_selected)
+	node.fit_to_longest_item = false
+	node.clip_text = true
+	return node

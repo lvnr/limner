@@ -48,6 +48,39 @@ pub struct PaintTarget {
 }
 
 impl Session {
+    /// The mirror the tools work across in `layer`'s own space, when mirrored working
+    /// is on: a reflection in the plane through the layer's pivot.
+    pub(crate) fn mirror_in(&self, layer: LayerId) -> Option<crate::math::Xform> {
+        let flip = self.tools.symmetry.flip()?;
+        let pivot = self.doc.layer(layer)?.pivot;
+        Some(
+            pivot
+                .mul(&crate::math::Xform::from_flip(flip))
+                .mul(&pivot.inverse()),
+        )
+    }
+
+    /// Where the mirror plane is in viewer space, for drawing it: a point on it, and
+    /// the turn that takes the Z axis onto the direction the plane is square to.
+    pub fn mirror_plane(&self) -> Option<(DVec3, glam::DQuat)> {
+        let flip = self.tools.symmetry.flip()?;
+        let layer = self.paint_layer?;
+        let pivot = self.doc.layer(layer)?.pivot;
+        let frame = self.evaluate();
+        frame.get(layer)?;
+        let placed = self
+            .view
+            .viewer_from_world()
+            .mul(&frame.world_xform(&self.doc, layer))
+            .mul(&pivot);
+        let normal = placed.rotation * flip.signs().map(|s| if s < 0.0 { 1.0 } else { 0.0 });
+        let turn = glam::DQuat::from_rotation_arc(DVec3::Z, normal.try_normalize()?);
+        placed
+            .translation
+            .is_finite()
+            .then_some((placed.translation, turn))
+    }
+
     pub(crate) fn layer_space(&self, frame: &RenderFrame, layer: LayerId) -> Option<LayerSpace> {
         let state = frame.get(layer)?;
         let layer_from_viewer = state.world.inverse() * self.view.world_from_viewer.to_affine();

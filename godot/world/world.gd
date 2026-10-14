@@ -27,6 +27,10 @@ const LAYER_SHADERS := {
 	"line": preload("res://shaders/line.gdshader"),
 }
 const GRID_SHADER := preload("res://shaders/grid.gdshader")
+## Render layer of everything that helps while working and is not part of the
+## picture: the grid, the gimbal, the mirror, the tool at the hand. Cameras that take
+## pictures see layer 1 only.
+const HELPER_LAYERS := 2
 const HIGHLIGHT_SHADER := preload("res://shaders/highlight.gdshader")
 ## Half the side of the grid plane, in grid cells of the coarse spacing.
 const GRID_EXTENT := 40.0
@@ -44,6 +48,8 @@ var _frame := 0
 var _grid: MeshInstance3D
 var _grid_material: ShaderMaterial
 var _gimbal: GimbalView
+var _mirror: MeshInstance3D
+var _mirror_material: ShaderMaterial
 
 
 func _ready() -> void:
@@ -66,6 +72,7 @@ func _ready() -> void:
 	_gimbal = GimbalView.new()
 	_gimbal.name = "Gimbal"
 	_gimbal.scene = scene
+	_gimbal.layers = HELPER_LAYERS
 	add_child(_gimbal)
 	scene.document_changed.connect(_apply_document_settings)
 	scene.document_replaced.connect(_apply_document_settings)
@@ -120,15 +127,53 @@ func _setup_grid() -> void:
 	_grid.mesh = plane
 	_grid.material_override = _grid_material
 	_grid.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_grid.layers = HELPER_LAYERS
 	add_child(_grid)
+	# The mirror of mirrored working is the same kind of grid, standing up.
+	_mirror_material = ShaderMaterial.new()
+	_mirror_material.shader = GRID_SHADER
+	_mirror_material.set_shader_parameter("spacing", 0.1)
+	_mirror_material.set_shader_parameter("reach", 1.0)
+	_mirror_material.set_shader_parameter("line_color", Color(0.25, 0.6, 1.0, 0.55))
+	_mirror = MeshInstance3D.new()
+	_mirror.name = "Mirror"
+	_mirror.mesh = plane
+	_mirror.material_override = _mirror_material
+	_mirror.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_mirror.layers = HELPER_LAYERS
+	_mirror.visible = false
+	add_child(_mirror)
 
 
 func _process(_delta: float) -> void:
-	_frame += 1
-	var index := _frame if animate_dither else 0
-	for material in _see_through_materials:
-		material.set_shader_parameter("frame_index", index)
+	if animate_dither:
+		advance_dither()
+	else:
+		for material in _see_through_materials:
+			material.set_shader_parameter("frame_index", 0)
 	_update_grid()
+	_update_mirror()
+
+
+## Moves the dither pattern of see-through strokes on by one step. Once a frame is
+## enough for the eye; a capture that takes many passes within a frame calls this
+## between them.
+func advance_dither() -> void:
+	_frame += 1
+	for material in _see_through_materials:
+		material.set_shader_parameter("frame_index", _frame)
+
+
+## Stands the mirror of mirrored working where the scene says it is.
+func _update_mirror() -> void:
+	var mirror := scene.mirror_plane()
+	_mirror.visible = not mirror.is_empty()
+	if not _mirror.visible:
+		return
+	# The plane mesh lies flat with its face up; tip it so its face looks along the mirror's own.
+	var facing := Basis(mirror.rotation as Quaternion) * Basis(Vector3.RIGHT, PI / 2.0)
+	var size: float = mirror.size
+	_mirror.transform = Transform3D(facing.scaled(Vector3.ONE * size), mirror.position)
 
 
 ## Lays the grid on the world's ground plane. Its spacing follows the zoom in powers

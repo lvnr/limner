@@ -5,6 +5,7 @@ pub mod files;
 pub mod media;
 
 pub use limner_core as core;
+pub use limner_export as export;
 pub use limner_format as format;
 pub use limner_quill as quill;
 

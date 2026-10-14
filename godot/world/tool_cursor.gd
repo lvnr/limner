@@ -43,6 +43,8 @@ func _instance(mesh: Mesh, material: Material) -> MeshInstance3D:
 	node.mesh = mesh
 	node.material_override = material
 	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# With the other things that help while working and are not part of the picture.
+	node.layers = LimnerWorld.HELPER_LAYERS
 	node.visible = false
 	add_child(node)
 	return node

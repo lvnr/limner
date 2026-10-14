@@ -407,6 +407,7 @@ name = "limner"
 version = "0.1.0"
 dependencies = [
  "limner-core",
+ "limner-export",
  "limner-format",
  "limner-quill",
  "serde_json",

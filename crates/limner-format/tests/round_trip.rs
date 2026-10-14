@@ -162,7 +162,9 @@ fn values_json_cannot_spell_still_round_trip() {
     assert!(loaded.layer(paint).unwrap().opacity.is_nan());
 }
 
-fn nested(depth: usize) -> Document {
+/// Groups nested `depth` deep, as far as the document lets them be: the layer that
+/// would go deeper than it allows is reported instead of added.
+fn nested(depth: usize) -> (Document, Result<(), limner_core::model::DocumentError>) {
     let mut doc = Document::empty();
     let mut parent = doc.root();
     for level in 1..=depth {
@@ -171,24 +173,36 @@ fn nested(depth: usize) -> Document {
             LayerKind::Group(Group::default()),
             0,
         );
-        parent = doc.insert_layer(layer, parent, 0).unwrap();
+        match doc.insert_layer(layer, parent, 0) {
+            Ok(id) => parent = id,
+            Err(error) => return (doc, Err(error)),
+        }
     }
-    doc
+    (doc, Ok(()))
 }
 
 #[test]
 fn nesting_is_supported_up_to_the_documented_limit() {
+    assert_eq!(
+        MAX_LAYER_DEPTH,
+        limner_core::model::MAX_LAYER_DEPTH,
+        "the format and the document agree on how deep layers go"
+    );
     let dir = tempfile::tempdir().unwrap();
-    let deepest = nested(MAX_LAYER_DEPTH);
+    let (deepest, built) = nested(MAX_LAYER_DEPTH);
+    built.unwrap();
     save_project(&deepest, dir.path(), &fast()).unwrap();
     assert_documents_equal(&deepest, &load_project(dir.path()).unwrap().document);
-    let before = snapshot(dir.path());
 
-    // One level more is refused before anything is written, not saved and then unreadable.
-    let error = save_project(&nested(MAX_LAYER_DEPTH + 1), dir.path(), &fast()).unwrap_err();
-    assert!(matches!(error, FormatError::Unsaveable(_)), "{error}");
-    assert!(error.to_string().contains("nested"), "{error}");
-    assert_eq!(snapshot(dir.path()), before);
+    // One level more cannot even be made, so there is never a document that could
+    // not be saved. (The writer and the reader still check, for files and documents
+    // that did not come from here.)
+    let (as_deep_as_it_goes, refused) = nested(MAX_LAYER_DEPTH + 1);
+    assert!(
+        matches!(refused, Err(limner_core::model::DocumentError::TooDeep)),
+        "{refused:?}"
+    );
+    assert_eq!(as_deep_as_it_goes.layer_count(), deepest.layer_count());
 }
 
 #[test]

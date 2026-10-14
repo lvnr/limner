@@ -5,7 +5,9 @@ use super::space::{LayerSpace, PaintTarget};
 use super::stroke_builder::{build_points, Sample, StrokeStyle, MAX_STROKE_POINTS};
 use super::Taper;
 use crate::eval::{Content, RenderFrame};
-use crate::model::{DrawingId, Stroke, StrokeAddr};
+use crate::math::Xform;
+use crate::model::{Drawing, DrawingId, Point, Stroke, StrokeAddr};
+use crate::ops::strokes::transform_point;
 use crate::session::input::InputFrame;
 use crate::session::Session;
 use glam::DVec3;
@@ -38,7 +40,46 @@ fn style(
 struct Piece {
     drawing: DrawingId,
     stroke: u32,
+    /// Its twin across the mirror, when mirrored working is on.
+    twin: Option<u32>,
     frame: usize,
+}
+
+/// The twin of a stroke being drawn: the same stroke on the other side of the mirror.
+#[derive(Clone, Copy)]
+struct Twin {
+    addr: StrokeAddr,
+    stroke: u32,
+    mirror: Xform,
+}
+
+impl Twin {
+    /// Adds the twin of the stroke just started, in the same chunk as it.
+    fn open(drawing: &mut Drawing, original: &Stroke, mirror: Xform) -> Self {
+        let stroke = drawing.next_stroke_id();
+        let addr = drawing.push_stroke(Stroke::new(
+            stroke,
+            original.brush,
+            original.directional,
+            Self::points(original.points(), &mirror),
+        ));
+        Self {
+            addr,
+            stroke,
+            mirror,
+        }
+    }
+
+    fn points(points: &[Point], mirror: &Xform) -> Vec<Point> {
+        points.iter().map(|p| transform_point(p, mirror)).collect()
+    }
+
+    /// Brings the twin in line with the stroke it mirrors.
+    fn follow(&self, drawing: &mut Drawing, points: &[Point]) {
+        if let Some(stroke) = drawing.stroke_mut(self.addr) {
+            *stroke.points_mut() = Self::points(points, &self.mirror);
+        }
+    }
 }
 
 /// A freehand stroke being drawn.
@@ -52,6 +93,7 @@ pub(crate) struct PaintGesture {
     frame: usize,
     addr: StrokeAddr,
     stroke: u32,
+    twin: Option<Twin>,
     /// Points laid down so far in the current piece.
     samples: Vec<Sample>,
     /// Where the last of them was laid, in viewer space.
@@ -94,7 +136,7 @@ impl PaintGesture {
         target: PaintTarget,
         space: &LayerSpace,
         samples: &[Sample],
-    ) -> Result<(StrokeAddr, u32), String> {
+    ) -> Result<(StrokeAddr, u32, Option<Twin>), String> {
         let settings = session.tools.paint;
         let points = build_points(
             samples,
@@ -105,18 +147,19 @@ impl PaintGesture {
                 space,
             ),
         );
+        let mirror = session.mirror_in(target.layer);
         let drawing = session
             .strokes_mut()
             .drawing_mut(target.drawing)
             .ok_or("That frame no longer exists")?;
         let id = drawing.next_stroke_id();
-        let addr = drawing.push_stroke_in_new_chunk(Stroke::new(
-            id,
-            settings.brush.brush(),
-            settings.directional,
-            points,
-        ));
-        Ok((addr, id))
+        let stroke = Stroke::new(id, settings.brush.brush(), settings.directional, points);
+        let twin_of = mirror.map(|_| stroke.clone());
+        let addr = drawing.push_stroke_in_new_chunk(stroke);
+        let twin = mirror
+            .zip(twin_of)
+            .map(|(mirror, original)| Twin::open(drawing, &original, mirror));
+        Ok((addr, id, twin))
     }
 
     pub(crate) fn begin(session: &mut Session, input: &InputFrame) -> Result<Self, String> {
@@ -126,12 +169,13 @@ impl PaintGesture {
             .layer_space(&frame, target.layer)
             .ok_or("That layer cannot be drawn on here")?;
         let first = Self::sample(session, &space, input);
-        let (addr, stroke) = Self::open(session, target, &space, &[first])?;
+        let (addr, stroke, twin) = Self::open(session, target, &space, &[first])?;
         Ok(Self {
             target,
             frame: frame_showing(&frame, target.layer),
             addr,
             stroke,
+            twin,
             samples: vec![first],
             last_laid: input.main.position,
             pieces: Vec::new(),
@@ -152,10 +196,10 @@ impl PaintGesture {
             Ok(target) if target.drawing != self.target.drawing => {
                 self.close_piece(session);
                 let from = *self.samples.last().expect("never empty");
-                let Ok((addr, stroke)) = Self::open(session, target, &space, &[from]) else {
+                let Ok((addr, stroke, twin)) = Self::open(session, target, &space, &[from]) else {
                     return false;
                 };
-                (self.target, self.addr, self.stroke) = (target, addr, stroke);
+                (self.target, self.addr, self.stroke, self.twin) = (target, addr, stroke, twin);
                 self.frame = frame_showing(&frame, target.layer);
                 self.samples = vec![from];
             }
@@ -189,12 +233,14 @@ impl PaintGesture {
             self.samples.pop();
         }
         let full = points.len() >= MAX_STROKE_POINTS;
-        let addr = self.addr;
-        let Some(stroke) = session
-            .strokes_mut()
-            .drawing_mut(self.target.drawing)
-            .and_then(|d| d.stroke_mut(addr))
-        else {
+        let (addr, twin) = (self.addr, self.twin);
+        let Some(drawing) = session.strokes_mut().drawing_mut(self.target.drawing) else {
+            return false;
+        };
+        if let Some(twin) = twin {
+            twin.follow(drawing, &points);
+        }
+        let Some(stroke) = drawing.stroke_mut(addr) else {
             return false;
         };
         *stroke.points_mut() = points;
@@ -208,6 +254,7 @@ impl PaintGesture {
         self.pieces.push(Piece {
             drawing: self.target.drawing,
             stroke: self.stroke,
+            twin: self.twin.map(|t| t.stroke),
             frame: self.frame,
         });
     }
@@ -238,13 +285,20 @@ impl PaintGesture {
             return;
         }
         for piece in &self.pieces {
-            let Some(stroke) = session
+            let ids = [Some(piece.stroke), piece.twin];
+            let strokes: Vec<_> = session
                 .doc()
                 .drawing(piece.drawing)
-                .and_then(|d| d.strokes().find(|s| s.id == piece.stroke).cloned())
-            else {
+                .map(|d| {
+                    d.strokes()
+                        .filter(|s| ids.contains(&Some(s.id)))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            if strokes.is_empty() {
                 continue;
-            };
+            }
             let mut reached = vec![piece.drawing];
             for step in 1..=extra.min(count - 1) {
                 let at = piece.frame + step;
@@ -263,9 +317,11 @@ impl PaintGesture {
                 }
                 reached.push(drawing_id);
                 if let Some(drawing) = session.strokes_mut().drawing_mut(drawing_id) {
-                    let mut copy = (*stroke).clone();
-                    copy.id = drawing.next_stroke_id();
-                    drawing.push_stroke(copy);
+                    for stroke in &strokes {
+                        let mut copy = (**stroke).clone();
+                        copy.id = drawing.next_stroke_id();
+                        drawing.push_stroke(copy);
+                    }
                 }
             }
         }
@@ -276,6 +332,7 @@ impl PaintGesture {
 pub(crate) struct LineGesture {
     target: PaintTarget,
     addr: StrokeAddr,
+    twin: Option<Twin>,
     /// Where the line starts, in world space, so it stays put if the view is moved meanwhile.
     origin: DVec3,
     /// The brush size when the line was started, in viewer-space metres. Changing the
@@ -293,6 +350,7 @@ impl LineGesture {
             .world_from_viewer
             .transform_point(input.main.position);
         let settings = session.tools.line;
+        let mirror = session.mirror_in(target.layer);
         let drawing = session
             .strokes_mut()
             .drawing_mut(target.drawing)
@@ -303,10 +361,15 @@ impl LineGesture {
             settings.directional,
             Vec::new(),
         );
+        let twin_of = mirror.map(|_| stroke.clone());
         let addr = drawing.push_stroke_in_new_chunk(stroke);
+        let twin = mirror
+            .zip(twin_of)
+            .map(|(mirror, original)| Twin::open(drawing, &original, mirror));
         let mut gesture = Self {
             target,
             addr,
+            twin,
             origin: hand_world,
             origin_size: settings.size,
             last_hand: hand_world,
@@ -374,12 +437,14 @@ impl LineGesture {
             &samples,
             &style(settings.brush, Taper::None, Taper::None, &space),
         );
-        let addr = self.addr;
-        let Some(stroke) = session
-            .strokes_mut()
-            .drawing_mut(self.target.drawing)
-            .and_then(|d| d.stroke_mut(addr))
-        else {
+        let (addr, twin) = (self.addr, self.twin);
+        let Some(drawing) = session.strokes_mut().drawing_mut(self.target.drawing) else {
+            return false;
+        };
+        if let Some(twin) = twin {
+            twin.follow(drawing, &points);
+        }
+        let Some(stroke) = drawing.stroke_mut(addr) else {
             return false;
         };
         *stroke.points_mut() = points;
