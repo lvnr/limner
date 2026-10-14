@@ -21,9 +21,12 @@ signal resized
 ## How many of the panel's pixels make one metre of sheet: 1.1 to the millimetre, so
 ## that a button is about 3 cm across, as Quill's are. Tune on real hardware.
 const PIXELS_PER_METRE := 1100.0
-## How many pixels are drawn for each of the panel's own, per side. Raise it to 2 for
-## headsets sharp enough to show the difference; it costs four times the drawing.
-const TEXELS_PER_PIXEL := 1
+## How many pixels are drawn for each of the panel's own, per side. At 1, a panel at
+## arm's length has about 9 pixels to a degree of view, fewer than even a first-
+## generation headset shows, so text and icons look soft; at 2 they are as sharp as
+## a current headset can show. It costs four times the drawing, but a sheet is only
+## redrawn while it is touched or changes.
+const TEXELS_PER_PIXEL := 2
 ## Height of the title bar, in the panel's pixels.
 const HEADER_HEIGHT := 34
 ## Size of the title in the title bar, in pixels.
