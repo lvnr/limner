@@ -749,3 +749,64 @@ fn an_edit_that_changes_nothing_is_not_an_undo_step() {
     );
     assert_eq!(session.history().undo_depth(), 1);
 }
+
+#[test]
+fn framing_counts_flat_pictures_and_models_but_not_what_surrounds_the_viewer() {
+    use crate::model::{MediaData, MeshData, Projection};
+    use crate::session::media::{MediaLayerKind, NewMedia};
+    use std::sync::Arc;
+
+    let mut session = Session::new(Document::new());
+    assert!(
+        session.visible_bounds().is_none(),
+        "an empty document has nothing to frame"
+    );
+    let picture = session
+        .add_media_layer(NewMedia {
+            kind: MediaLayerKind::Picture,
+            file_name: "wide.png".into(),
+            source_path: String::new(),
+            data: MediaData::RawImage {
+                width: 4,
+                height: 2,
+                channels: 3,
+                pixels: Arc::from(vec![0u8; 24]),
+            },
+        })
+        .unwrap();
+    // A picture is one unit tall and as wide as its shape: here two units.
+    let (center, radius) = session.visible_bounds().expect("the picture");
+    assert!(center.length() < 1e-9);
+    assert!((radius - (1.0f64 + 0.25).sqrt()).abs() < 1e-6);
+
+    // Wrapped around the viewer it is no longer something to stand back from.
+    let mut values = serde_json::Map::new();
+    values.insert(
+        "projection".into(),
+        serde_json::to_value(Projection::Equirect).unwrap(),
+    );
+    session
+        .exec(Command::SetLayerKind {
+            layer: picture,
+            values,
+        })
+        .unwrap();
+    assert!(session.visible_bounds().is_none());
+
+    session
+        .add_media_layer(NewMedia {
+            kind: MediaLayerKind::Model,
+            file_name: "box.obj".into(),
+            source_path: String::new(),
+            data: MediaData::Mesh(Arc::new(MeshData {
+                positions: vec![[2.0, 0.0, 0.0], [4.0, 0.0, 0.0], [4.0, 2.0, 0.0]],
+                normals: Vec::new(),
+                colors: Vec::new(),
+                indices: vec![0, 1, 2],
+            })),
+        })
+        .unwrap();
+    let (center, radius) = session.visible_bounds().expect("the model");
+    assert!((center - DVec3::new(3.0, 1.0, 0.0)).length() < 1e-9);
+    assert!((radius - 2f64.sqrt()).abs() < 1e-6);
+}

@@ -7,6 +7,11 @@
 // See-through strokes are never blended. A fragment is kept or discarded against a
 // blue-noise threshold, so strokes write depth and the result does not depend on the
 // order they are drawn in.
+//
+// Lit strokes define STROKE_LIT (and leave out the `unshaded` render mode): the
+// scene's lights shade them, wrapped a little way round the form so that thin
+// strokes do not fall into black. Surfaces seen from both sides also define
+// STROKE_TWO_SIDED, which turns the normal towards the eye.
 
 instance uniform float layer_opacity = 1.0;
 instance uniform float layer_seed = 0.0;
@@ -14,6 +19,14 @@ instance uniform float layer_seed = 0.0;
 instance uniform vec4 layer_tint : source_color = vec4(1.0, 1.0, 1.0, 0.0);
 
 varying vec3 v_color;
+
+#ifdef STROKE_LIT
+// Light that reaches a lit surface from everywhere, as a share of its own colour.
+// A fixed soft value for now; it is to become a setting of the document.
+uniform vec3 ambient_light = vec3(0.35);
+// How far past the terminator a light still reaches: 0 is plain Lambert shading.
+const float LIGHT_WRAP = 0.5;
+#endif
 
 #ifdef STROKE_SEE_THROUGH
 uniform sampler2D blue_noise : filter_nearest, repeat_enable;
@@ -49,6 +62,14 @@ void vertex() {
 
 void fragment() {
 	ALBEDO = mix(v_color, layer_tint.rgb, layer_tint.a);
+#ifdef STROKE_LIT
+#ifdef STROKE_TWO_SIDED
+	NORMAL = dot(NORMAL, VIEW) < 0.0 ? -NORMAL : NORMAL;
+#endif
+	// With the wrapped Lambert model, roughness is the amount of wrap.
+	ROUGHNESS = LIGHT_WRAP;
+	EMISSION = ALBEDO * ambient_light;
+#endif
 #ifdef STROKE_SEE_THROUGH
 	// The pattern moves every frame along a low-discrepancy sequence and is shifted
 	// per seed, so no two strokes and no two frames punch the same holes.

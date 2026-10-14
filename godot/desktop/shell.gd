@@ -36,8 +36,8 @@ const IMPORT_FILTERS := [
 	"*.wav, *.ogg, *.mp3 ; Sounds",
 	"*.obj, *.glb, *.gltf, *.fbx ; Models",
 ]
-enum EditMenu { UNDO, REDO, DUPLICATE, DELETE, RENAME }
-enum ViewMenu { FRAME_ALL, HOME, GRID, EXTRAS, PANELS, FULLSCREEN }
+enum EditMenu { UNDO, REDO, DUPLICATE, DELETE, RENAME, SELECT_ALL, DESELECT, TRANSFORM_AGAIN }
+enum ViewMenu { FRAME_ALL, HOME, GRID, EXTRAS, PANELS, FULLSCREEN, GIMBAL }
 
 var world: LimnerWorld
 var editor: LimnerEditor
@@ -45,6 +45,7 @@ var camera: Camera3D
 ## The root of the interface. Hidden with Tab for an unobstructed view.
 var ui: Control
 var layers_panel: LayersPanel
+var timeline: TimelinePanel
 ## The stand-in for the drawing hand.
 var hand: DesktopHand
 var left_dock: VBoxContainer
@@ -132,8 +133,9 @@ func _build_interface() -> void:
 	bottom.name = "BottomDock"
 	bottom_dock = VBoxContainer.new()
 	bottom.add_child(bottom_dock)
-	bottom.visible = false
 	frame.add_child(bottom)
+	timeline = TimelinePanel.new(editor)
+	bottom_dock.add_child(timeline)
 
 	left_dock.add_child(ToolsPanel.new(editor))
 	left_dock.add_child(Kit.separator())
@@ -239,6 +241,10 @@ func _build_top_bar() -> Control:
 	_edit_menu.add_item("Rename layer", EditMenu.RENAME, KEY_F2)
 	_edit_menu.add_item("Duplicate layer", EditMenu.DUPLICATE, KEY_MASK_CMD_OR_CTRL | KEY_D)
 	_edit_menu.add_item("Delete layer", EditMenu.DELETE, KEY_MASK_CMD_OR_CTRL | KEY_BACKSPACE)
+	_edit_menu.add_separator()
+	_edit_menu.add_item("Select all strokes", EditMenu.SELECT_ALL, KEY_MASK_CMD_OR_CTRL | KEY_A)
+	_edit_menu.add_item("Deselect", EditMenu.DESELECT, KEY_MASK_CMD_OR_CTRL | KEY_MASK_SHIFT | KEY_A)
+	_edit_menu.add_item("Transform again", EditMenu.TRANSFORM_AGAIN, KEY_MASK_CMD_OR_CTRL | KEY_R)
 	_edit_menu.id_pressed.connect(_on_edit_menu)
 	menu.add_child(_edit_menu)
 
@@ -249,6 +255,7 @@ func _build_top_bar() -> Control:
 	_view_menu.add_separator()
 	_view_menu.add_check_item("Floor grid", ViewMenu.GRID, KEY_MASK_SHIFT | KEY_G)
 	_view_menu.add_check_item("Gizmos for cameras, lights and spawn areas", ViewMenu.EXTRAS)
+	_view_menu.add_check_item("Gimbal", ViewMenu.GIMBAL, KEY_M)
 	_view_menu.add_separator()
 	_view_menu.add_check_item("Panels", ViewMenu.PANELS, KEY_TAB)
 	_view_menu.add_check_item("Full screen", ViewMenu.FULLSCREEN, KEY_MASK_CMD_OR_CTRL | KEY_MASK_SHIFT | KEY_F)
@@ -293,6 +300,9 @@ func _refresh() -> void:
 	world.show_grid = options.show_grid
 	_view_menu.set_item_checked(_view_menu.get_item_index(ViewMenu.GRID), options.show_grid)
 	_view_menu.set_item_checked(_view_menu.get_item_index(ViewMenu.EXTRAS), options.show_extras)
+	_view_menu.set_item_checked(_view_menu.get_item_index(ViewMenu.GIMBAL), options.show_gimbal)
+	_edit_menu.set_item_disabled(_edit_menu.get_item_index(EditMenu.DESELECT), status.selection_count == 0)
+	_edit_menu.set_item_disabled(_edit_menu.get_item_index(EditMenu.TRANSFORM_AGAIN), not status.can_transform_again)
 	_view_menu.set_item_checked(_view_menu.get_item_index(ViewMenu.PANELS), left_dock.is_visible_in_tree())
 	_view_menu.set_item_checked(_view_menu.get_item_index(ViewMenu.FULLSCREEN), get_window().mode == Window.MODE_FULLSCREEN)
 
@@ -450,6 +460,12 @@ func _on_edit_menu(id: int) -> void:
 		EditMenu.DELETE:
 			if editor.current_layer() >= 0:
 				editor.run({"cmd": "delete_layers", "layers": [editor.current_layer()]})
+		EditMenu.SELECT_ALL:
+			editor.run({"cmd": "select_all"})
+		EditMenu.DESELECT:
+			editor.run({"cmd": "deselect"})
+		EditMenu.TRANSFORM_AGAIN:
+			editor.run({"cmd": "transform_again"})
 
 
 func _on_view_menu(id: int) -> void:
@@ -462,6 +478,8 @@ func _on_view_menu(id: int) -> void:
 			editor.set_option("show_grid", not editor.get_options().show_grid)
 		ViewMenu.EXTRAS:
 			editor.set_option("show_extras", not editor.get_options().show_extras)
+		ViewMenu.GIMBAL:
+			editor.set_option("show_gimbal", not editor.get_options().show_gimbal)
 		ViewMenu.PANELS:
 			set_panels_visible(not left_dock.is_visible_in_tree())
 		ViewMenu.FULLSCREEN:
@@ -541,6 +559,16 @@ func _on_key(event: InputEventKey) -> void:
 		KEY_SPACE:
 			if not event.echo:
 				editor.run({"cmd": "toggle_play"})
+		KEY_ESCAPE:
+			# Escape takes back what is half done; with nothing half done, it deselects.
+			var status := world.scene.status()
+			if status.tool_active or status.grabbing:
+				world.scene.input_cancel()
+			elif status.selection_count > 0:
+				editor.run({"cmd": "deselect"})
+		KEY_DELETE, KEY_BACKSPACE:
+			if not event.echo and world.scene.status().selection_count > 0:
+				editor.run({"cmd": "delete_selection"})
 		KEY_LEFT:
 			editor.run({"cmd": "step_frames", "frames": -1})
 		KEY_RIGHT:

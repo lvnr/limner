@@ -11,7 +11,23 @@ const SHADERS := {
 	"flat_opaque": preload("res://shaders/stroke_flat_opaque.gdshader"),
 	"flat_see_through": preload("res://shaders/stroke_flat_see_through.gdshader"),
 }
+## The same four for paint layers that scene lights shade.
+const LIT_SHADERS := {
+	"tube_opaque": preload("res://shaders/stroke_tube_opaque_lit.gdshader"),
+	"tube_see_through": preload("res://shaders/stroke_tube_see_through_lit.gdshader"),
+	"flat_opaque": preload("res://shaders/stroke_flat_opaque_lit.gdshader"),
+	"flat_see_through": preload("res://shaders/stroke_flat_see_through_lit.gdshader"),
+}
+## Pictures, and the lines of gizmos, bounding boxes and wireframes.
+const LAYER_SHADERS := {
+	"picture_flat_opaque": preload("res://shaders/picture_flat_opaque.gdshader"),
+	"picture_flat_see_through": preload("res://shaders/picture_flat_see_through.gdshader"),
+	"picture_sphere_opaque": preload("res://shaders/picture_sphere_opaque.gdshader"),
+	"picture_sphere_see_through": preload("res://shaders/picture_sphere_see_through.gdshader"),
+	"line": preload("res://shaders/line.gdshader"),
+}
 const GRID_SHADER := preload("res://shaders/grid.gdshader")
+const HIGHLIGHT_SHADER := preload("res://shaders/highlight.gdshader")
 ## Half the side of the grid plane, in grid cells of the coarse spacing.
 const GRID_EXTENT := 40.0
 
@@ -27,6 +43,7 @@ var _noise_texture: ImageTexture
 var _frame := 0
 var _grid: MeshInstance3D
 var _grid_material: ShaderMaterial
+var _gimbal: GimbalView
 
 
 func _ready() -> void:
@@ -46,6 +63,10 @@ func _ready() -> void:
 	add_child(scene)
 	_setup_materials()
 	_setup_grid()
+	_gimbal = GimbalView.new()
+	_gimbal.name = "Gimbal"
+	_gimbal.scene = scene
+	add_child(_gimbal)
 	scene.document_changed.connect(_apply_document_settings)
 	scene.document_replaced.connect(_apply_document_settings)
 	_apply_document_settings()
@@ -53,17 +74,40 @@ func _ready() -> void:
 
 func _setup_materials() -> void:
 	_noise_texture = ImageTexture.create_from_image(LimnerScene.blue_noise_image(64))
+	var materials := _materials(SHADERS)
+	scene.set_stroke_materials(
+		materials["tube_opaque"], materials["tube_see_through"], materials["flat_opaque"], materials["flat_see_through"]
+	)
+	var lit := _materials(LIT_SHADERS)
+	scene.set_lit_stroke_materials(lit["tube_opaque"], lit["tube_see_through"], lit["flat_opaque"], lit["flat_see_through"])
+	# The scene copies the picture materials, one copy per picture, and uses the rest as they are.
+	var layer_materials := _materials(LAYER_SHADERS)
+	var wire: ShaderMaterial = layer_materials["line"].duplicate()
+	wire.set_shader_parameter("against_vertex_color", true)
+	layer_materials["wire"] = wire
+	# A model is seen from both sides, as a flat stroke is, and fades the same way.
+	layer_materials["model_opaque"] = materials["flat_opaque"]
+	layer_materials["model_see_through"] = materials["flat_see_through"]
+	layer_materials["model_opaque_lit"] = lit["flat_opaque"]
+	layer_materials["model_see_through_lit"] = lit["flat_see_through"]
+	scene.set_layer_materials(layer_materials)
+	var highlight := ShaderMaterial.new()
+	highlight.shader = HIGHLIGHT_SHADER
+	scene.set_highlight_material(highlight)
+
+
+## One material per shader, by the same names. Those that dither get the noise they
+## dither against and are kept, so the pattern can be moved every frame.
+func _materials(shaders: Dictionary) -> Dictionary:
 	var materials := {}
-	for key: String in SHADERS:
+	for key: String in shaders:
 		var material := ShaderMaterial.new()
-		material.shader = SHADERS[key]
+		material.shader = shaders[key]
 		if key.ends_with("see_through"):
 			material.set_shader_parameter("blue_noise", _noise_texture)
 			_see_through_materials.append(material)
 		materials[key] = material
-	scene.set_stroke_materials(
-		materials["tube_opaque"], materials["tube_see_through"], materials["flat_opaque"], materials["flat_see_through"]
-	)
+	return materials
 
 
 func _setup_grid() -> void:

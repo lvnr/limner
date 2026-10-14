@@ -71,24 +71,6 @@ impl Flick {
         }
         0
     }
-
-    /// As `update`, but a push counts once however long the stick is held.
-    fn update_once(&mut self, value: f32) -> i8 {
-        let direction = if value > FLICK {
-            1
-        } else if value < -FLICK {
-            -1
-        } else if value.abs() < REST {
-            0
-        } else {
-            self.direction
-        };
-        if direction == self.direction {
-            return 0;
-        }
-        self.direction = direction;
-        direction
-    }
 }
 
 /// The state of every button and stick between frames.
@@ -314,8 +296,9 @@ impl Session {
             }
         }
         // Up makes a new frame and down holds the one showing a frame longer; with the
-        // modifier, up makes a copy of the frame and down deletes it. One push, one frame.
-        let pushed = controls.off_upward.update_once(upward);
+        // modifier, up makes a copy of the frame and down deletes it. Holding the stick
+        // repeats, which is how a long run of frames is made.
+        let pushed = controls.off_upward.update(upward, input.dt);
         if pushed != 0 {
             if let Some(layer) = self.paint_layer {
                 let command = match (pushed > 0, alt) {

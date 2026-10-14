@@ -1125,8 +1125,7 @@ fn the_other_stick_makes_holds_copies_and_deletes_frames() {
             },
         ));
     };
-    // Held for a long second, one push is still one frame.
-    push(&mut session, 1.0, 0.0, 120);
+    push(&mut session, 1.0, 0.0, 3);
     assert_eq!(frames(&session), [0, 1]);
     assert_eq!(
         session.status()["frame"],
@@ -1141,4 +1140,8 @@ fn the_other_stick_makes_holds_copies_and_deletes_frames() {
     push(&mut session, -1.0, 1.0, 3);
     assert_eq!(frames(&session).len(), 3);
     assert_eq!(session.history().undo_label(), Some("Delete frame"));
+    // Held, the stick repeats: a second and a half makes a run of frames.
+    push(&mut session, 1.0, 0.0, 135);
+    let made = frames(&session).len() - 3;
+    assert!((8..=16).contains(&made), "{made} frames");
 }

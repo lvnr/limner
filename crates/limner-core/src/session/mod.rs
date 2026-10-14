@@ -199,6 +199,12 @@ impl Session {
         self.doc_revision
     }
 
+    /// Counts every change to the document, including each small one a tool makes
+    /// while it is at work.
+    pub fn edit_count(&self) -> u64 {
+        self.edits
+    }
+
     pub fn state_revision(&self) -> u64 {
         self.state_revision
     }
@@ -298,11 +304,40 @@ impl Session {
             let Some(layer) = self.doc.layer(state.id) else {
                 continue;
             };
+            let media = |id: &Option<crate::model::MediaId>| {
+                id.and_then(|id| self.doc.media(id)).map(|m| &m.data)
+            };
             let bounds: Aabb = match (&layer.kind, state.content) {
                 (LayerKind::Paint(_), crate::eval::Content::Paint { drawing, .. }) => self
                     .doc
                     .drawing(drawing)
                     .map_or(Aabb::EMPTY, |d| d.bounds()),
+                // A flat picture is one unit tall and as wide as its shape makes it.
+                // One that surrounds the viewer, or rides along with them, is not
+                // something to stand back from.
+                (LayerKind::Picture(picture), _)
+                    if picture.projection == crate::model::Projection::Flat
+                        && !picture.viewer_locked =>
+                {
+                    let (width, height) = media(&picture.media)
+                        .and_then(|data| data.image_size())
+                        .unwrap_or((1, 1));
+                    let half = width as f32 / height.max(1) as f32 * 0.5;
+                    Aabb::new(
+                        glam::Vec3::new(-half, -0.5, 0.0),
+                        glam::Vec3::new(half, 0.5, 0.0),
+                    )
+                }
+                (LayerKind::Model(model), _) => match media(&model.media) {
+                    Some(crate::model::MediaData::Mesh(mesh)) => {
+                        let mut bounds = Aabb::EMPTY;
+                        for position in &mesh.positions {
+                            bounds.extend(glam::Vec3::from_array(*position));
+                        }
+                        bounds
+                    }
+                    _ => Aabb::EMPTY,
+                },
                 _ => Aabb::EMPTY,
             };
             if let Some((lo, hi)) = bounds.transformed(&state.world) {

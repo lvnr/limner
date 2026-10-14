@@ -186,6 +186,14 @@ func import_file(file_path: String) -> int:
 	if not result.ok:
 		message.emit("Could not import %s: %s" % [file_path.get_file(), result.error], true)
 		return -1
+	# What the file had that was not brought in.
+	var warnings: PackedStringArray = result.warnings
+	for warning in warnings:
+		print("import: ", warning)
+	if warnings.size() == 1:
+		message.emit(warnings[0], false)
+	elif warnings.size() > 1:
+		message.emit("%s (and %d more notes in the log)" % [warnings[0], warnings.size() - 1], false)
 	return int(result.layer)
 
 

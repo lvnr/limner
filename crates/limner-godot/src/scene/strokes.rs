@@ -26,6 +26,26 @@ pub(super) struct ChunkInstance {
 #[derive(Default)]
 pub(super) struct LayerInstances {
     pub(super) chunks: Vec<ChunkInstance>,
+    /// The materials that take scene lights, while the layer is shaded by them.
+    lit: Option<[Option<Gd<Material>>; 4]>,
+}
+
+/// Says whether a layer is shaded by scene lights, and with which materials
+/// (indexed by `SurfaceKind`, as the unlit ones are).
+pub(super) fn set_lit(
+    instances: &mut LayerInstances,
+    materials: Option<&[Option<Gd<Material>>; 4]>,
+) {
+    if instances.lit.as_ref() != materials {
+        instances.lit = materials.cloned();
+        for chunk in &mut instances.chunks {
+            chunk.faded = None;
+        }
+    }
+}
+
+pub(super) fn is_lit(instances: &LayerInstances) -> bool {
+    instances.lit.is_some()
 }
 
 /// What a frame put on screen, for the statistics readout.
@@ -59,7 +79,7 @@ pub(super) fn set_visible(chunk: &mut ChunkInstance, visible: bool) {
 }
 
 /// A small per-layer number that keeps the dither patterns of different layers apart.
-fn layer_seed(id: LayerId) -> f32 {
+pub(super) fn layer_seed(id: LayerId) -> f32 {
     (id.0.wrapping_mul(2_654_435_761) % 251) as f32
 }
 
@@ -74,6 +94,7 @@ pub(super) fn sync_layer(
     container: &mut Gd<Node3D>,
     stats: &mut Stats,
 ) {
+    let materials = instances.lit.as_ref().unwrap_or(materials);
     let chunks = drawing.chunks();
     while instances.chunks.len() < chunks.len() {
         let mut node = MeshInstance3D::new_alloc();

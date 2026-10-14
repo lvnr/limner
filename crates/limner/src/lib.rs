@@ -2,6 +2,7 @@
 //! the command-line tool and the Godot bridge.
 
 pub mod files;
+pub mod media;
 
 pub use limner_core as core;
 pub use limner_format as format;

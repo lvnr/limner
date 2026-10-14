@@ -5,6 +5,10 @@ extends Node
 ## The mouse or pen moves the tip of a hand over a plane that faces the viewer, at a
 ## chosen distance. The left button is the trigger, with pen pressure when there is
 ## a pen. Shift and Ctrl stand in for the other hand's trigger, the modifier.
+##
+## Over a handle of the gimbal the left button takes hold of the handle instead, as
+## a grip does: it moves or turns what the gimbal is on. With Alt held it does what
+## the trigger does there: moves the pivot, or turns a ring in steps.
 
 const MIN_DEPTH := 0.15
 const MAX_DEPTH := 20.0
@@ -17,6 +21,9 @@ var depth := 1.5
 
 var _pressed := false
 var _pressure := 1.0
+## The press now held began on a handle of the gimbal, and with Alt.
+var _on_handle := false
+var _pivot_mode := false
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -24,6 +31,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		_pressed = event.pressed
 		if event.pressed:
 			_pressure = 1.0
+			var gimbal := world.scene.gimbal()
+			_on_handle = not gimbal.is_empty() and gimbal.hovered[0] != ""
+			_pivot_mode = _on_handle and Input.is_key_pressed(KEY_ALT)
 	elif event is InputEventMouseMotion:
 		# A pen reports how hard it presses; a mouse reports nothing and counts as full pressure.
 		_pressure = event.pressure if event.pressure > 0.0 else 1.0
@@ -44,7 +54,14 @@ func _process(delta: float) -> void:
 		var forward := -camera.global_basis.z
 		var tip := origin + direction * (depth / maxf(direction.dot(forward), 0.05))
 		var rotation := Basis.looking_at(direction, camera.global_basis.y).get_rotation_quaternion()
-		scene.input_hand(0, tip, rotation, _pressure if _pressed else 0.0, 0.0, Vector2.ZERO, 0)
+		var trigger := _pressure if _pressed else 0.0
+		var grip := 0.0
+		if _pressed and _on_handle and not _pivot_mode:
+			grip = 1.0
+			trigger = 0.0
+		scene.input_hand(0, tip, rotation, trigger, grip, Vector2.ZERO, 0)
+		# The hand cannot reach into the scene, so handles are picked along the line of sight.
+		scene.input_hand_ray(0, origin, direction)
 	scene.input_hand(1, Vector3.ZERO, Quaternion.IDENTITY, _modifier(), 0.0, Vector2.ZERO, 0)
 	scene.input_head(camera.global_position)
 	for feedback: Dictionary in scene.input_commit(delta):

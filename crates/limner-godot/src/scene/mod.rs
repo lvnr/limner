@@ -4,8 +4,14 @@
 //! the result. It holds no product logic: what is visible, where, and what an edit
 //! does are all decided in the core.
 
+mod gizmos;
+mod import;
+mod lights;
+mod models;
 mod nodes;
 mod overlays;
+mod pictures;
+mod sounds;
 mod strokes;
 
 use crate::convert::{
@@ -19,9 +25,10 @@ use godot::prelude::*;
 use limner::core::dither;
 use limner::core::eval::Content;
 use limner::core::glam::{DQuat, DVec3};
-use limner::core::model::{Document, LayerId};
+use limner::core::model::{Document, LayerId, Shading};
 use limner::core::session::{
-    Feedback, HandInput, InputFrame, PlaybackEvent, Session, DEFAULT_ZOOM_LIMITS,
+    Feedback, GimbalHandle, HandInput, InputFrame, PlaybackEvent, Session, Subject, ARROW_END,
+    ARROW_START, CENTER_RADIUS, DEFAULT_ZOOM_LIMITS, PLANE_FAR, PLANE_NEAR,
 };
 use limner::core::tess::SurfaceKind;
 use limner::core::time;
@@ -46,8 +53,12 @@ pub struct LimnerScene {
     container: Option<Gd<Node3D>>,
     /// Nodes for the layers that are not paint.
     nodes: nodes::LayerNodes,
+    /// Onion skins and the highlight on selected strokes.
+    overlays: overlays::Overlays,
     /// Indexed by `SurfaceKind`.
     materials: [Option<Gd<Material>>; 4],
+    /// The same four for paint layers that scene lights shade.
+    lit_materials: [Option<Gd<Material>>; 4],
     stats: Stats,
 }
 
@@ -66,7 +77,9 @@ impl INode3D for LimnerScene {
             layers: HashMap::new(),
             container: None,
             nodes: nodes::LayerNodes::default(),
+            overlays: overlays::Overlays::default(),
             materials: [None, None, None, None],
+            lit_materials: [None, None, None, None],
             stats: Stats::default(),
         }
     }
@@ -116,12 +129,21 @@ impl LimnerScene {
         self.signals().document_replaced().emit();
     }
 
-    /// Brings a picture, a sound or a model into the document as a new layer.
-    /// Returns `{ok, error, layer}`.
+    /// Brings a picture (`.png`, `.jpg`), a sound (`.wav`, `.ogg`, `.mp3`) or a model
+    /// (`.obj`, `.glb`, `.gltf`, `.fbx`) into the document as a new layer, as one
+    /// undo step. Returns `{ok, error, layer, warnings}`; the warnings say what the
+    /// file had that was not brought in.
     #[func]
     fn import_file(&mut self, path: GString) -> VarDictionary {
-        let _ = path;
-        vdict! { "ok" => false, "error" => "importing files is not available in this build yet", "layer" => -1 }
+        match import::import(&mut self.session, &path.to_string()) {
+            Ok((layer, warnings)) => {
+                let warnings: PackedStringArray = warnings.iter().map(GString::from).collect();
+                vdict! { "ok" => true, "error" => "", "layer" => layer.0 as i64, "warnings" => &warnings }
+            }
+            Err(error) => {
+                vdict! { "ok" => false, "error" => error, "layer" => -1, "warnings" => &PackedStringArray::new() }
+            }
+        }
     }
 
     // ----- commands and queries -----
@@ -179,6 +201,15 @@ impl LimnerScene {
         dictionary_from_json(&self.session.layer_details(LayerId(layer.max(0) as u64)))
     }
 
+    /// One row per layer in list order, with what the timeline draws: clips, keys,
+    /// frames and where the layer's own time starts.
+    #[func]
+    fn timeline_rows(&self) -> VarArray {
+        variant_from_json(&self.session.timeline_rows())
+            .try_to()
+            .unwrap_or_default()
+    }
+
     #[func]
     fn document_info(&self) -> VarDictionary {
         dictionary_from_json(&self.session.document_info())
@@ -213,6 +244,38 @@ impl LimnerScene {
                 chunk.faded = None;
             }
         }
+    }
+
+    /// Sets the four materials of paint layers that scene lights shade, in the order
+    /// of `set_stroke_materials`.
+    #[func]
+    fn set_lit_stroke_materials(
+        &mut self,
+        tube_opaque: Gd<Material>,
+        tube_see_through: Gd<Material>,
+        flat_opaque: Gd<Material>,
+        flat_see_through: Gd<Material>,
+    ) {
+        self.lit_materials[SurfaceKind::TubeOpaque as usize] = Some(tube_opaque);
+        self.lit_materials[SurfaceKind::TubeSeeThrough as usize] = Some(tube_see_through);
+        self.lit_materials[SurfaceKind::FlatOpaque as usize] = Some(flat_opaque);
+        self.lit_materials[SurfaceKind::FlatSeeThrough as usize] = Some(flat_see_through);
+        for layer in self.layers.values_mut() {
+            if strokes::is_lit(layer) {
+                strokes::set_lit(layer, Some(&self.lit_materials));
+            }
+        }
+    }
+
+    /// Sets the materials of everything that is not a stroke, by name: the picture
+    /// materials (`picture_flat_opaque`, `picture_flat_see_through`,
+    /// `picture_sphere_opaque`, `picture_sphere_see_through`), which are copied once
+    /// per picture; the model materials (`model_opaque`, `model_see_through`,
+    /// `model_opaque_lit`, `model_see_through_lit`); `line` for gizmos and bounding
+    /// boxes; and `wire` for the edges drawn over a model.
+    #[func]
+    fn set_layer_materials(&mut self, materials: VarDictionary) {
+        self.nodes.set_materials(&materials);
     }
 
     /// A tileable blue-noise threshold map as a single-channel image.
@@ -359,6 +422,7 @@ impl LimnerScene {
             lower_button: buttons & 1 != 0,
             upper_button: buttons & 2 != 0,
             stick_click: buttons & 4 != 0,
+            ray: None,
         };
         if which == 0 {
             self.input.main = hand;
@@ -375,6 +439,83 @@ impl LimnerScene {
         } else {
             self.input.off = HandInput::default();
         }
+    }
+
+    /// For a hand steered from a screen: the line of sight through the pointer, in
+    /// viewer space. Handles of the gimbal are then picked along it. Call it after
+    /// `input_hand` for the same hand, every frame the pointer is over the view.
+    #[func]
+    fn input_hand_ray(&mut self, which: i32, origin: Vector3, direction: Vector3) {
+        let direction = dvec3(direction).normalize_or_zero();
+        let ray = (direction != DVec3::ZERO).then(|| (dvec3(origin), direction));
+        if which == 0 {
+            self.input.main.ray = ray;
+        } else {
+            self.input.off.ray = ray;
+        }
+    }
+
+    /// Abandons the tool at work and anything held by the grips, undoing what they
+    /// did so far: what Escape does.
+    #[func]
+    fn input_cancel(&mut self) {
+        self.session.cancel_gesture();
+    }
+
+    /// True while the grip of that hand (0 the drawing hand, 1 the other) holds something.
+    #[func]
+    fn is_grabbing(&self, which: i32) -> bool {
+        self.session.is_grabbing(which.clamp(0, 1) as usize)
+    }
+
+    /// The gimbal to draw, in viewer space, or an empty dictionary when there is
+    /// none: `{subject ("layer" or "selection"), layer, position, rotation, size,
+    /// hovered ([handle or "", handle or ""] for the two hands), active (handle or
+    /// ""), arrow_start, arrow_end, plane_near, plane_far, center_radius}`. `size` is
+    /// the radius of the rings in metres and the last five are fractions of it.
+    /// Handles are named "center", "axis_x", "plane_x", "ring_x" and so on.
+    #[func]
+    fn gimbal(&self) -> VarDictionary {
+        let Some(gimbal) = self.session.gimbal() else {
+            return VarDictionary::new();
+        };
+        let name = |handle: Option<GimbalHandle>| -> GString {
+            handle
+                .and_then(|h| serde_json::to_value(h).ok())
+                .and_then(|v| v.as_str().map(GString::from))
+                .unwrap_or_default()
+        };
+        let (subject, layer) = match gimbal.subject {
+            Subject::Layer(id) => ("layer", id.0 as i64),
+            Subject::Selection => ("selection", -1),
+            Subject::View => ("view", -1),
+        };
+        let hovered = varray![&name(gimbal.hovered[0]), &name(gimbal.hovered[1])];
+        vdict! {
+            "subject" => subject,
+            "layer" => layer,
+            "position" => crate::convert::vector3(gimbal.position),
+            "rotation" => Quaternion::new(
+                gimbal.rotation.x as f32,
+                gimbal.rotation.y as f32,
+                gimbal.rotation.z as f32,
+                gimbal.rotation.w as f32,
+            ),
+            "size" => gimbal.size,
+            "hovered" => &hovered,
+            "active" => &name(gimbal.active),
+            "arrow_start" => ARROW_START,
+            "arrow_end" => ARROW_END,
+            "plane_near" => PLANE_NEAR,
+            "plane_far" => PLANE_FAR,
+            "center_radius" => CENTER_RADIUS,
+        }
+    }
+
+    /// Sets the material drawn over selected strokes.
+    #[func]
+    fn set_highlight_material(&mut self, material: Gd<Material>) {
+        self.overlays.set_highlight_material(material);
     }
 
     /// Where the eyes are, in viewer space.
@@ -410,7 +551,9 @@ impl LimnerScene {
     }
 
     /// What to draw at the drawing hand: `{tracked, position, rotation, tool, radius,
-    /// inner (or null), color, opacity, active, alt}`, in viewer space.
+    /// inner (or null), color, opacity, active, alt, at_handle}`, in viewer space.
+    /// `at_handle` is true when the hand is at a handle of the gimbal, where the
+    /// trigger works the handle instead of the tool.
     #[func]
     fn tool_cursor(&self) -> VarDictionary {
         let cursor = self.session.cursor();
@@ -432,6 +575,7 @@ impl LimnerScene {
             "opacity" => cursor.opacity,
             "active" => cursor.active,
             "alt" => cursor.alt,
+            "at_handle" => cursor.at_handle,
         }
     }
 
@@ -553,6 +697,12 @@ impl LimnerScene {
             shown.insert(state.id);
             stats.visible_layers += 1;
             let instances = self.layers.entry(state.id).or_default();
+            // Lights shade the paint layers that ask for it; the rest are drawn as painted.
+            let lit = doc
+                .layer(state.id)
+                .and_then(|l| l.as_paint())
+                .is_some_and(|p| p.shading == Shading::Lit);
+            strokes::set_lit(instances, lit.then_some(&self.lit_materials));
             sync_layer(
                 instances,
                 state,
@@ -584,6 +734,14 @@ impl LimnerScene {
 
         self.nodes
             .sync(container, session, &frame, &viewer_from_world);
+        self.overlays.sync(
+            container,
+            session,
+            &frame,
+            &viewer_from_world,
+            &mut self.cache,
+            &self.materials,
+        );
 
         stats.meshes_built = self.cache.built_this_frame;
         self.cache.end_frame();
@@ -620,6 +778,7 @@ impl LimnerScene {
 
     fn clear_instances(&mut self) {
         self.nodes.clear();
+        self.overlays.clear();
         for (_, instances) in self.layers.drain() {
             for chunk in instances.chunks {
                 chunk.node.clone().queue_free();

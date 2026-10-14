@@ -18,6 +18,6 @@ pub use layer::{
     LightKind, Model, Paint, Picture, Projection, Sequence, Shading, Sound, SoundKind,
     SoundModifier, Viewpoint,
 };
-pub use media::{Media, MediaData, MediaKind, MeshData};
+pub use media::{jpeg_size, png_size, Media, MediaData, MediaKind, MeshData};
 pub use settings::{Settings, PALETTE_SIZE};
 pub use stroke::{Brush, Point, Stroke, OPAQUE_THRESHOLD};

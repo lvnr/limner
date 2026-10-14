@@ -19,7 +19,8 @@ pub struct BuiltMesh {
     pub triangles: usize,
 }
 
-fn build(chunk_mesh: &ChunkMesh) -> Option<BuiltMesh> {
+/// Builds the Godot mesh for one tessellated chunk; `None` when it has no geometry.
+pub fn build_mesh(chunk_mesh: &ChunkMesh) -> Option<BuiltMesh> {
     let mut mesh = ArrayMesh::new_gd();
     let mut kinds = Vec::new();
     for kind in SurfaceKind::ALL {
@@ -112,7 +113,7 @@ impl MeshCache {
             self.built_this_frame += 1;
             Entry {
                 chunk: chunk.clone(),
-                built: build(&tessellate_chunk(chunk)),
+                built: build_mesh(&tessellate_chunk(chunk)),
                 last_used: frame,
             }
         });

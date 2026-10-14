@@ -19,3 +19,4 @@ godot/android/
 .DS_Store
 .vscode/
 .idea/
+/.cargo/

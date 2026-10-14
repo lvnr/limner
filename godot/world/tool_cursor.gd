@@ -50,7 +50,8 @@ func _instance(mesh: Mesh, material: Material) -> MeshInstance3D:
 
 func _process(_delta: float) -> void:
 	var cursor := scene.tool_cursor()
-	visible = cursor.tracked
+	# At a handle of the gimbal the trigger works the handle, so the tool steps aside.
+	visible = cursor.tracked and not cursor.at_handle
 	if not visible:
 		return
 	position = cursor.position
