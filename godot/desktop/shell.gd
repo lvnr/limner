@@ -14,6 +14,18 @@ const FOCUS_DISTANCE := 1.5
 const FRAME_RADIUS := 0.55
 const ORBIT_SPEED := 0.006
 const ZOOM_STEP := 1.12
+## Keys that pick a tool.
+const TOOL_KEYS := {
+	KEY_B: "paint",
+	KEY_L: "line",
+	KEY_C: "colorize",
+	KEY_E: "eraser",
+	KEY_S: "select",
+	KEY_G: "grab",
+	KEY_T: "thicken",
+	KEY_N: "nudge",
+	KEY_O: "optimize",
+}
 const LEFT_DOCK_WIDTH := 292
 const RIGHT_DOCK_WIDTH := 324
 
@@ -27,6 +39,8 @@ var camera: Camera3D
 ## The root of the interface. Hidden with Tab for an unobstructed view.
 var ui: Control
 var layers_panel: LayersPanel
+## The stand-in for the drawing hand.
+var hand: DesktopHand
 var left_dock: VBoxContainer
 var right_dock: VBoxContainer
 var bottom_dock: VBoxContainer
@@ -54,6 +68,17 @@ func _ready() -> void:
 	camera.far = 2000.0
 	world.add_child(camera)
 	camera.make_current()
+	hand = DesktopHand.new()
+	hand.name = "Hand"
+	hand.world = world
+	hand.editor = editor
+	hand.camera = camera
+	hand.depth = FOCUS_DISTANCE
+	add_child(hand)
+	var cursor := ToolCursor.new()
+	cursor.name = "ToolCursor"
+	cursor.scene = world.scene
+	world.add_child(cursor)
 	_build_interface()
 	editor.message.connect(show_message)
 	editor.document_changed.connect(_refresh)
@@ -101,8 +126,19 @@ func _build_interface() -> void:
 	bottom.visible = false
 	frame.add_child(bottom)
 
+	left_dock.add_child(ToolsPanel.new(editor))
+	left_dock.add_child(Kit.separator())
+	left_dock.add_child(ColorPanel.new(editor))
+
 	layers_panel = LayersPanel.new(editor)
 	right_dock.add_child(layers_panel)
+	var tabs := TabContainer.new()
+	tabs.name = "Details"
+	tabs.custom_minimum_size = Vector2(0, 330)
+	tabs.add_child(_scrolling(TransformPanel.new(editor)))
+	tabs.add_child(_scrolling(PropertiesPanel.new(editor)))
+	tabs.add_child(_scrolling(DocumentPanel.new(editor)))
+	right_dock.add_child(tabs)
 
 	_toast = Kit.label("")
 	_toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -119,6 +155,17 @@ func _build_interface() -> void:
 	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_file_dialog.use_native_dialog = true
 	ui.add_child(_file_dialog)
+
+
+## Wraps a panel so that it scrolls when it is taller than the room it is given.
+## The wrapper takes the panel's name, which is what a tab shows.
+func _scrolling(panel: Control) -> ScrollContainer:
+	var scroll := ScrollContainer.new()
+	scroll.name = panel.name
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(panel)
+	return scroll
 
 
 func _dock(parent: Control, width: int) -> VBoxContainer:
@@ -172,7 +219,7 @@ func _build_top_bar() -> Control:
 	_view_menu.add_item("Frame everything", ViewMenu.FRAME_ALL, KEY_F)
 	_view_menu.add_item("Go to initial spawn area", ViewMenu.HOME, KEY_HOME)
 	_view_menu.add_separator()
-	_view_menu.add_check_item("Floor grid", ViewMenu.GRID, KEY_G)
+	_view_menu.add_check_item("Floor grid", ViewMenu.GRID, KEY_MASK_SHIFT | KEY_G)
 	_view_menu.add_check_item("Gizmos for cameras, lights and spawn areas", ViewMenu.EXTRAS)
 	_view_menu.add_separator()
 	_view_menu.add_check_item("Panels", ViewMenu.PANELS, KEY_TAB)
@@ -350,31 +397,57 @@ func _unhandled_input(event: InputEvent) -> void:
 		_on_drag(-event.delta * 8.0, event.shift_pressed)
 	elif event is InputEventMagnifyGesture:
 		world.scene.view_zoom(_pivot_under_mouse(), event.factor)
-	elif event is InputEventKey and event.pressed and not event.echo:
-		match event.keycode:
-			KEY_SPACE:
+	elif event is InputEventKey and event.pressed:
+		_on_key(event)
+
+
+## Keys that are not menu shortcuts: tools, brush size, the playhead.
+func _on_key(event: InputEventKey) -> void:
+	if event.ctrl_pressed or event.meta_pressed or event.alt_pressed:
+		return
+	if TOOL_KEYS.has(event.keycode) and not event.echo and not event.shift_pressed:
+		editor.run({"cmd": "set_tool", "tool": TOOL_KEYS[event.keycode]})
+		return
+	match event.keycode:
+		KEY_BRACKETLEFT:
+			_scale_tool_size(1.0 / 1.12)
+		KEY_BRACKETRIGHT:
+			_scale_tool_size(1.12)
+		KEY_SPACE:
+			if not event.echo:
 				editor.run({"cmd": "toggle_play"})
-			KEY_LEFT:
-				editor.run({"cmd": "step_frames", "frames": -1})
-			KEY_RIGHT:
-				editor.run({"cmd": "step_frames", "frames": 1})
+		KEY_LEFT:
+			editor.run({"cmd": "step_frames", "frames": -1})
+		KEY_RIGHT:
+			editor.run({"cmd": "step_frames", "frames": 1})
+		KEY_X:
+			if not event.echo:
+				var tools := editor.get_tools()
+				editor.run({"cmd": "set_tool", "tool": tools.previous if tools.tool == "select" else "select"})
+
+
+func _scale_tool_size(factor: float) -> void:
+	var tools := editor.get_tools()
+	var tool: String = tools.tool
+	editor.set_tool_setting(tool, "size", clampf(tools[tool].size * factor, 0.0005, 0.5))
 
 
 func _on_mouse_button(event: InputEventMouseButton) -> void:
 	match event.button_index:
-		MOUSE_BUTTON_WHEEL_UP:
-			if event.pressed:
-				world.scene.view_zoom(_pivot_under_mouse(), ZOOM_STEP)
-		MOUSE_BUTTON_WHEEL_DOWN:
-			if event.pressed:
-				world.scene.view_zoom(_pivot_under_mouse(), 1.0 / ZOOM_STEP)
+		MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN:
+			if not event.pressed:
+				return
+			var step := ZOOM_STEP if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / ZOOM_STEP
+			if event.ctrl_pressed or event.meta_pressed:
+				# The wheel with Ctrl moves the plane the hand works on, not the view.
+				hand.change_depth(step)
+			elif event.shift_pressed:
+				_scale_tool_size(step)
+			else:
+				world.scene.view_zoom(_pivot_under_mouse(), step)
 		MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE:
 			_dragging = event.pressed
 			_panning = event.shift_pressed
-		MOUSE_BUTTON_LEFT:
-			if event.alt_pressed or not event.pressed:
-				_dragging = event.pressed
-				_panning = event.shift_pressed
 
 
 func _on_drag(relative: Vector2, pan: bool) -> void:

@@ -142,7 +142,8 @@ impl Xform {
     }
 
     /// Recovers a transform from a matrix made of rotation, uniform scale, translation
-    /// and at most one mirror. A mirrored matrix comes back with `Flip::X`.
+    /// and at most one mirror. A mirrored matrix comes back with `Flip::X`. Any other
+    /// matrix gives the nearest such transform: its scale is the mean of its axes'.
     pub fn from_affine(m: &DAffine3) -> Self {
         let mut linear = m.matrix3;
         let mut flip = Flip::None;
@@ -152,8 +153,14 @@ impl Xform {
         }
         let scale =
             (linear.x_axis.length() + linear.y_axis.length() + linear.z_axis.length()) / 3.0;
-        let rotation = if scale > 0.0 {
-            DQuat::from_mat3(&(linear * (1.0 / scale))).normalize()
+        // The axes are made orthonormal first: a matrix with uneven scale or shear has
+        // no exact transform of this kind, and gets the nearest one.
+        let x = linear.x_axis.normalize_or(DVec3::X);
+        let y = (linear.y_axis - x * linear.y_axis.dot(x))
+            .try_normalize()
+            .unwrap_or_else(|| x.any_orthonormal_vector());
+        let rotation = if scale > 0.0 && scale.is_finite() {
+            DQuat::from_mat3(&DMat3::from_cols(x, y, x.cross(y))).normalize()
         } else {
             DQuat::IDENTITY
         };
@@ -428,5 +435,31 @@ mod tests {
         // Plain mixing does not have this property.
         let plain = Xform::mix(&a, &b, 0.5);
         assert!((plain.transform_point(DVec3::X) - start.lerp(end, 0.5)).length() > 1e-3);
+    }
+
+    #[test]
+    fn a_matrix_with_uneven_scale_gives_the_nearest_transform() {
+        let stretched = DAffine3::from_cols(
+            DVec3::new(2.0, 0.0, 0.0),
+            DVec3::new(0.3, 1.0, 0.0),
+            DVec3::new(0.0, 0.0, 1.0),
+            DVec3::new(1.0, 2.0, 3.0),
+        );
+        let x = Xform::from_affine(&stretched);
+        assert!(x.is_finite());
+        assert!((x.rotation.length() - 1.0).abs() < 1e-12);
+        assert!(
+            x.rotation.angle_between(DQuat::IDENTITY) < 1e-9,
+            "the axes still point the same way"
+        );
+        assert_eq!(x.translation, DVec3::new(1.0, 2.0, 3.0));
+        assert!(x.scale > 1.0 && x.scale < 2.0);
+        let collapsed = Xform::from_affine(&DAffine3::from_cols(
+            DVec3::X,
+            DVec3::X,
+            DVec3::X,
+            DVec3::ZERO,
+        ));
+        assert!(collapsed.is_finite());
     }
 }

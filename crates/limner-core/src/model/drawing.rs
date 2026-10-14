@@ -70,6 +70,21 @@ impl Drawing {
         drawing
     }
 
+    /// True when both drawings hold the same strokes in the same chunks. Chunks and
+    /// strokes the two share are recognised without looking inside them, so comparing
+    /// a drawing with an edited copy of itself costs only what the edit touched.
+    pub fn same_as(&self, other: &Drawing) -> bool {
+        self.chunks.len() == other.chunks.len()
+            && self.chunks.iter().zip(&other.chunks).all(|(a, b)| {
+                Arc::ptr_eq(a, b)
+                    || (a.strokes.len() == b.strokes.len()
+                        && a.strokes
+                            .iter()
+                            .zip(&b.strokes)
+                            .all(|(x, y)| Arc::ptr_eq(x, y) || x == y))
+            })
+    }
+
     pub fn chunks(&self) -> &[Arc<StrokeChunk>] {
         &self.chunks
     }

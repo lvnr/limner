@@ -85,6 +85,14 @@ const BODIES := {
 	"chart": '<path d="M4 20V4M4 20h16M8 16v-5M12 16V8M16 16v-3"/>',
 	"brush_cylinder": '<ellipse cx="12" cy="12" rx="4.500" ry="8"/>',
 	"dot": '<circle cx="12" cy="12" r="3" fill="{c}"/>',
+	# brush shapes: a short stroke seen from the side (round, flat or open ends) above its cross-section
+	"shape_capped_cylinder": '<rect x="3" y="3" width="18" height="8" rx="4"/><circle cx="12" cy="17.500" r="3.500" fill="{c}"/>',
+	"shape_capped_ellipse": '<rect x="3" y="3" width="18" height="8" rx="4"/><ellipse cx="12" cy="17.500" rx="6" ry="2.200" fill="{c}"/>',
+	"shape_rounded_ribbon": '<rect x="3" y="3" width="18" height="8" rx="4"/><path d="M5.500 17.500h13"/>',
+	"shape_cylinder": '<path d="M3 3h18v8H3z"/><circle cx="12" cy="17.500" r="3.500" fill="{c}"/>',
+	"shape_ellipse": '<path d="M3 3h18v8H3z"/><ellipse cx="12" cy="17.500" rx="6" ry="2.200" fill="{c}"/>',
+	"shape_ribbon": '<path d="M3 3h18M3 11h18M3 5.700v.010M3 8.300v.010M21 5.700v.010M21 8.300v.010"/><path d="M5.500 17.500h13"/>',
+	"shape_cube": '<path d="M3 3h18v8H3z"/><path d="M8.500 14h7v7h-7z" fill="{c}"/>',
 }
 
 static var _cache := {}

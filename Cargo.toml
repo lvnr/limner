@@ -11,11 +11,15 @@ rust-version = "1.94"
 [workspace.dependencies]
 godot = { version = "0.5.5", features = ["api-4-7", "lazy-function-tables"] }
 
+# Line tables keep backtraces readable while keeping the build folder several times
+# smaller than full debug information does.
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
 
 [profile.release]
 opt-level = 3

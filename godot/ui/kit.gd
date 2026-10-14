@@ -67,7 +67,13 @@ static func make_theme() -> Theme:
 	theme.set_color("font_pressed_color", "CheckBox", TEXT)
 	theme.set_color("font_color", "CheckButton", TEXT)
 	theme.set_color("font_pressed_color", "CheckButton", TEXT)
+	theme.set_icon("checked", "CheckBox", _check_icon(true, TEXT))
+	theme.set_icon("unchecked", "CheckBox", _check_icon(false, TEXT))
+	theme.set_icon("checked_disabled", "CheckBox", _check_icon(true, TEXT_DIM.darkened(0.3)))
+	theme.set_icon("unchecked_disabled", "CheckBox", _check_icon(false, TEXT_DIM.darkened(0.3)))
+	theme.set_color("font_disabled_color", "CheckBox", TEXT_DIM.darkened(0.3))
 	for kind in ["CheckBox", "CheckButton"]:
+		theme.set_stylebox("disabled", kind, StyleBoxEmpty.new())
 		theme.set_stylebox("normal", kind, StyleBoxEmpty.new())
 		theme.set_stylebox("hover", kind, StyleBoxEmpty.new())
 		theme.set_stylebox("pressed", kind, StyleBoxEmpty.new())
@@ -166,6 +172,17 @@ static func _line(vertical: bool) -> StyleBoxLine:
 	line.vertical = vertical
 	line.thickness = 1
 	return line
+
+
+## The box of a check box: an outline, filled with the accent colour and ticked when checked.
+static func _check_icon(checked: bool, outline: Color) -> Texture2D:
+	var inside := ""
+	if checked:
+		inside = '<rect x="2" y="2" width="14" height="14" rx="3" fill="#%s"/><path d="M5.500 9.200l2.500 2.500 4.500-5" fill="none" stroke="#ffffff" stroke-width="1.800" stroke-linecap="round" stroke-linejoin="round"/>' % ACCENT.to_html(false)
+	else:
+		inside = '<rect x="2.500" y="2.500" width="13" height="13" rx="3" fill="#%s" stroke="#%s" stroke-width="1.200"/>' % [BG_SUNKEN.to_html(false), outline.darkened(0.35).to_html(false)]
+	var svg := '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">%s</svg>' % inside
+	return DPITexture.create_from_string(svg)
 
 
 static func _knob(color: Color) -> Texture2D:
@@ -277,3 +294,20 @@ static func set_quiet(control: Control, value: Variant) -> void:
 	elif control is LineEdit:
 		if not control.has_focus() and control.text != str(value):
 			control.text = str(value)
+
+
+## Gives a button `margin` pixels of padding at its sides instead of the usual six,
+## for strips that have to fit many buttons across a narrow panel.
+static func narrow(button: Button, margin := 3) -> void:
+	var looks := {
+		"normal": BG_RAISED,
+		"hover": BG_HOVER,
+		"pressed": ACCENT,
+		"hover_pressed": ACCENT.lightened(0.12),
+		"disabled": BG_RAISED.darkened(0.25),
+	}
+	for state: String in looks:
+		var box := _box(looks[state])
+		box.content_margin_left = margin
+		box.content_margin_right = margin
+		button.add_theme_stylebox_override(state, box)

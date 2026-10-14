@@ -26,6 +26,16 @@ pub enum SelectMode {
     Toggle,
 }
 
+/// What the Optimize command works through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OptimizeScope {
+    /// Every frame of the paint layer.
+    Layer,
+    /// Every paint layer that is not locked, itself or through a group it is in.
+    All,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Command {
@@ -144,7 +154,23 @@ pub enum Command {
         layer: LayerId,
     },
 
+    // ---- strokes ----
+    /// Deletes the selected strokes.
+    DeleteSelection,
+    /// Moves the selected strokes to a new paint layer, or copies them there.
+    SelectionToNewLayer {
+        #[serde(default)]
+        copy: bool,
+    },
+    /// Simplifies every stroke of the paint layer, or of every unlocked paint layer.
+    Optimize {
+        scope: OptimizeScope,
+    },
+
     // ---- what is being worked on (not part of the document, not undoable) ----
+    /// Selects every stroke the Selection tool can reach now.
+    SelectAll,
+    Deselect,
     /// Selects rows in the layer list. The last one becomes the current layer.
     SelectLayers {
         layers: Vec<LayerId>,
@@ -220,8 +246,14 @@ impl Command {
             ResetTransform { .. } => "Reset transform",
             ResetPivot { .. } => "Reset pivot",
             MakePivotOrigin { .. } => "Make pivot origin",
+            DeleteSelection => "Delete strokes",
+            SelectionToNewLayer { copy: true } => "Copy strokes to new layer",
+            SelectionToNewLayer { copy: false } => "Move strokes to new layer",
+            Optimize { .. } => "Optimize strokes",
             Undo
             | Redo
+            | SelectAll
+            | Deselect
             | SelectLayers { .. }
             | SetTransformTarget { .. }
             | SetOptions { .. }

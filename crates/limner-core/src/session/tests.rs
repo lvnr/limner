@@ -714,3 +714,38 @@ fn playback_commands_drive_the_playhead() {
     run(&mut session, json!({"cmd": "rewind"}));
     assert_eq!(session.playback.time, 0);
 }
+
+#[test]
+fn an_edit_that_changes_nothing_is_not_an_undo_step() {
+    let mut session = Session::new(Document::new());
+    let paint = session.paint_layer().unwrap();
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "opacity": 1.0}),
+    );
+    run(
+        &mut session,
+        json!({"cmd": "set_document", "background": [0.8, 0.8, 0.8]}),
+    );
+    assert_eq!(session.history().undo_depth(), 0);
+    session.begin_transaction("Change layer opacity");
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "opacity": 0.4}),
+    );
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "opacity": 1.0}),
+    );
+    session.commit_transaction();
+    assert_eq!(
+        session.history().undo_depth(),
+        0,
+        "dragged away and back again"
+    );
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "opacity": 0.4}),
+    );
+    assert_eq!(session.history().undo_depth(), 1);
+}

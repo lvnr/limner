@@ -16,7 +16,9 @@ use limner::core::dither;
 use limner::core::eval::{Content, LayerState};
 use limner::core::glam::{DAffine3, DQuat, DVec3};
 use limner::core::model::{Document, Drawing, LayerId};
-use limner::core::session::{PlaybackEvent, Session, DEFAULT_ZOOM_LIMITS};
+use limner::core::session::{
+    Feedback, HandInput, InputFrame, PlaybackEvent, Session, DEFAULT_ZOOM_LIMITS,
+};
 use limner::core::tess::SurfaceKind;
 use limner::core::time;
 use std::collections::{HashMap, HashSet};
@@ -57,6 +59,8 @@ pub struct LimnerScene {
     session: Session,
     /// Revisions the interface was last told about.
     announced: (u64, u64),
+    /// Controller input gathered for the next `input_commit`.
+    input: InputFrame,
     source_path: String,
     source_kind: String,
     warnings: Vec<String>,
@@ -75,6 +79,7 @@ impl INode3D for LimnerScene {
             base,
             session: Session::new(Document::new()),
             announced: (0, 0),
+            input: InputFrame::default(),
             source_path: String::new(),
             source_kind: String::new(),
             warnings: Vec::new(),
@@ -288,6 +293,116 @@ impl LimnerScene {
             "triangles" => self.stats.triangles as i64,
             "meshes_built" => self.stats.meshes_built as i64,
             "cached_meshes" => self.cache.len() as i64,
+        }
+    }
+
+    // ----- controller input -----
+
+    /// Describes one hand for the next `input_commit`. `which` is 0 for the drawing
+    /// hand and 1 for the other. Position and rotation are in viewer space; the
+    /// hand's -Z axis points forward. `buttons` has bit 0 for the lower face button,
+    /// bit 1 for the upper one and bit 2 for a click of the stick.
+    #[func]
+    #[allow(clippy::too_many_arguments)]
+    fn input_hand(
+        &mut self,
+        which: i32,
+        position: Vector3,
+        rotation: Quaternion,
+        trigger: f32,
+        grip: f32,
+        stick: Vector2,
+        buttons: i32,
+    ) {
+        let hand = HandInput {
+            tracked: true,
+            position: dvec3(position),
+            rotation: DQuat::from_xyzw(
+                rotation.x as f64,
+                rotation.y as f64,
+                rotation.z as f64,
+                rotation.w as f64,
+            )
+            .normalize(),
+            trigger: trigger.clamp(0.0, 1.0),
+            grip: grip.clamp(0.0, 1.0),
+            stick: [stick.x.clamp(-1.0, 1.0), stick.y.clamp(-1.0, 1.0)],
+            lower_button: buttons & 1 != 0,
+            upper_button: buttons & 2 != 0,
+            stick_click: buttons & 4 != 0,
+        };
+        if which == 0 {
+            self.input.main = hand;
+        } else {
+            self.input.off = hand;
+        }
+    }
+
+    /// Says that a hand is not there: not tracked, or the pointer has left the view.
+    #[func]
+    fn input_hand_absent(&mut self, which: i32) {
+        if which == 0 {
+            self.input.main = HandInput::default();
+        } else {
+            self.input.off = HandInput::default();
+        }
+    }
+
+    /// Where the eyes are, in viewer space.
+    #[func]
+    fn input_head(&mut self, position: Vector3) {
+        self.input.head = dvec3(position);
+    }
+
+    /// Applies the input described since the last commit: runs the tool, grabs, and
+    /// button actions. Returns what the device should do in response, as dictionaries
+    /// with a `type` of "haptic" (`main`, `strength`, `seconds`), "sound" (`name`),
+    /// "message" (`text`) or "menu" (show or hide the hand-held palette).
+    #[func]
+    fn input_commit(&mut self, delta: f64) -> VarArray {
+        self.input.dt = delta.clamp(0.0, 0.25);
+        let mut out = VarArray::new();
+        for feedback in self.session.update(&self.input) {
+            let item = match feedback {
+                Feedback::Haptic {
+                    main,
+                    strength,
+                    seconds,
+                } => {
+                    vdict! { "type" => "haptic", "main" => main, "strength" => strength, "seconds" => seconds }
+                }
+                Feedback::Sound(name) => vdict! { "type" => "sound", "name" => name },
+                Feedback::Message(text) => vdict! { "type" => "message", "text" => text },
+                Feedback::Menu => vdict! { "type" => "menu" },
+            };
+            out.push(&item.to_variant());
+        }
+        out
+    }
+
+    /// What to draw at the drawing hand: `{tracked, position, rotation, tool, radius,
+    /// inner (or null), color, opacity, active, alt}`, in viewer space.
+    #[func]
+    fn tool_cursor(&self) -> VarDictionary {
+        let cursor = self.session.cursor();
+        let rotation = Quaternion::new(
+            cursor.rotation.x as f32,
+            cursor.rotation.y as f32,
+            cursor.rotation.z as f32,
+            cursor.rotation.w as f32,
+        );
+        let inner = cursor.inner.map_or(Variant::nil(), |r| r.to_variant());
+        vdict! {
+            "tracked" => cursor.tracked,
+            "position" => crate::convert::vector3(cursor.position),
+            "rotation" => rotation,
+            "tool" => &variant_from_json(&serde_json::to_value(cursor.tool).unwrap_or_default()),
+            "radius" => cursor.radius,
+            "inner" => &inner,
+            "color" => color_from_linear(cursor.color),
+            "opacity" => cursor.opacity,
+            "active" => cursor.active,
+            "alt" => cursor.alt,
         }
     }
 

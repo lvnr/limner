@@ -393,6 +393,36 @@ impl Document {
     }
 
     /// Drawings referenced by at least one paint layer.
+    /// True when both documents hold the same content. Parts the two share are
+    /// recognised without looking inside them, so comparing a document with an edited
+    /// copy of itself is fast however large it is.
+    pub fn same_as(&self, other: &Document) -> bool {
+        fn same<K: Ord, V>(
+            a: &BTreeMap<K, Arc<V>>,
+            b: &BTreeMap<K, Arc<V>>,
+            eq: impl Fn(&V, &V) -> bool,
+        ) -> bool {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|((ka, va), (kb, vb))| ka == kb && (Arc::ptr_eq(va, vb) || eq(va, vb)))
+        }
+        self.root == other.root
+            && self.next_id == other.next_id
+            && self.settings == other.settings
+            && same(&self.layers, &other.layers, |a, b| a == b)
+            && same(&self.drawings, &other.drawings, |a, b| a.same_as(b))
+            && same(&self.media, &other.media, |a, b| a == b)
+    }
+
+    /// The paint layer a drawing belongs to.
+    pub fn layer_of_drawing(&self, drawing: DrawingId) -> Option<LayerId> {
+        self.layers
+            .values()
+            .find(|l| l.as_paint().is_some_and(|p| p.drawings.contains(&drawing)))
+            .map(|l| l.id)
+    }
+
     pub fn referenced_drawings(&self) -> BTreeSet<DrawingId> {
         self.layers
             .values()

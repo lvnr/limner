@@ -162,6 +162,14 @@ pub fn apply_kind_patch(layer: &mut Layer, patch: &Map<String, Value>) -> Result
             model.wireframe = props.wireframe;
         }
         LayerKind::Sound(sound) => {
+            // The modifier is one of several shapes. A patch replaces it whole: merging
+            // the fields of a frustum into a cone would make neither.
+            let mut patch = patch.clone();
+            if let Some(modifier) = patch.remove("modifier") {
+                sound.modifier =
+                    serde_json::from_value(modifier).map_err(|e| format!("modifier: {e}"))?;
+            }
+            let patch = &patch;
             let props = patched(
                 &SoundProps {
                     kind: sound.kind,
@@ -252,6 +260,47 @@ mod tests {
         assert_eq!(light.spot_angle, 89.0);
         assert_eq!(light.range, 5.0, "untouched fields stay");
         assert_eq!(kind_props(&layer)["kind"], "spot");
+    }
+
+    #[test]
+    fn a_sound_modifier_is_replaced_whole() {
+        use crate::model::{Attenuation, Sound, SoundKind, SoundModifier};
+        let sound = Sound {
+            media: None,
+            kind: SoundKind::Positional,
+            gain: 1.0,
+            looped: false,
+            attenuation: Attenuation::default(),
+            modifier: SoundModifier::Cone {
+                inner: 0.5,
+                band: 0.1,
+                outside: 0.0,
+            },
+            source_path: String::new(),
+        };
+        let mut layer = Layer::new(LayerId(1), "Voice", LayerKind::Sound(sound));
+        apply_kind_patch(&mut layer, &object(json!({"gain": 0.5, "modifier": {"frustum": {"inner_h": 0.6, "inner_v": 0.4, "band": 0.1, "outside": 0.2}}}))).unwrap();
+        let LayerKind::Sound(sound) = &layer.kind else {
+            unreachable!()
+        };
+        assert_eq!(
+            sound.modifier,
+            SoundModifier::Frustum {
+                inner_h: 0.6,
+                inner_v: 0.4,
+                band: 0.1,
+                outside: 0.2
+            }
+        );
+        assert_eq!(sound.gain, 0.5);
+        apply_kind_patch(&mut layer, &object(json!({"modifier": "none"}))).unwrap();
+        let LayerKind::Sound(sound) = &layer.kind else {
+            unreachable!()
+        };
+        assert_eq!(sound.modifier, SoundModifier::None);
+        assert!(
+            apply_kind_patch(&mut layer, &object(json!({"modifier": {"sphere": {}}}))).is_err()
+        );
     }
 
     #[test]

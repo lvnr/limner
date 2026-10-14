@@ -1,6 +1,7 @@
 //! The tools and their settings: what the Tools panel shows.
 
 use crate::model::Brush;
+pub use crate::ops::color::BlendMode;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -142,65 +143,6 @@ impl Taper {
 
     pub fn is_automatic(self) -> bool {
         matches!(self, Taper::Auto | Taper::Both)
-    }
-}
-
-/// How the Colorize tool combines the paint colour with a stroke's colour.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BlendMode {
-    #[default]
-    Normal,
-    Darken,
-    Multiply,
-    Overlay,
-    Burn,
-    Lighten,
-    Screen,
-    Add,
-    Dodge,
-    Hue,
-    Saturation,
-    Color,
-    Luminosity,
-    Opacity,
-}
-
-impl BlendMode {
-    pub const ALL: [BlendMode; 14] = [
-        BlendMode::Normal,
-        BlendMode::Darken,
-        BlendMode::Multiply,
-        BlendMode::Overlay,
-        BlendMode::Burn,
-        BlendMode::Lighten,
-        BlendMode::Screen,
-        BlendMode::Add,
-        BlendMode::Dodge,
-        BlendMode::Hue,
-        BlendMode::Saturation,
-        BlendMode::Color,
-        BlendMode::Luminosity,
-        BlendMode::Opacity,
-    ];
-
-    pub fn title(self) -> &'static str {
-        match self {
-            BlendMode::Normal => "Normal (RGB)",
-            BlendMode::Darken => "Darken",
-            BlendMode::Multiply => "Multiply",
-            BlendMode::Overlay => "Overlay",
-            BlendMode::Burn => "Burn",
-            BlendMode::Lighten => "Lighten",
-            BlendMode::Screen => "Screen",
-            BlendMode::Add => "Add",
-            BlendMode::Dodge => "Dodge",
-            BlendMode::Hue => "Hue (H)",
-            BlendMode::Saturation => "Saturation (S)",
-            BlendMode::Color => "Color (HS)",
-            BlendMode::Luminosity => "Luminosity (V)",
-            BlendMode::Opacity => "Opacity (A)",
-        }
     }
 }
 

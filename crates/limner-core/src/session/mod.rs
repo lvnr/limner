@@ -5,19 +5,26 @@
 //! controller input, and ask it what to show.
 
 mod command;
+mod gesture;
 mod history;
+pub mod input;
 mod options;
 mod playback;
 mod props;
 mod query;
+mod selection;
+mod strokes;
 pub mod tools;
 mod view;
 
-pub use command::{Command, CommandError, SelectMode};
+pub use command::{Command, CommandError, OptimizeScope, SelectMode};
+pub use gesture::Cursor;
 pub use history::History;
+pub use input::{Feedback, HandInput, InputFrame};
 pub use options::{AutoSelect, Options};
 pub use playback::{Playback, PlaybackEvent};
 pub use props::{apply_kind_patch, kind_props};
+pub use selection::Selection;
 pub use view::{View, DEFAULT_ZOOM_LIMITS};
 
 use crate::eval::{evaluate, Clock, RenderFrame};
@@ -52,12 +59,23 @@ pub struct Session {
     paint_layer: Option<LayerId>,
     /// What grabbing moves; `None` is the view.
     transform_target: Option<LayerId>,
-    /// Counts changes to the document, for interfaces that redraw on change.
+    /// Counts every change to the document: whether an edit did anything, and
+    /// whether there is something to save.
+    edits: u64,
+    saved_edits: u64,
+    /// Counts document changes an interface should redraw for. A tool at work changes
+    /// strokes every frame without touching this until it is done.
     doc_revision: u64,
     /// Counts changes to everything else an interface shows.
     state_revision: u64,
-    saved_revision: u64,
     transaction: Option<Transaction>,
+    /// The tool at work, between a trigger press and its release.
+    gesture: Option<gesture::Gesture>,
+    trigger: input::Latch,
+    controls: gesture::Controls,
+    last_input: InputFrame,
+    /// The selected strokes.
+    selection: Selection,
 }
 
 impl Session {
@@ -72,10 +90,16 @@ impl Session {
             selected_layers: Vec::new(),
             paint_layer: None,
             transform_target: None,
+            edits: 1,
+            saved_edits: 1,
             doc_revision: 1,
             state_revision: 1,
-            saved_revision: 1,
             transaction: None,
+            gesture: None,
+            trigger: input::Latch::default(),
+            controls: gesture::Controls::default(),
+            last_input: InputFrame::default(),
+            selection: Selection::default(),
         };
         session.go_to_default_viewpoint();
         session.adopt_document();
@@ -87,12 +111,15 @@ impl Session {
         self.doc = doc;
         self.history.clear();
         self.transaction = None;
+        self.gesture = None;
+        self.selection.clear();
         self.playback = Playback::default();
         self.selected_layers.clear();
         self.paint_layer = None;
         self.transform_target = None;
+        self.edits += 1;
+        self.saved_edits = self.edits;
         self.doc_revision += 1;
-        self.saved_revision = self.doc_revision;
         self.state_revision += 1;
         self.view = View::default();
         self.go_to_default_viewpoint();
@@ -117,7 +144,15 @@ impl Session {
 
     /// The document for editing. Every access counts as a change.
     fn doc_mut(&mut self) -> &mut Document {
+        self.edits += 1;
         self.doc_revision += 1;
+        &mut self.doc
+    }
+
+    /// The document for a tool that changes strokes many times a second. Interfaces
+    /// are told once, when the tool is done.
+    pub(crate) fn strokes_mut(&mut self) -> &mut Document {
+        self.edits += 1;
         &mut self.doc
     }
 
@@ -139,11 +174,11 @@ impl Session {
 
     /// True when the document has changed since it was last saved or opened.
     pub fn is_dirty(&self) -> bool {
-        self.doc_revision != self.saved_revision
+        self.edits != self.saved_edits
     }
 
     pub fn mark_saved(&mut self) {
-        self.saved_revision = self.doc_revision;
+        self.saved_edits = self.edits;
         self.touch_state();
     }
 
@@ -154,6 +189,11 @@ impl Session {
     /// Evaluates the document at the playhead.
     pub fn evaluate(&self) -> RenderFrame {
         evaluate(&self.doc, self.clock())
+    }
+
+    /// The selected strokes.
+    pub fn selection(&self) -> &Selection {
+        &self.selection
     }
 
     pub fn selected_layers(&self) -> &[LayerId] {
@@ -248,7 +288,7 @@ impl Session {
             None => {
                 self.transaction = Some(Transaction {
                     before: self.doc.clone(),
-                    revision: self.doc_revision,
+                    revision: self.edits,
                     label: label.into(),
                     depth: 1,
                 })
@@ -265,18 +305,22 @@ impl Session {
             return;
         }
         let transaction = self.transaction.take().expect("checked above");
-        if transaction.revision != self.doc_revision {
-            self.history.record(transaction.before, transaction.label);
-            self.touch_state();
+        if transaction.revision != self.edits {
+            // Many small changes can add up to none at all, such as a slider dragged
+            // back to where it started. That is not a step worth undoing.
+            if !self.doc.same_as(&transaction.before) {
+                self.history.record(transaction.before, transaction.label);
+            }
+            self.after_document_change();
         }
     }
 
     /// Abandons the edit in progress and puts the document back as it was.
     pub fn cancel_transaction(&mut self) {
         if let Some(transaction) = self.transaction.take() {
-            if transaction.revision != self.doc_revision {
+            if transaction.revision != self.edits {
                 self.doc = transaction.before;
-                self.doc_revision += 1;
+                self.edits += 1;
                 self.after_document_change();
             }
         }
@@ -294,11 +338,11 @@ impl Session {
         edit: impl FnOnce(&mut Session) -> Result<T, CommandError>,
     ) -> Result<T, CommandError> {
         let before = self.doc.clone();
-        let revision = self.doc_revision;
+        let revision = self.edits;
         match edit(self) {
             Ok(value) => {
-                if self.doc_revision != revision {
-                    if self.transaction.is_none() {
+                if self.edits != revision {
+                    if self.transaction.is_none() && !self.doc.same_as(&before) {
                         self.history.record(before, label);
                     }
                     self.after_document_change();
@@ -306,9 +350,9 @@ impl Session {
                 Ok(value)
             }
             Err(error) => {
-                if self.doc_revision != revision {
+                if self.edits != revision {
                     self.doc = before;
-                    self.doc_revision += 1;
+                    self.edits += 1;
                     self.after_document_change();
                 }
                 Err(error)
@@ -318,6 +362,7 @@ impl Session {
 
     /// Drops references to layers that no longer exist, after any change to the tree.
     fn after_document_change(&mut self) {
+        self.selection.retain_existing(&self.doc);
         let doc = &self.doc;
         self.selected_layers.retain(|id| doc.layer(*id).is_some());
         if self
@@ -338,6 +383,7 @@ impl Session {
                 .find(|id| doc.layer(*id).is_some_and(|l| l.as_paint().is_some()))
                 .or_else(|| self.first_paint_layer());
         }
+        self.doc_revision += 1;
         self.touch_state();
         debug_assert_eq!(self.doc.validate(), Ok(()));
     }
@@ -346,9 +392,10 @@ impl Session {
         if self.transaction.is_some() {
             return None;
         }
+        self.cancel_gesture();
         let (doc, label) = self.history.undo(&self.doc)?;
         self.doc = doc;
-        self.doc_revision += 1;
+        self.edits += 1;
         self.after_document_change();
         Some(label)
     }
@@ -359,9 +406,33 @@ impl Session {
         }
         let (doc, label) = self.history.redo(&self.doc)?;
         self.doc = doc;
-        self.doc_revision += 1;
+        self.edits += 1;
         self.after_document_change();
         Some(label)
+    }
+
+    /// Where a new stroke goes: the frame the paint layer shows now. A document with
+    /// no paint layer at all gets one.
+    pub(crate) fn paint_target(&mut self) -> Result<tools::PaintTarget, String> {
+        let layer = match self.paint_layer {
+            Some(layer) => layer,
+            None => {
+                let root = self.doc.root();
+                let created = layers::add_layer(
+                    self.doc_mut(),
+                    NewLayerKind::Paint,
+                    root,
+                    usize::MAX,
+                    None,
+                    0,
+                )
+                .map_err(|e| e.to_string())?;
+                self.set_current_layer(created);
+                created
+            }
+        };
+        let frame = self.evaluate();
+        self.editable_drawing(&frame, layer)
     }
 
     // ---- commands ----
@@ -769,7 +840,7 @@ impl Session {
                 if self.doc.parent_of(id) != Some(old_parent)
                     || self.doc.index_in_parent(id) != before
                 {
-                    self.doc_revision += 1;
+                    self.edits += 1;
                     self.keep_placement(&frame, id, old_parent)?;
                 }
                 Ok(Value::Null)
@@ -859,6 +930,9 @@ impl Session {
                 layers::make_pivot_origin(self.doc_mut(), id)?;
                 Ok(Value::Null)
             }
+            Command::DeleteSelection => self.delete_selection(),
+            Command::SelectionToNewLayer { copy } => self.selection_to_new_layer(copy),
+            Command::Optimize { scope } => self.optimize(scope),
             other => unreachable!("{other:?} does not edit the document"),
         }
     }
@@ -867,6 +941,14 @@ impl Session {
         let result = match command {
             Command::Undo => json!({ "undone": self.undo() }),
             Command::Redo => json!({ "redone": self.redo() }),
+            Command::SelectAll => {
+                self.select_all();
+                json!({ "selected": self.selection.count() })
+            }
+            Command::Deselect => {
+                self.deselect();
+                Value::Null
+            }
             Command::SelectLayers { layers: ids, mode } => {
                 let ids: Vec<LayerId> = ids
                     .into_iter()

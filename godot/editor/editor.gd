@@ -194,18 +194,24 @@ static func linear_rgb(color: Color) -> Array:
 	return [linear.r, linear.g, linear.b]
 
 
+# Each handler reads the status first, so that panels reacting to the signal see the
+# state that caused it and not last frame's.
+
 func _on_document_changed() -> void:
+	status = scene.status()
 	_rows_stale = true
 	_info_stale = true
 	document_changed.emit()
 
 
 func _on_state_changed() -> void:
+	status = scene.status()
 	_rows_stale = true
 	_state_stale = true
 	state_changed.emit()
 
 
 func _on_document_replaced() -> void:
+	status = scene.status()
 	refresh()
 	document_replaced.emit()

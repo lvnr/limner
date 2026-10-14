@@ -74,6 +74,8 @@ impl Session {
             "current_layer": self.current_layer(),
             "paint_layer": self.paint_layer,
             "transform_target": self.transform_target,
+            "selection_count": self.selection.count(),
+            "tool_active": self.is_tool_active(),
         })
     }
 
