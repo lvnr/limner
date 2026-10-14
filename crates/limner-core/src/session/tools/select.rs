@@ -3,6 +3,7 @@
 use super::space::PaintTarget;
 use super::sphere::reach;
 use crate::eval::{Content, RenderFrame};
+use crate::math::Aabb;
 use crate::model::{LayerId, Point};
 use crate::session::input::InputFrame;
 use crate::session::Session;
@@ -153,16 +154,26 @@ impl SelectGesture {
             ) else {
                 continue;
             };
-            let center = space.point(input.main.position).as_vec3();
+            let center = space.point(input.main.position);
             let radius = space.length(size as f64) as f32;
+            // With mirrored working on, the sphere also selects at the hand's reflection.
+            let mut centers = vec![center.as_vec3()];
+            if let Some(mirror) = session.mirror_in(target.layer) {
+                centers.push(mirror.transform_point(center).as_vec3());
+            }
+            let within =
+                |bounds: Aabb| centers.iter().any(|c| bounds.intersects_sphere(*c, radius));
             for chunk in drawing.chunks() {
-                if !chunk.bounds().intersects_sphere(center, radius) {
+                if !within(chunk.bounds()) {
                     continue;
                 }
                 for stroke in chunk.strokes() {
                     // Erased parts of a stroke are still part of it and can still be touched.
-                    let touched = stroke.bounds().intersects_sphere(center, radius)
-                        && stroke.points().iter().any(|p| reach(p, center) < radius);
+                    let touched = within(stroke.bounds())
+                        && stroke
+                            .points()
+                            .iter()
+                            .any(|p| centers.iter().any(|c| reach(p, *c) < radius));
                     if touched {
                         changed |= if self.subtract {
                             session.selection.remove(target.drawing, stroke.id)

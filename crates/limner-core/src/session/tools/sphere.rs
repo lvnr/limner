@@ -373,13 +373,35 @@ fn pose(input: &InputFrame) -> DAffine3 {
 
 /// The Grab tool at work: strokes near the hand when the trigger was pressed follow
 /// the hand, rigidly inside the inner sphere and less and less toward the outer one.
+///
+/// With mirrored working on, strokes near the hand's reflection follow the reflection
+/// of the hand's motion in the same way. No point moves twice: each moves with the
+/// sphere on its own side of the mirror, which is also the nearer one, and a point on
+/// the mirror takes the average of the two motions, which keeps it on the mirror.
 pub(crate) struct GrabGesture {
     /// For each drawing, the strokes taken hold of, by id.
-    held: HashMap<DrawingId, HashMap<u32, Touched>>,
-    targets: Vec<PaintTarget>,
+    held: HashMap<DrawingId, HashMap<u32, Held>>,
+    targets: Vec<GrabTarget>,
     start: DAffine3,
     /// How far the stick has pushed the strokes away from (above one) or pulled them toward the hand.
     scale: f64,
+}
+
+/// A drawing the Grab tool holds strokes of, and the mirror in its layer's space if
+/// mirrored working was on when the trigger was pressed.
+#[derive(Clone, Copy)]
+struct GrabTarget {
+    target: PaintTarget,
+    mirror: Option<DAffine3>,
+}
+
+/// A stroke as it was when the Grab tool took hold of it, and for each point how
+/// strongly it is held and how much of its motion is the reflection's rather than the
+/// hand's: none on the hand's side of the mirror, all on the far side, half on it.
+struct Held {
+    original: Stroke,
+    weights: Vec<f32>,
+    mirrored: Vec<f32>,
 }
 
 impl GrabGesture {
@@ -387,40 +409,69 @@ impl GrabGesture {
         let frame = session.evaluate();
         let targets = session.edit_targets(&frame)?;
         let settings = session.tools.grab;
-        let mut held: HashMap<DrawingId, HashMap<u32, Touched>> = HashMap::new();
+        let mut held: HashMap<DrawingId, HashMap<u32, Held>> = HashMap::new();
+        let mut grab_targets = Vec::new();
         for target in &targets {
+            let mirror = session
+                .mirror_in(target.target.layer)
+                .map(|mirror| mirror.to_affine());
+            grab_targets.push(GrabTarget {
+                target: target.target,
+                mirror,
+            });
             let (Some(space), Some(drawing)) = (
                 session.layer_space(&frame, target.target.layer),
                 session.doc.drawing(target.target.drawing),
             ) else {
                 continue;
             };
-            let center = space.point(input.main.position).as_vec3();
+            let center = space.point(input.main.position);
             let radius = space.length(settings.size as f64) as f32;
             let inner = radius * settings.inner;
+            let twin = mirror.map(|mirror| mirror.transform_point3(center));
+            let (here, there) = (center.as_vec3(), twin.map(|t| t.as_vec3()));
             for stroke in drawing.strokes() {
-                if !target.allows(stroke) || !stroke.bounds().intersects_sphere(center, radius) {
+                let bounds = stroke.bounds();
+                let within = bounds.intersects_sphere(here, radius)
+                    || there.is_some_and(|t| bounds.intersects_sphere(t, radius));
+                if !target.allows(stroke) || !within {
                     continue;
                 }
                 let weights: Vec<f32> = stroke
                     .points()
                     .iter()
-                    .map(|p| settings.strength * falloff(reach(p, center), radius, inner))
+                    .map(|p| {
+                        let distance = reach(p, here);
+                        let distance = there.map_or(distance, |t| distance.min(reach(p, t)));
+                        settings.strength * falloff(distance, radius, inner)
+                    })
                     .collect();
-                if weights.iter().any(|w| *w > 0.0) {
-                    held.entry(target.target.drawing).or_default().insert(
-                        stroke.id,
-                        Touched {
-                            original: (**stroke).clone(),
-                            weights,
-                        },
-                    );
+                if !weights.iter().any(|w| *w > 0.0) {
+                    continue;
                 }
+                let mirrored = match (mirror, twin) {
+                    (Some(mirror), Some(twin)) => stroke
+                        .points()
+                        .iter()
+                        .map(|p| {
+                            mirrored_share(p.position().as_dvec3(), center, twin, &mirror, radius)
+                        })
+                        .collect(),
+                    _ => vec![0.0; stroke.len()],
+                };
+                held.entry(target.target.drawing).or_default().insert(
+                    stroke.id,
+                    Held {
+                        original: (**stroke).clone(),
+                        weights,
+                        mirrored,
+                    },
+                );
             }
         }
         Ok(Self {
             held,
-            targets: targets.iter().map(|t| t.target).collect(),
+            targets: grab_targets,
             start: pose(input),
             scale: 1.0,
         })
@@ -433,7 +484,7 @@ impl GrabGesture {
         let frame = session.evaluate();
         let motion =
             pose(input) * DAffine3::from_scale(DVec3::splat(self.scale)) * self.start.inverse();
-        for target in &self.targets {
+        for GrabTarget { target, mirror } in &self.targets {
             let (Some(space), Some(held)) = (
                 session.layer_space(&frame, target.layer),
                 self.held.get(&target.drawing),
@@ -441,13 +492,16 @@ impl GrabGesture {
                 continue;
             };
             let in_layer = space.layer_from_viewer * motion * space.layer_from_viewer.inverse();
+            // The hand's motion as seen in the mirror.
+            let reflected = mirror.map(|mirror| mirror * in_layer * mirror.inverse());
             let scale = self.scale as f32;
             session.edit_drawing(target.drawing, |drawing| {
                 drawing.edit_strokes(
                     |_| true,
                     |stroke| {
-                        held.get(&stroke.id)
-                            .map(|entry| carried(entry, stroke, &in_layer, scale))
+                        held.get(&stroke.id).map(|entry| {
+                            carried(entry, stroke, &in_layer, reflected.as_ref(), scale)
+                        })
                     },
                 ) > 0
             });
@@ -458,26 +512,67 @@ impl GrabGesture {
     pub(crate) fn end(self, _session: &mut Session) {}
 }
 
-/// The held stroke with each point moved along `motion` by its weight.
-fn carried(entry: &Touched, stroke: &Stroke, motion: &DAffine3, scale: f32) -> Stroke {
+/// How much of a point's motion comes from the hand's reflection rather than the hand:
+/// none on the hand's side of the mirror, all on the far side, and half on the mirror
+/// itself, so that a point there stays there.
+fn mirrored_share(point: DVec3, hand: DVec3, twin: DVec3, mirror: &DAffine3, radius: f32) -> f32 {
+    // Twice the point's offset from the mirror, square to it.
+    let offset = point - mirror.transform_point3(point);
+    // Nearer the mirror than the precision a point is stored with, or than a tiny
+    // part of the sphere, counts as on it.
+    let tolerance = radius as f64 * 1e-5 + point.length() * f32::EPSILON as f64 * 4.0;
+    if offset.length() <= tolerance {
+        return 0.5;
+    }
+    let side = offset.dot(hand - twin);
+    if side > 0.0 {
+        0.0
+    } else if side < 0.0 {
+        1.0
+    } else {
+        // The hand is on the mirror, and so is its reflection.
+        0.5
+    }
+}
+
+/// The held stroke with each point moved by its weight along `motion`, or along
+/// `reflected` (the motion seen in the mirror) for its mirrored share.
+fn carried(
+    entry: &Held,
+    stroke: &Stroke,
+    motion: &DAffine3,
+    reflected: Option<&DAffine3>,
+    scale: f32,
+) -> Stroke {
     let points = entry
         .original
         .points()
         .iter()
-        .zip(&entry.weights)
-        .map(|(original, weight)| {
+        .zip(entry.weights.iter().zip(&entry.mirrored))
+        .map(|(original, (weight, share))| {
             if *weight <= 0.0 {
                 return *original;
             }
             let w = *weight as f64;
             let position = original.position().as_dvec3();
             let normal = Vec3::from_array(original.normal).as_dvec3();
-            let turned = motion.transform_vector3(normal).normalize_or(normal);
+            let along = |m: &DAffine3| {
+                (
+                    m.transform_point3(position),
+                    m.transform_vector3(normal).normalize_or(normal),
+                )
+            };
+            let (moved, turned) = match reflected {
+                Some(twin) if *share >= 1.0 => along(twin),
+                Some(twin) if *share > 0.0 => {
+                    let ((a, n), (b, m)) = (along(motion), along(twin));
+                    let s = *share as f64;
+                    (a.lerp(b, s), n.lerp(m, s).normalize_or(normal))
+                }
+                _ => along(motion),
+            };
             Point {
-                pos: position
-                    .lerp(motion.transform_point3(position), w)
-                    .as_vec3()
-                    .to_array(),
+                pos: position.lerp(moved, w).as_vec3().to_array(),
                 normal: normal
                     .lerp(turned, w)
                     .normalize_or(normal)

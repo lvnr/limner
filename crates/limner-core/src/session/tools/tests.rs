@@ -1077,3 +1077,247 @@ fn mirrored_working_paints_and_edits_on_both_sides_of_the_pivot_plane() {
     );
     assert_eq!(strokes(&session, layer).len(), 1);
 }
+
+/// A session with mirrored working on X across a pivot half a metre to the right, so
+/// the mirror is the plane x = 0.5, painting white 5 mm ribbons.
+fn mirrored_session() -> (Session, LayerId) {
+    use crate::session::tools::Symmetry;
+    let (mut session, layer) = session();
+    session.tools.paint.brush = BrushStyle::Ribbon;
+    session.tools.paint.size = 0.005;
+    session.tools.color = [1.0, 1.0, 1.0];
+    session
+        .exec_json(&serde_json::json!({
+            "cmd": "set_layer", "layer": layer,
+            "pivot": Xform::from_translation(DVec3::new(0.5, 0.0, 0.0)),
+        }))
+        .unwrap();
+    session.tools.symmetry = Symmetry::X;
+    (session, layer)
+}
+
+/// Asserts that `twin` is `stroke` reflected in the plane x = 0.5.
+fn assert_mirrored(stroke: &Stroke, twin: &Stroke) {
+    assert_eq!(stroke.len(), twin.len());
+    for (p, q) in stroke.points().iter().zip(twin.points()) {
+        assert!(
+            (q.pos[0] - (1.0 - p.pos[0])).abs() < 1e-5
+                && (q.pos[1] - p.pos[1]).abs() < 1e-5
+                && (q.pos[2] - p.pos[2]).abs() < 1e-5,
+            "{:?} is not the mirror image of {:?}",
+            q.pos,
+            p.pos
+        );
+        assert!((q.normal[0] + p.normal[0]).abs() < 1e-5);
+        assert!((q.normal[1] - p.normal[1]).abs() < 1e-5);
+        assert!((q.width - p.width).abs() < 1e-7);
+    }
+}
+
+#[test]
+fn mirrored_selection_takes_the_twin_too() {
+    use crate::session::tools::Symmetry;
+    let (mut session, layer) = mirrored_session();
+    for y in [1.0, 1.1] {
+        drag(
+            &mut session,
+            DVec3::new(0.1, y, -0.5),
+            DVec3::new(0.3, y, -0.5),
+            20,
+        );
+    }
+    assert_eq!(strokes(&session, layer).len(), 4, "two strokes, two twins");
+    session.tools.select_tool(ToolKind::Select);
+    session.tools.select.size = 0.02;
+    let depth = session.history().undo_depth();
+
+    // Touching the first stroke on the near side selects its twin on the far side.
+    tap(&mut session, DVec3::new(0.2, 1.0, -0.5));
+    let drawing = {
+        let paint = session.doc().layer(layer).unwrap().as_paint().unwrap();
+        paint.drawings[paint.frames[0] as usize]
+    };
+    let ids: Vec<u32> = strokes(&session, layer).iter().map(|s| s.id).collect();
+    assert_eq!(session.selection().count(), 2);
+    assert!(session.selection().contains(drawing, ids[0]));
+    assert!(session.selection().contains(drawing, ids[1]), "the twin");
+
+    // The same from the far side, adding with a half press of the modifier.
+    let with_alt = |position: DVec3, trigger: f32, alt: f32| InputFrame {
+        off: HandInput {
+            tracked: true,
+            trigger: alt,
+            ..HandInput::default()
+        },
+        ..hand(position, trigger)
+    };
+    let far = DVec3::new(0.8, 1.1, -0.5);
+    session.update(&with_alt(far, 1.0, 0.5));
+    session.update(&with_alt(far, 0.0, 0.5));
+    assert_eq!(session.selection().count(), 4);
+
+    // A full press of the modifier takes a stroke and its twin out again.
+    let near = DVec3::new(0.2, 1.0, -0.5);
+    session.update(&with_alt(near, 1.0, 1.0));
+    session.update(&with_alt(near, 0.0, 1.0));
+    assert_eq!(session.selection().count(), 2);
+    assert!(!session.selection().contains(drawing, ids[0]));
+    assert!(!session.selection().contains(drawing, ids[1]));
+    assert_eq!(
+        session.history().undo_depth(),
+        depth,
+        "selecting is not an edit"
+    );
+
+    // With the mirror off the sphere reaches only what it touches.
+    session.tools.symmetry = Symmetry::Off;
+    tap(&mut session, near);
+    assert_eq!(session.selection().count(), 1);
+}
+
+#[test]
+fn mirrored_grab_moves_the_twin_by_the_mirrored_motion() {
+    let (mut session, layer) = mirrored_session();
+    drag(
+        &mut session,
+        DVec3::new(0.1, 1.0, -0.5),
+        DVec3::new(0.3, 1.0, -0.5),
+        20,
+    );
+    let before = strokes(&session, layer);
+    assert_eq!(before.len(), 2);
+    session.tools.select_tool(ToolKind::Grab);
+    session.tools.grab.size = 0.04;
+    session.tools.grab.inner = 0.5;
+    session.tools.grab.strength = 1.0;
+    let depth = session.history().undo_depth();
+
+    // Take hold near the middle of the stroke, then move toward the mirror, up, and
+    // turn a quarter turn about the view axis.
+    let start = DVec3::new(0.2, 1.0, -0.5);
+    session.update(&hand(start, 1.0));
+    let turned = InputFrame {
+        main: HandInput {
+            tracked: true,
+            position: start + DVec3::new(0.03, 0.05, 0.0),
+            rotation: DQuat::from_rotation_z(std::f64::consts::FRAC_PI_2),
+            trigger: 1.0,
+            ..HandInput::default()
+        },
+        ..InputFrame::default()
+    };
+    session.update(&turned);
+    session.update(&InputFrame {
+        main: HandInput {
+            trigger: 0.0,
+            ..turned.main
+        },
+        ..turned
+    });
+
+    let after = strokes(&session, layer);
+    let p = after[0].points()[11].position();
+    assert!(
+        (p - glam::Vec3::new(0.23, 1.06, -0.5)).length() < 1e-5,
+        "the near side follows the hand: {p:?}"
+    );
+    assert_ne!(after[1].points()[11].pos, before[1].points()[11].pos);
+    assert_mirrored(&after[0], &after[1]);
+    assert_eq!(
+        after[1].points()[0].pos,
+        before[1].points()[0].pos,
+        "outside the mirrored sphere nothing moves"
+    );
+
+    assert_eq!(session.history().undo_depth(), depth + 1, "one undo step");
+    session.undo();
+    let undone = strokes(&session, layer);
+    assert_eq!(undone[0].points(), before[0].points());
+    assert_eq!(
+        undone[1].points(),
+        before[1].points(),
+        "one undo puts both back"
+    );
+}
+
+#[test]
+fn mirrored_grab_moves_each_point_once_and_keeps_the_mirror_seam() {
+    use crate::session::tools::Symmetry;
+    // A stroke across the mirror, painted with the mirror off so it has no twin:
+    // 21 points from x = 0.4 to 0.6, the middle one on the mirror.
+    let (mut session, layer) = mirrored_session();
+    session.tools.symmetry = Symmetry::Off;
+    drag(
+        &mut session,
+        DVec3::new(0.4, 1.0, -0.5),
+        DVec3::new(0.6, 1.0, -0.5),
+        20,
+    );
+    assert_eq!(strokes(&session, layer).len(), 1);
+    session.tools.symmetry = Symmetry::X;
+    session.tools.select_tool(ToolKind::Grab);
+    session.tools.grab.size = 0.04;
+    session.tools.grab.inner = 0.5;
+    session.tools.grab.strength = 1.0;
+
+    // The hand 2 cm short of the mirror, its reflection 2 cm past it: the points
+    // between are within the inner sphere of both. Each moves with the nearer one;
+    // the point on the mirror takes the average of the two motions.
+    let start = DVec3::new(0.48, 1.0, -0.5);
+    let moved = start + DVec3::new(0.01, 0.02, 0.0);
+    session.update(&hand(start, 1.0));
+    session.update(&hand(moved, 1.0));
+    session.update(&hand(moved, 0.0));
+    let grabbed = strokes(&session, layer)[0].clone();
+    let at = |i: usize| grabbed.points()[i].position();
+    let expect = [
+        (8, glam::Vec3::new(0.49, 1.02, -0.5)),
+        (9, glam::Vec3::new(0.50, 1.02, -0.5)),
+        (10, glam::Vec3::new(0.50, 1.02, -0.5)),
+        (11, glam::Vec3::new(0.50, 1.02, -0.5)),
+        (12, glam::Vec3::new(0.51, 1.02, -0.5)),
+    ];
+    for (i, want) in expect {
+        assert!(
+            (at(i) - want).length() < 1e-5,
+            "point {i} went to {:?}, not {want:?}",
+            at(i)
+        );
+    }
+    // The result is as symmetric as the gesture.
+    for i in 0..=10 {
+        let (p, q) = (at(i), at(20 - i));
+        assert!((q.x - (1.0 - p.x)).abs() < 1e-5 && (q.y - p.y).abs() < 1e-5);
+    }
+
+    // However the hand turns, the point on the mirror stays on it.
+    let start = DVec3::new(0.49, 1.02, -0.5);
+    session.update(&hand(start, 1.0));
+    let turned = InputFrame {
+        main: HandInput {
+            tracked: true,
+            position: start + DVec3::new(-0.01, 0.01, 0.005),
+            rotation: DQuat::from_rotation_y(0.4) * DQuat::from_rotation_z(0.3),
+            trigger: 1.0,
+            ..HandInput::default()
+        },
+        ..InputFrame::default()
+    };
+    session.update(&turned);
+    session.update(&InputFrame {
+        main: HandInput {
+            trigger: 0.0,
+            ..turned.main
+        },
+        ..turned
+    });
+    let middle = strokes(&session, layer)[0].points()[10].position();
+    assert!(
+        (middle.x - 0.5).abs() < 1e-6,
+        "on the mirror still: {middle:?}"
+    );
+    assert!(
+        (middle - glam::Vec3::new(0.5, 1.02, -0.5)).length() > 1e-3,
+        "but moved"
+    );
+}
