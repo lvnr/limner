@@ -8,7 +8,7 @@ Limner was built end to end on a Mac that has no headset. Everything that can be
 |---|---|---|---|
 | 1. Viewer | Opens Quill projects and native ones, draws every stroke type, floor grid, orbit/pan/zoom | Tests, screenshots of the sample project and of public Quill files | Other graphics cards |
 | 2. Player | Playback with stops, loops, chapters and the working range; clips, sequences, frames; pictures, 360 pictures, models, sounds, spawn areas, cameras | Tests; pictures and models by screenshot; sound by its state only | Sound by ear |
-| 3. Headset | OpenXR rig, hand-held palette with every panel, pinning, poking and far pointing, keyboard, button map, haptics, sounds; a simulated rig for working without a headset | 22 tests and screenshots on the simulated rig | Everything on a real headset (see below) |
+| 3. Headset | OpenXR rig, hand-held palette with every panel, pinning, poking and far pointing, keyboard, button map, haptics, sounds; a simulated rig for working without a headset | 17 tests of the headset layer on the simulated rig, and screenshots of it | Everything on a real headset (see below) |
 | 4. Lights | Sun, point and spot light layers; lit paint layers and models; shadows per light; ambient light; baking light into paint | Tests; live and baked lighting compared by screenshot | Stereo rendering, speed in a headset |
 | 5. Own format and export | `.limn` folders and `.limnz` files, crash-safe saving, autosave and recovery; export to glTF, USD/USDZ, FBX, OBJ from the app and the command line | Round-trip and crash tests; exports read back by strict readers written for the tests, and by outside ones: Godot's glTF and FBX importers, Apple's USD tools | Opening the exports in Blender, Unity and Unreal |
 | 6. Painting and editing | Nine tools, seven brushes, tapers, 14 colour modes, selection, layers, undo; grabbing the world, a layer or the selection; two-hand scale; the gimbal; duplicate-and-repeat; the blink on the stroke about to be deleted; mirrored working; text | Core tests driving the tools as controllers would; desktop screenshots | How any of it feels in the hand |
@@ -48,7 +48,7 @@ The project is set to start OpenXR whenever the app starts on Windows. That is w
 2. If the scene does not appear in the headset, the reason is on the desktop window's message line and in the log. OpenXR complaints about the action map (`godot/xr/action_map.tres`) are the first thing to look for: no runtime has seen it yet.
 3. Work down the list in `docs/xr.md`: floor and head, controllers and the brush tip, painting, grips, the palette, poking, the ray, pinning, typing, pop-ups, the button map, taking the headset off, the left hand, frame rate.
 
-The original Rift is a PC headset, so the "PC headset" target in the Performance panel is the one to watch. A standalone Quest build needs downloads that were deliberately not made here (export templates, the Android SDK and NDK, the OpenXR vendors plugin); the steps are in `docs/xr.md`.
+The original Rift is a PC headset, so the "PC headset" target in the Performance panel is the one to watch. A standalone Quest build needs downloads that were deliberately not made here (the Android part of Godot's export templates, the Android SDK and NDK, the OpenXR vendors plugin); the steps are in `docs/xr.md`.
 
 ## What has never been checked
 
@@ -68,7 +68,7 @@ Things a Quill user may look for and not find, or that are simpler than they cou
 - The Grab tool and the Selection tool do not work across the mirror; the other seven tools do.
 - Moving a very large selection re-draws its strokes every frame and will be slow in the tens of thousands of strokes.
 - Text is one line, in the built-in font, and has no font chooser.
-- The stroke the lower button would delete blinks orange first, as in Quill. The upper button picks a colour from the nearest stroke of any visible layer, and that one blinks only when it is on the layer being painted.
+- The upper button picks a colour from the nearest stroke of any visible layer, but the blink at the hand shows what the lower button would delete, which is always a stroke of the layer being painted. A stroke on another layer is picked from without blinking first.
 - No saved "home" views (there is "Go to initial spawn area") and no brush grid helper.
 - Baked lighting has no shadows, and a tube gets one brightness all the way round.
 - Sounds are not exported to 3D formats; ambisonic sound is reduced to its first channels.
@@ -96,7 +96,7 @@ Things a Quill user may look for and not find, or that are simpler than they cou
 
 Measured on an M1 Max, development build, Godot 4.8 dev 7.
 
-- The sample project (53 layers showing, 948,000 triangles) with the whole desktop interface: 3.5 ms a frame with V-Sync off, playing or still.
+- The sample project (53 layers showing, 948,000 triangles) with the whole desktop interface: 3.3 to 3.5 ms a frame with V-Sync off, playing or still.
 - Turning one full chunk of strokes (60,000 vertices) into triangles again, which a tool pays for each chunk it changes in a frame: 1.0 to 1.7 ms (`cargo run -p limner-core --example tess_cost`).
 - A 1080p still: 60, 112 and 184 ms at the three qualities; an 8192 x 8192 still at the best: 2.8 s.
 - The same sample in the packaged release build: 3.2 ms a frame. Drawing is what takes the time, not the Rust code, so the development build is a fair guide to speed.

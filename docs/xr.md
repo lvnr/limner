@@ -159,7 +159,7 @@ scripts/godot.sh --headless --path godot --script res://tests/run.gd -- xr      
 
 ## A standalone Quest build
 
-Nothing below has been run. It is the list of what is needed, in order, with the commands. Nothing is downloaded by the repository's scripts.
+Nothing below has been run. It is the list of what is needed, in order, with the commands. The repository's scripts download none of it: `scripts/package.sh` and `scripts\package.ps1` keep only the desktop part of the export templates, so for a Quest take the whole download as in step 1.
 
 1. **Export templates** for the pinned Godot (see `scripts/godot-version.txt`). In the editor: Editor > Manage Export Templates > Download and Install. By hand:
    ```bash
