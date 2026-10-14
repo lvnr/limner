@@ -212,6 +212,11 @@ static func _count(number: int, noun: String) -> String:
 func _build_paint() -> void:
 	var section := _section("paint")
 	_choice("paint", "shading", "Shading", "Lit layers are shaded by the scene's lights", ["unlit", "lit"], ["Unlit", "Lit"])
+	var bake := Kit.button("Bake lighting into paint", "Paints the light that falls on this layer now into its strokes, on every frame, and makes it unlit: it then looks the same without the lights, here and in anything it is exported to. Shadows are not baked.", func() -> void: editor.run({"cmd": "bake_lighting", "layer": _layer}))
+	bake.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_controls["paint.bake"] = bake
+	section.add_child(bake)
+	_readers.paint.append(func(details: Dictionary) -> void: bake.disabled = details.props.shading != "lit")
 	var loop := Kit.toggle("Loop animation", "The frames play over and over. Off, they play once and stay on the last one.", func(on: bool) -> void: _write("max_repeat", 0 if on else 1))
 	_add("paint", "loop", loop)
 	var counts := Form.note()

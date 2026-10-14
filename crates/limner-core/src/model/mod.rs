@@ -19,5 +19,5 @@ pub use layer::{
     SoundModifier, Viewpoint,
 };
 pub use media::{jpeg_size, png_size, Media, MediaData, MediaKind, MeshData};
-pub use settings::{Settings, PALETTE_SIZE};
+pub use settings::{Settings, DEFAULT_AMBIENT_LIGHT, PALETTE_SIZE};
 pub use stroke::{Brush, Point, Stroke, OPAQUE_THRESHOLD};

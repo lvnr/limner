@@ -130,7 +130,7 @@ A command is a dictionary with a `cmd` entry. Fields marked optional may be left
 ### Document
 | Command | Fields |
 |---|---|
-| `set_document` | optional `title`, `description`, `background`, `rate` (`{num, den}`), `range_start`, `range_end`, `camera_resolution` (`[w, h]`) |
+| `set_document` | optional `title`, `description`, `background`, `ambient_light` (the light lit paint gets from everywhere), `rate` (`{num, den}`), `range_start`, `range_end`, `camera_resolution` (`[w, h]`) |
 | `set_default_viewpoint` | `layer` (id or `null`) |
 | `set_palette_color` | `index` (0 to 15), `color` |
 
@@ -213,6 +213,8 @@ With `recording` on, any transform or opacity change writes a key at the playhea
 | `delete_selection` | |
 | `selection_to_new_layer` | `copy` (bool) |
 | `optimize` | `scope` (`"layer"` or `"all"`) |
+| `add_strokes` | `strokes` (a list of `{points: [[x, y, z], ...], width, brush?, color?, opacity?, normal?}`), optional `layer` (the paint layer when left out), `space` (`"layer"` or `"viewer"`), `select`. Adds ready-made strokes to the frame the layer shows; returns `{strokes, layer}`. `editor.add_text(text, height, solid)` builds on it. |
+| `bake_lighting` | `layer`: paints the light falling on the lit paint layers in and under it into their strokes and makes them unlit. Returns `{layers, points}`. |
 | `transform_again` | After a copy was moved (a grab or a gimbal drag with the modifier held): makes another copy, moved as far again. With the option `animate_duplicates`, stroke copies land on a new frame each. Fails when there is nothing to repeat; see `status.can_transform_again`. |
 
 ## Hands, grabs and the gimbal

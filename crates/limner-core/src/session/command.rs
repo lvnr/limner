@@ -93,6 +93,8 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         background: Option<[f32; 3]>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        ambient_light: Option<[f32; 3]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         rate: Option<FrameRate>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         range_start: Option<Flicks>,
@@ -344,6 +346,11 @@ pub enum Command {
     Optimize {
         scope: OptimizeScope,
     },
+    /// Paints the light falling on the lit paint layers in and under `layer` into
+    /// their strokes, as the lights stand now, and makes those layers unlit.
+    BakeLighting {
+        layer: LayerId,
+    },
     /// Adds ready-made strokes to the frame a paint layer shows: what the Text tool
     /// and scripts use. The paint layer is used when `layer` is left out.
     AddStrokes {
@@ -490,6 +497,7 @@ impl Command {
             SelectionToNewLayer { copy: true } => "Copy strokes to new layer",
             SelectionToNewLayer { copy: false } => "Move strokes to new layer",
             Optimize { .. } => "Optimize strokes",
+            BakeLighting { .. } => "Bake lighting",
             AddStrokes { .. } => "Add strokes",
             TransformAgain => "Transform again",
             Undo

@@ -43,6 +43,8 @@ var scene: LimnerScene
 var environment: Environment
 
 var _see_through_materials: Array[ShaderMaterial] = []
+## The materials lights shade, which take the document's ambient light.
+var _lit_materials: Array[ShaderMaterial] = []
 var _noise_texture: ImageTexture
 var _frame := 0
 var _grid: MeshInstance3D
@@ -86,6 +88,8 @@ func _setup_materials() -> void:
 		materials["tube_opaque"], materials["tube_see_through"], materials["flat_opaque"], materials["flat_see_through"]
 	)
 	var lit := _materials(LIT_SHADERS)
+	for key: String in lit:
+		_lit_materials.append(lit[key])
 	scene.set_lit_stroke_materials(lit["tube_opaque"], lit["tube_see_through"], lit["flat_opaque"], lit["flat_see_through"])
 	# The scene copies the picture materials, one copy per picture, and uses the rest as they are.
 	var layer_materials := _materials(LAYER_SHADERS)
@@ -201,3 +205,6 @@ func _update_grid() -> void:
 
 func _apply_document_settings() -> void:
 	environment.background_color = scene.background_color()
+	var ambient: Array = scene.document_info().ambient_light
+	for material in _lit_materials:
+		material.set_shader_parameter("ambient_light", Vector3(ambient[0], ambient[1], ambient[2]))

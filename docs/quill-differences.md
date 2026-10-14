@@ -7,6 +7,13 @@ Limner follows Quill 2.9's features and habits. It does not copy its pixels or i
 | What | Notes |
 |---|---|
 | **Lights** | A light layer (sun, point, spot) shades the paint layers and models whose shading is set to Lit. Everything else is drawn as painted, as in Quill. Lit strokes use a soft wrapped shading with no highlights, so thin strokes do not fall into black. |
+| **Baking light into paint** | "Bake lighting into paint" writes the light a lit layer gets into its strokes' colours, so the look survives without the lights and in every export. One colour per stroke point, so a tube gets the mean of the light around it; shadows are not baked. |
+| **Ambient light** | A document setting for how bright lit paint is where no light reaches. |
+| **Mirrored working** | With a mirror on X, Y or Z through the pivot of the layer being painted, Paint and Line lay a twin of every stroke and Colorize, Eraser, Thicken, Nudge and Optimize work on both sides. Quill's way (copy, flip, merge) still works. |
+| **Text** | A line of text written in strokes, from the font's own outlines: outlined or filled. |
+| **Smooth keys** | See below. |
+| **Performance panel** | The scene held against what a standalone headset, a PC headset or a desktop draws comfortably. |
+| **Autosave and recovery** | Unsaved work is copied aside every few minutes and offered back after a crash. |
 | **A desktop mode** | The whole editor runs with a mouse or a pen: the same tools, panels and commands. A mouse cannot give depth, so the hand works on a plane in front of the camera (Ctrl + wheel moves the plane). |
 | **Smooth keys** | A sixth interpolation mode that curves through neighbouring keys. Quill's five are kept. |
 | **An open file format** | `.limn` folders and packed `.limnz` files, documented in `docs/format.md`. Quill projects open directly; saving always writes the native format. |

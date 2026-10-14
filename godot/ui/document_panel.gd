@@ -11,6 +11,7 @@ var editor: LimnerEditor
 var _title: TextField
 var _description: TextEdit
 var _background: ColorField
+var _ambient: ColorField
 var _rate: OptionButton
 var _rate_custom: HBoxContainer
 var _rate_num: NumberField
@@ -52,6 +53,11 @@ func _init(limner_editor: LimnerEditor) -> void:
 	_background.changed.connect(func(color: Color) -> void: _write({"background": LimnerEditor.linear_rgb(color)}))
 	_background.edit_ended.connect(editor.commit)
 	add_child(Form.row("Background", [_background]))
+	_ambient = ColorField.new("The light that reaches lit paint and models from everywhere: how bright they are where no light layer reaches. Black leaves only the lights")
+	_ambient.edit_started.connect(func() -> void: editor.begin("Change ambient light"))
+	_ambient.changed.connect(func(color: Color) -> void: _write({"ambient_light": LimnerEditor.linear_rgb(color)}))
+	_ambient.edit_ended.connect(editor.commit)
+	add_child(Form.row("Ambient light", [_ambient]))
 	add_child(Kit.separator())
 
 	var rates: Array = RATES.map(func(rate: int) -> String: return "%d fps" % rate)
@@ -108,6 +114,7 @@ func refresh() -> void:
 	if not _description.has_focus() and _description.text != info.description:
 		_description.text = info.description
 	_background.set_value(LimnerEditor.screen_color(info.background))
+	_ambient.set_value(LimnerEditor.screen_color(info.ambient_light))
 
 	var num := int(info.rate.num)
 	var den := int(info.rate.den)

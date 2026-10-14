@@ -698,6 +698,7 @@ impl Session {
                 title,
                 description,
                 background,
+                ambient_light,
                 rate,
                 range_start,
                 range_end,
@@ -710,6 +711,9 @@ impl Session {
                 }
                 if background.is_some_and(|c| c.iter().any(|v| !v.is_finite() || *v < 0.0)) {
                     return Err(CommandError::invalid("the background colour is not usable"));
+                }
+                if ambient_light.is_some_and(|c| c.iter().any(|v| !v.is_finite() || *v < 0.0)) {
+                    return Err(CommandError::invalid("the ambient light is not usable"));
                 }
                 if camera_resolution.is_some_and(|r| r.iter().any(|v| !(16..=16384).contains(v))) {
                     return Err(CommandError::invalid(
@@ -733,6 +737,9 @@ impl Session {
                 }
                 if let Some(background) = background {
                     settings.background = background;
+                }
+                if let Some(ambient_light) = ambient_light {
+                    settings.ambient_light = ambient_light;
                 }
                 if let Some(resolution) = camera_resolution {
                     settings.camera_resolution = resolution;
@@ -1131,6 +1138,12 @@ impl Session {
                 space,
                 select,
             } => self.add_strokes(layer, &strokes, space, select),
+            Command::BakeLighting { layer } => {
+                let frame = self.evaluate();
+                let (layers, points) =
+                    crate::ops::lighting::bake_lighting(self.doc_mut(), &frame, layer)?;
+                Ok(json!({ "layers": layers, "points": points }))
+            }
             Command::TransformAgain => self.transform_again(),
             other => unreachable!("{other:?} does not edit the document"),
         }

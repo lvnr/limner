@@ -7,17 +7,28 @@ use godot::classes::{DirectionalLight3D, Light3D, OmniLight3D, SpotLight3D};
 use godot::prelude::*;
 use limner::core::eval::LayerState;
 use limner::core::model::{Light, LightKind};
+use limner::core::ops::lighting;
 
-/// The exponent of the renderer's fall-off across a spot light's cone, from the
-/// softness of its edge. The renderer dims a spot by `1 - rim^exponent`, where `rim`
-/// runs from 0 on the axis to 1 at the edge: a high exponent keeps the light full
-/// almost to the edge, and 1 fades it evenly from the middle.
+/// How sharply a spot fades toward the edge of its cone: the core's rule, so that
+/// what is on screen is what gets baked into paint.
 pub(super) fn spot_attenuation(blend: f32) -> f32 {
-    (1.0 / blend.max(1e-3)).clamp(1.0, 64.0)
+    lighting::cone_exponent(blend)
 }
 
-/// How far a light reaches in viewer space. The layer gives the reach in its own
-/// units; the layer's and the view's scale turn that into metres.
+/// The engine dims a point or spot light by one over the distance in metres of the
+/// room, which would make the same scene darker when it is seen larger. Scaling the
+/// energy by the light's reach in the same metres takes the size of the scene out
+/// again, and puts full brightness at the share of the reach the core names.
+pub(super) fn energy(light: &Light, opacity: f32, scale: f64) -> f32 {
+    let energy = light.energy * opacity;
+    match light.kind {
+        LightKind::Directional => energy,
+        LightKind::Point | LightKind::Spot => {
+            energy * reach(light.range, scale) * lighting::FULL_AT as f32
+        }
+    }
+}
+
 pub(super) fn reach(range: f32, scale: f64) -> f32 {
     (f64::from(range) * scale).clamp(1e-4, 1e9) as f32
 }
@@ -81,7 +92,7 @@ impl LightNode {
         if self.applied.as_ref() != Some(&applied) {
             self.node.set_color(color_from_linear(light.color));
             self.node
-                .set_param(Param::ENERGY, light.energy * state.opacity);
+                .set_param(Param::ENERGY, energy(light, state.opacity, place.scale));
             self.node.set_shadow(light.shadows);
             match self.kind {
                 LightKind::Point => {
@@ -123,6 +134,34 @@ mod tests {
         assert!((spot_attenuation(0.15) - 6.6667).abs() < 1e-3);
         assert_eq!(spot_attenuation(0.0), 64.0);
         assert_eq!(spot_attenuation(7.0), 1.0);
+    }
+
+    #[test]
+    fn a_point_light_is_as_bright_however_large_the_scene_is_seen() {
+        let lamp = Light {
+            kind: LightKind::Point,
+            energy: 2.0,
+            range: 4.0,
+            ..Light::default()
+        };
+        // What the engine shows at a distance: energy over the distance in metres.
+        let shown = |scale: f64, distance_in_layer: f64| {
+            f64::from(energy(&lamp, 1.0, scale)) / (distance_in_layer * scale)
+        };
+        assert!((shown(1.0, 1.0) - shown(250.0, 1.0)).abs() < 1e-4);
+        assert!(
+            (shown(1.0, 1.0) - 2.0).abs() < 1e-6,
+            "full at a quarter of the reach"
+        );
+        let sun = Light {
+            kind: LightKind::Directional,
+            ..lamp.clone()
+        };
+        assert_eq!(
+            energy(&sun, 0.5, 250.0),
+            1.0,
+            "a sun has no distance to make up for"
+        );
     }
 
     #[test]

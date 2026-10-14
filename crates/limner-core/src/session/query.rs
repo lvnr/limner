@@ -187,6 +187,7 @@ impl Session {
             "title": settings.title,
             "description": settings.description,
             "background": settings.background,
+            "ambient_light": settings.ambient_light,
             "rate": settings.rate,
             "fps": settings.rate.as_f64(),
             "frame_duration": settings.rate.frame_duration(),

@@ -192,6 +192,7 @@ pub fn diff_documents(a: &Document, b: &Document) -> Vec<String> {
         title,
         description,
         background,
+        ambient_light,
         rate,
         range_start,
         range_end,
@@ -812,6 +813,7 @@ pub fn exhaustive_document() -> Document {
     doc.settings.title = "Exhaustive \"test\" — プロジェクト".to_owned();
     doc.settings.description = "Line one\nLine two\ttabbed \\ backslash".to_owned();
     doc.settings.background = [0.8, 0.1, 0.333_333_34];
+    doc.settings.ambient_light = [0.05, 0.1, 0.6];
     doc.settings.rate = FrameRate::new(30_000, 1001);
     doc.settings.range_start = -from_seconds(0.5);
     doc.settings.range_end = from_seconds(3600.0);

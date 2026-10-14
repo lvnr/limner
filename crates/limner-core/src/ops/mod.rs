@@ -9,6 +9,7 @@ pub mod color;
 pub mod frames;
 pub mod keys;
 pub mod layers;
+pub mod lighting;
 pub mod simplify;
 pub mod strokes;
 

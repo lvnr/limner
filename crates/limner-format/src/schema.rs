@@ -49,6 +49,7 @@ pub(crate) struct SettingsDto {
     pub title: String,
     pub description: String,
     pub background: [Num; 3],
+    pub ambient_light: [Num; 3],
     pub rate: [u32; 2],
     pub range_start: i64,
     pub range_end: i64,

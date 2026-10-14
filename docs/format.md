@@ -170,6 +170,7 @@ Recommended `.gitattributes` for a repository holding projects:
 | `title` | string | `""` | Title of the piece. |
 | `description` | string | `""` | Free text. |
 | `background` | [r, g, b] *f32* | `[0.8, 0.8, 0.8]` | Background colour. |
+| `ambient_light` | [r, g, b] *f32* | `[0.35, 0.35, 0.35]` | Light that reaches lit paint and models from everywhere, as a share of their own colour: how bright they are where no light layer reaches. |
 | `rate` | [num, den] integers | `[24, 1]` | Document frame rate in frames per second, as the fraction num/den. `[24000, 1001]` is 23.976. |
 | `range_start` | flicks | 0 | Start of the working range: what loops in the editor and what cameras render. |
 | `range_end` | flicks | 7056000000 (10 s) | End of the working range. |
