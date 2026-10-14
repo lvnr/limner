@@ -4,6 +4,11 @@
 //! one was chosen, the selected strokes when the Selection tool reaches them, or one
 //! handle of the gimbal. A second grip adds scale. Holding the modifier when the
 //! grab starts moves a copy instead, and that move can then be repeated.
+//!
+//! Selected strokes being carried stay where they are in the document until the
+//! carry ends: interfaces show them moved by [`SelectionMotion`], so a frame of the
+//! carry costs the same however much is selected. The move is written into the
+//! strokes once, when the grip lets go.
 
 use super::gesture::Gesture;
 use super::gimbal::{GimbalHandle, HandleDrag};
@@ -15,13 +20,15 @@ use super::view::DEFAULT_ZOOM_LIMITS;
 use super::{CommandError, Session};
 use crate::eval::{Content, RenderFrame};
 use crate::math::{Aabb, Flip, Xform};
-use crate::model::{DrawingId, LayerId, Stroke};
+use crate::model::{Drawing, DrawingId, LayerId, Stroke, StrokeChunk};
 use crate::ops::frames::{self, NewFrame};
 use crate::ops::layers;
 use crate::ops::strokes::transformed_stroke;
 use glam::{DQuat, DVec3};
 use serde_json::{json, Value};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 /// A grip takes hold past this and lets go below [`GRIP_RELEASE`].
 pub const GRIP_PRESS: f32 = 0.35;
@@ -49,7 +56,9 @@ pub enum Subject {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Repeat {
     /// Selected strokes were copied and the copies moved by this much, in world space.
-    Strokes { motion: Xform },
+    /// `selection` is the selection's revision once the copies were selected: the move
+    /// repeats only on those copies.
+    Strokes { motion: Xform, selection: u64 },
     /// A layer was copied and the copy moved by this much, in its parent's space.
     Layer { layer: LayerId, motion: Xform },
 }
@@ -115,6 +124,80 @@ fn about_moving(from: DVec3, to: DVec3, rotation: DQuat, scale: f64) -> Xform {
     }
 }
 
+/// Counts carries of selected strokes, so that each can be told from the last.
+static CARRIES: AtomicU64 = AtomicU64::new(1);
+
+/// Selected strokes being carried by a grip or turned by the gimbal. Until the carry
+/// ends they stay where they were in the document, and an interface shows them moved
+/// by `motion`; see [`SelectionMotion::split`].
+#[derive(Clone, Copy, Debug)]
+pub struct SelectionMotion<'a> {
+    /// Maps where the strokes are in the document, in world space, to where they are
+    /// to be shown. It has no mirror.
+    pub motion: Xform,
+    /// Different for every carry, so that an interface can tell one from the next.
+    pub serial: u64,
+    held: &'a [(PaintTarget, BTreeSet<u32>)],
+}
+
+impl<'a> SelectionMotion<'a> {
+    /// The ids of the carried strokes of a drawing, if it has any. Selected strokes on
+    /// locked or hidden layers are not carried.
+    pub fn strokes_in(&self, drawing: DrawingId) -> Option<&'a BTreeSet<u32>> {
+        self.held
+            .iter()
+            .find(|(target, _)| target.drawing == drawing)
+            .map(|(_, ids)| ids)
+    }
+
+    /// The drawings with carried strokes.
+    pub fn drawings(&self) -> impl Iterator<Item = DrawingId> + 'a {
+        self.held.iter().map(|(target, _)| target.drawing)
+    }
+
+    /// `drawing` (with the id `id`) split for showing while its strokes are carried,
+    /// or `None` when none of them are.
+    pub fn split(&self, id: DrawingId, drawing: &Drawing) -> Option<CarriedSplit> {
+        self.strokes_in(id).map(|ids| split_drawing(drawing, ids))
+    }
+}
+
+/// A drawing as it is shown while some of its strokes are carried.
+pub struct CarriedSplit {
+    /// The drawing's chunks without the carried strokes, in order. Chunks that hold
+    /// none of them are the drawing's own, so whatever was made for them is reused;
+    /// chunks that held nothing else are left out.
+    pub staying: Vec<Arc<StrokeChunk>>,
+    /// The carried strokes in drawing order, shared with the drawing, as a drawing of
+    /// their own: to be shown placed by the motion.
+    pub carried: Drawing,
+}
+
+/// Splits `drawing` into the strokes whose ids are in `carried` and the rest.
+pub(crate) fn split_drawing(drawing: &Drawing, carried: &BTreeSet<u32>) -> CarriedSplit {
+    let mut staying = Vec::with_capacity(drawing.chunks().len());
+    let mut moving = Drawing::new();
+    for chunk in drawing.chunks() {
+        if !chunk.strokes().iter().any(|s| carried.contains(&s.id)) {
+            staying.push(chunk.clone());
+            continue;
+        }
+        let mut rest = Drawing::new();
+        for stroke in chunk.strokes() {
+            if carried.contains(&stroke.id) {
+                moving.push_shared(stroke.clone());
+            } else {
+                rest.push_shared(stroke.clone());
+            }
+        }
+        staying.extend(rest.chunks().iter().cloned());
+    }
+    CarriedSplit {
+        staying,
+        carried: moving,
+    }
+}
+
 /// How a subject was when it was taken hold of, so that it can be put anywhere from
 /// there without many small steps adding up their errors.
 enum Start {
@@ -129,9 +212,13 @@ enum Start {
         local: Xform,
     },
     Selection {
-        strokes: HashMap<DrawingId, HashMap<u32, Stroke>>,
-        targets: Vec<PaintTarget>,
+        /// The drawings whose selected strokes move, and which strokes.
+        held: Vec<(PaintTarget, BTreeSet<u32>)>,
         pivot_world: DVec3,
+        /// The motion so far, in world space. It is written into the strokes when the
+        /// carry ends.
+        motion: Xform,
+        serial: u64,
     },
 }
 
@@ -221,25 +308,14 @@ impl Carried {
                 if duplicate {
                     session.duplicate_selected(&targets);
                 }
-                let mut strokes: HashMap<DrawingId, HashMap<u32, Stroke>> = HashMap::new();
-                let mut held = Vec::new();
-                for target in &targets {
-                    let (Some(drawing), Some(ids)) = (
-                        session.doc.drawing(target.target.drawing),
-                        session.selection.in_drawing(target.target.drawing),
-                    ) else {
-                        continue;
-                    };
-                    let originals: HashMap<u32, Stroke> = drawing
-                        .strokes()
-                        .filter(|s| ids.contains(&s.id))
-                        .map(|s| (s.id, (**s).clone()))
-                        .collect();
-                    if !originals.is_empty() {
-                        strokes.insert(target.target.drawing, originals);
-                        held.push(target.target);
-                    }
-                }
+                let held: Vec<(PaintTarget, BTreeSet<u32>)> = targets
+                    .iter()
+                    .filter(|target| session.doc.drawing(target.target.drawing).is_some())
+                    .filter_map(|target| {
+                        let ids = session.selection.in_drawing(target.target.drawing)?;
+                        (!ids.is_empty()).then(|| (target.target, ids.clone()))
+                    })
+                    .collect();
                 session.set_selection_pivot(pivot_world);
                 Ok(Self {
                     subject,
@@ -248,9 +324,10 @@ impl Carried {
                         .viewer_from_world()
                         .transform_point(pivot_world),
                     start: Start::Selection {
-                        strokes,
-                        targets: held,
+                        held,
                         pivot_world,
+                        motion: Xform::IDENTITY,
+                        serial: CARRIES.fetch_add(1, Ordering::Relaxed),
                     },
                     duplicate,
                 })
@@ -259,12 +336,13 @@ impl Carried {
     }
 
     /// Puts the subject where `motion` takes it from where it started. `motion` maps
-    /// viewer space as it was when the grab began to how it should be now.
-    pub(crate) fn apply(&self, session: &mut Session, motion: &Xform) {
+    /// viewer space as it was when the grab began to how it should be now. Selected
+    /// strokes only remember it until [`Carried::finish`].
+    pub(crate) fn apply(&mut self, session: &mut Session, motion: &Xform) {
         if !(motion.is_finite() && motion.scale > 0.0) {
             return;
         }
-        match &self.start {
+        match &mut self.start {
             Start::View { world_from_viewer } => {
                 let mut next = world_from_viewer.mul(&motion.inverse());
                 next.rotation = next.rotation.normalize();
@@ -286,41 +364,64 @@ impl Carried {
                 let _ = session.write_transform_as(*id, local, true);
             }
             Start::Selection {
-                strokes,
-                targets,
                 pivot_world,
+                motion: in_world,
+                ..
             } => {
-                let frame = session.evaluate();
-                let viewer_from_world = session.view.viewer_from_world();
-                for target in targets {
-                    let Some(held) = strokes.get(&target.drawing) else {
-                        continue;
-                    };
-                    let layer_in_viewer =
-                        viewer_from_world.mul(&frame.world_xform(&session.doc, target.layer));
-                    let in_layer = layer_in_viewer.inverse().mul(motion).mul(&layer_in_viewer);
-                    session.edit_drawing(target.drawing, |drawing| {
-                        drawing.edit_strokes(
-                            |_| true,
-                            |stroke| {
-                                held.get(&stroke.id)
-                                    .map(|original| transformed_stroke(original, &in_layer))
-                            },
-                        ) > 0
-                    });
-                }
-                let in_world = session
+                *in_world = session
                     .view
                     .world_from_viewer
                     .mul(motion)
-                    .mul(&viewer_from_world);
+                    .mul(&session.view.viewer_from_world());
                 session.set_selection_pivot(in_world.transform_point(*pivot_world));
             }
         }
     }
 
+    /// Writes the motion of carried strokes into them, once, as the carry ends. Other
+    /// subjects were placed as they went.
+    pub(crate) fn finish(&self, session: &mut Session) {
+        let Start::Selection { held, motion, .. } = &self.start else {
+            return;
+        };
+        if motion.is_identity() {
+            return;
+        }
+        let frame = session.evaluate();
+        for (target, ids) in held {
+            let in_world = frame.world_xform(&session.doc, target.layer);
+            let in_layer = in_world.inverse().mul(motion).mul(&in_world);
+            session.edit_drawing(target.drawing, |drawing| {
+                drawing.edit_strokes(
+                    |_| true,
+                    |stroke| {
+                        ids.contains(&stroke.id)
+                            .then(|| transformed_stroke(stroke, &in_layer))
+                    },
+                ) > 0
+            });
+        }
+    }
+
+    /// The carried strokes and how they are moved, while this carries a selection.
+    pub(crate) fn selection_motion(&self) -> Option<SelectionMotion<'_>> {
+        match &self.start {
+            Start::Selection {
+                held,
+                motion,
+                serial,
+                ..
+            } => Some(SelectionMotion {
+                motion: *motion,
+                serial: *serial,
+                held,
+            }),
+            _ => None,
+        }
+    }
+
     /// What doing this again would be, when it moved a copy.
-    pub(crate) fn repeat(&self, session: &Session, motion: &Xform) -> Option<Repeat> {
+    pub(crate) fn repeat(&self, session: &Session) -> Option<Repeat> {
         if !self.duplicate {
             return None;
         }
@@ -333,12 +434,9 @@ impl Carried {
                     motion: now.mul(&local.inverse()),
                 })
             }
-            Start::Selection { .. } => Some(Repeat::Strokes {
-                motion: session
-                    .view
-                    .world_from_viewer
-                    .mul(motion)
-                    .mul(&session.view.viewer_from_world()),
+            Start::Selection { motion, .. } => Some(Repeat::Strokes {
+                motion: *motion,
+                selection: session.selection.revision(),
             }),
         }
     }
@@ -418,8 +516,6 @@ pub(crate) struct Grab {
     how: How,
     /// Whether it changes the document, and so runs inside a transaction.
     edits: bool,
-    /// The motion applied last.
-    motion: Xform,
 }
 
 impl Grab {
@@ -690,7 +786,6 @@ impl Session {
             carried,
             how,
             edits: label.is_some(),
-            motion: Xform::IDENTITY,
         });
         self.touch_state();
         feedback.push(Feedback::Haptic {
@@ -747,7 +842,6 @@ impl Session {
             How::Handle { hand, drag } => drag.motion(&hands[*hand], None),
         };
         grab.carried.apply(self, &motion);
-        grab.motion = motion;
         self.grab = Some(grab);
     }
 
@@ -800,7 +894,8 @@ impl Session {
         let Some(grab) = self.grab.take() else {
             return;
         };
-        let repeat = grab.carried.repeat(self, &grab.motion);
+        grab.carried.finish(self);
+        let repeat = grab.carried.repeat(self);
         if grab.edits {
             self.commit_transaction();
         }
@@ -818,10 +913,26 @@ impl Session {
         }
     }
 
+    /// The selected strokes being carried, by a grip or by the gimbal, and how they
+    /// are moved: they stay where they are in the document until the carry ends.
+    pub fn selection_motion(&self) -> Option<SelectionMotion<'_>> {
+        let carried = match (&self.grab, &self.gesture) {
+            (Some(grab), _) => Some(&grab.carried),
+            (None, Some(Gesture::Handle(gesture))) => gesture.carried(),
+            _ => None,
+        };
+        carried.and_then(Carried::selection_motion)
+    }
+
     // ---- doing a duplicate again ----
 
+    /// Remembers a repeat as of now: it lasts while the document and, for strokes,
+    /// the selection stay as they are.
     pub(crate) fn remember_repeat(&mut self, repeat: Option<Repeat>) {
-        if let Some(repeat) = repeat {
+        if let Some(mut repeat) = repeat {
+            if let Repeat::Strokes { selection, .. } = &mut repeat {
+                *selection = self.selection.revision();
+            }
             self.repeat = Some((repeat, self.edits));
         }
     }
@@ -830,7 +941,9 @@ impl Session {
     pub fn can_transform_again(&self) -> bool {
         match self.repeat {
             Some((repeat, at)) if at == self.edits => match repeat {
-                Repeat::Strokes { .. } => !self.selection.is_empty(),
+                Repeat::Strokes { selection, .. } => {
+                    !self.selection.is_empty() && selection == self.selection.revision()
+                }
                 Repeat::Layer { layer, .. } => self.doc.layer(layer).is_some(),
             },
             _ => false,
@@ -861,7 +974,7 @@ impl Session {
                     json!({ "layer": copy }),
                 )
             }
-            Repeat::Strokes { motion } => {
+            Repeat::Strokes { motion, .. } => {
                 let frame = self.evaluate();
                 let targets = self.edit_targets(&frame).map_err(CommandError::Invalid)?;
                 let pivot = self.selection_pivot();
@@ -925,7 +1038,13 @@ impl Session {
                     let step = self.doc.settings.rate.frame_duration();
                     self.playback.seek(self.playback.time + step);
                 }
-                (Repeat::Strokes { motion }, json!({ "copied": copied }))
+                (
+                    Repeat::Strokes {
+                        motion,
+                        selection: self.selection.revision(),
+                    },
+                    json!({ "copied": copied }),
+                )
             }
         };
         self.repeat = Some((next, self.edits));

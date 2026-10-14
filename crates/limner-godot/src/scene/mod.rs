@@ -750,6 +750,8 @@ impl LimnerScene {
         let frame = session.evaluate();
         let viewer_from_world = session.view.viewer_from_world_affine();
         let doc = session.doc();
+        // Selected strokes being carried are shown moved, not made again.
+        let carried = session.selection_motion();
 
         self.cache.begin_frame();
         let mut stats = Stats::default();
@@ -757,13 +759,17 @@ impl LimnerScene {
         let container = container(&mut self.container, &mut self.base);
 
         for state in &frame.layers {
-            let Content::Paint { drawing, .. } = state.content else {
+            let Content::Paint {
+                drawing: drawing_id,
+                ..
+            } = state.content
+            else {
                 continue;
             };
             if !state.visible || state.opacity <= 0.0 {
                 continue;
             }
-            let Some(drawing) = doc.drawing(drawing) else {
+            let Some(drawing) = doc.drawing(drawing_id) else {
                 continue;
             };
             shown.insert(state.id);
@@ -778,7 +784,12 @@ impl LimnerScene {
             sync_layer(
                 instances,
                 state,
-                drawing,
+                strokes::Shown {
+                    id: drawing_id,
+                    drawing,
+                    carried: carried.as_ref(),
+                    edits: session.edit_count(),
+                },
                 &viewer_from_world,
                 &mut self.cache,
                 &self.materials,

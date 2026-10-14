@@ -1,4 +1,9 @@
 //! Paint layers on screen: one mesh instance per chunk of the drawing a layer shows.
+//!
+//! While selected strokes are carried, the document keeps them where they were. The
+//! layer is then shown split, once at the start of the carry: its chunks without the
+//! carried strokes, and the carried strokes as chunks of their own, placed every frame
+//! by the motion alone. Nothing is made again until the carry ends.
 
 use crate::convert::transform3d;
 use crate::meshes::{chunk_key, MeshCache};
@@ -6,13 +11,17 @@ use godot::classes::{Material, MeshInstance3D};
 use godot::prelude::*;
 use limner::core::eval::LayerState;
 use limner::core::glam::{DAffine3, DVec3};
-use limner::core::model::{Drawing, LayerId};
+use limner::core::model::{Drawing, DrawingId, LayerId, StrokeChunk};
+use limner::core::session::{CarriedSplit, SelectionMotion};
 use limner::core::tess::SurfaceKind;
+use std::sync::Arc;
 
 /// One chunk of a paint layer on screen.
 pub(super) struct ChunkInstance {
     pub(super) node: Gd<MeshInstance3D>,
-    /// Identity of the chunk whose mesh the node shows; zero when it shows none.
+    /// Identity of the chunk whose mesh the node shows; zero when it shows none. It is
+    /// only an address, so it is cleared whenever the node is hidden: once the cache
+    /// has let go of that chunk, another may be made at the same address.
     key: usize,
     kinds: Vec<SurfaceKind>,
     origin: DVec3,
@@ -23,11 +32,19 @@ pub(super) struct ChunkInstance {
     visible: bool,
 }
 
+/// A layer split while some of its strokes are carried, and what it was split for:
+/// the carry, the drawing, and the state of the document.
+struct Carry {
+    from: (u64, DrawingId, u64),
+    split: CarriedSplit,
+}
+
 #[derive(Default)]
 pub(super) struct LayerInstances {
     pub(super) chunks: Vec<ChunkInstance>,
     /// The materials that take scene lights, while the layer is shaded by them.
     lit: Option<[Option<Gd<Material>>; 4]>,
+    carry: Option<Carry>,
 }
 
 /// Says whether a layer is shaded by scene lights, and with which materials
@@ -71,10 +88,17 @@ pub(super) fn container<'a>(
     })
 }
 
+/// Shows or hides one chunk. A hidden chunk lets go of its mesh, so that the cache
+/// can drop it, and forgets which chunk it showed.
 pub(super) fn set_visible(chunk: &mut ChunkInstance, visible: bool) {
     if chunk.visible != visible {
         chunk.node.set_visible(visible);
         chunk.visible = visible;
+    }
+    if !visible && chunk.key != 0 {
+        chunk.node.set_mesh(Gd::<godot::classes::Mesh>::null_arg());
+        chunk.key = 0;
+        chunk.kinds.clear();
     }
 }
 
@@ -83,19 +107,63 @@ pub(super) fn layer_seed(id: LayerId) -> f32 {
     (id.0.wrapping_mul(2_654_435_761) % 251) as f32
 }
 
+/// What a paint layer shows this frame.
+pub(super) struct Shown<'a> {
+    pub id: DrawingId,
+    pub drawing: &'a Drawing,
+    /// The selected strokes being carried, if any are.
+    pub carried: Option<&'a SelectionMotion<'a>>,
+    /// The session's edit count, which says whether the document changed.
+    pub edits: u64,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn sync_layer(
     instances: &mut LayerInstances,
     state: &LayerState,
-    drawing: &Drawing,
+    shown: Shown,
     viewer_from_world: &DAffine3,
     cache: &mut MeshCache,
     materials: &[Option<Gd<Material>>; 4],
     container: &mut Gd<Node3D>,
     stats: &mut Stats,
 ) {
+    // Split the drawing once per carry, and show each part placed by its own matrix.
+    let motion = match shown.carried {
+        Some(carried) if carried.strokes_in(shown.id).is_some() => {
+            let from = (carried.serial, shown.id, shown.edits);
+            if instances.carry.as_ref().is_none_or(|c| c.from != from) {
+                instances.carry = carried
+                    .split(shown.id, shown.drawing)
+                    .map(|split| Carry { from, split });
+            }
+            Some(carried.motion.to_affine())
+        }
+        _ => {
+            instances.carry = None;
+            None
+        }
+    };
+    let layer_matrix = *viewer_from_world * state.world;
+    let chunks: Vec<(&Arc<StrokeChunk>, DAffine3)> = match (&instances.carry, motion) {
+        (Some(carry), Some(motion)) => {
+            let moved = *viewer_from_world * motion * state.world;
+            carry
+                .split
+                .staying
+                .iter()
+                .map(|chunk| (chunk, layer_matrix))
+                .chain(carry.split.carried.chunks().iter().map(|c| (c, moved)))
+                .collect()
+        }
+        _ => shown
+            .drawing
+            .chunks()
+            .iter()
+            .map(|chunk| (chunk, layer_matrix))
+            .collect(),
+    };
     let materials = instances.lit.as_ref().unwrap_or(materials);
-    let chunks = drawing.chunks();
     while instances.chunks.len() < chunks.len() {
         let mut node = MeshInstance3D::new_alloc();
         node.set_visible(false);
@@ -113,15 +181,12 @@ pub(super) fn sync_layer(
         });
     }
 
-    let layer_matrix = *viewer_from_world * state.world;
     let faded = state.opacity < 0.999;
 
-    for (instance, chunk) in instances.chunks.iter_mut().zip(chunks) {
+    for (instance, (chunk, matrix)) in instances.chunks.iter_mut().zip(&chunks) {
         let key = chunk_key(chunk);
         let built = cache.get(chunk);
         let Some(built) = built else {
-            instance.key = key;
-            instance.kinds.clear();
             set_visible(instance, false);
             continue;
         };
@@ -157,7 +222,7 @@ pub(super) fn sync_layer(
         }
         // The chunk centre is added here, in double precision, so vertices stay small
         // numbers however far the chunk is from the layer origin.
-        let transform = transform3d(&(layer_matrix * DAffine3::from_translation(instance.origin)));
+        let transform = transform3d(&(*matrix * DAffine3::from_translation(instance.origin)));
         if instance.transform != Some(transform) {
             instance.node.set_transform(transform);
             instance.transform = Some(transform);

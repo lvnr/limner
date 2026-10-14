@@ -1,6 +1,10 @@
 //! Things drawn over the document that are not part of it: the frames before and
 //! after the one being drawn on (onion skins), the highlight on selected strokes,
 //! and the blink on the stroke the lower button would delete.
+//!
+//! The highlight of selected strokes being carried moves with them: it is placed by
+//! the motion, as the strokes are (see `strokes.rs`), and made again only when the
+//! carry ends.
 
 use crate::convert::transform3d;
 use crate::meshes::{build_mesh, chunk_key, MeshCache};
@@ -8,9 +12,10 @@ use godot::classes::{Material, MeshInstance3D};
 use godot::prelude::*;
 use limner::core::eval::{Content, RenderFrame};
 use limner::core::glam::{DAffine3, DVec3};
-use limner::core::model::{Drawing, DrawingId, LayerId, Stroke};
+use limner::core::model::{Document, Drawing, DrawingId, LayerId, StrokeChunk};
 use limner::core::session::{Session, StrokeAtHand};
 use limner::core::tess::{tessellate_chunk, SurfaceKind};
+use std::sync::Arc;
 
 /// Frames before the current one are tinted warm and frames after it cool.
 const BEFORE: Color = Color::from_rgb(1.0, 0.32, 0.18);
@@ -34,16 +39,45 @@ struct Skin {
     visible: bool,
 }
 
-/// One chunk of the selected strokes of one drawing.
+/// One chunk of the selected strokes of one drawing. The nodes are kept and given
+/// other meshes when the highlight is made again.
 struct Highlight {
     node: Gd<MeshInstance3D>,
     layer: LayerId,
+    drawing: DrawingId,
     origin: DVec3,
 }
 
-/// What highlight meshes were built from: the state of the selection, the state of
-/// the document, and the drawings on screen.
-type BuiltFrom = (u64, u64, Vec<(LayerId, DrawingId)>);
+/// What highlight meshes were built from: the state of the selection and, for each
+/// drawing on screen with selected strokes, its layer, its id and its chunks. The
+/// chunks are held so that their addresses cannot be taken by others; any edit to
+/// those drawings replaces some of them, and edits elsewhere leave them alone.
+struct BuiltFrom {
+    selection: u64,
+    showing: Vec<(LayerId, DrawingId, Vec<Arc<StrokeChunk>>)>,
+}
+
+impl BuiltFrom {
+    fn matches(&self, selection: u64, showing: &[(LayerId, DrawingId)], doc: &Document) -> bool {
+        self.selection == selection
+            && self.showing.len() == showing.len()
+            && self
+                .showing
+                .iter()
+                .zip(showing)
+                .all(|((l, d, chunks), now)| {
+                    (*l, *d) == *now
+                        && doc.drawing(*d).is_some_and(|drawing| {
+                            drawing.chunks().len() == chunks.len()
+                                && drawing
+                                    .chunks()
+                                    .iter()
+                                    .zip(chunks)
+                                    .all(|(a, b)| Arc::ptr_eq(a, b))
+                        })
+                })
+    }
+}
 
 /// The stroke under the hand, lit up.
 struct AtHand {
@@ -55,6 +89,8 @@ struct AtHand {
 pub(super) struct Overlays {
     skins: Vec<Skin>,
     highlights: Vec<Highlight>,
+    /// How many of `highlights` are in use; the rest are hidden and hold no mesh.
+    highlights_used: usize,
     built_from: Option<BuiltFrom>,
     highlight_material: Option<Gd<Material>>,
     at_hand: Option<AtHand>,
@@ -196,61 +232,98 @@ impl Overlays {
         let doc = session.doc();
         let selection = session.selection();
         // Only strokes on the frames that are showing are lit up.
-        let showing: Vec<(LayerId, DrawingId)> = selection
-            .drawings()
-            .filter_map(|(drawing, _)| {
-                let layer = doc.layer_of_drawing(drawing)?;
-                let state = frame.get(layer)?;
-                (state.visible
-                    && matches!(state.content, Content::Paint { drawing: shown, .. } if shown == drawing))
-                .then_some((layer, drawing))
-            })
-            .collect();
-        let from = (selection.revision(), session.edit_count(), showing);
-        if self.built_from.as_ref() != Some(&from) {
-            for highlight in self.highlights.drain(..) {
-                highlight.node.clone().queue_free();
-            }
-            for (layer, drawing_id) in &from.2 {
+        let showing: Vec<(LayerId, DrawingId)> = if selection.is_empty() {
+            Vec::new()
+        } else {
+            frame
+                .layers
+                .iter()
+                .filter(|state| state.visible)
+                .filter_map(|state| match state.content {
+                    Content::Paint { drawing, .. } if selection.in_drawing(drawing).is_some() => {
+                        Some((state.id, drawing))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        let unchanged = self
+            .built_from
+            .as_ref()
+            .is_some_and(|built| built.matches(selection.revision(), &showing, doc));
+        if !unchanged {
+            let mut used = 0;
+            let mut built_from = BuiltFrom {
+                selection: selection.revision(),
+                showing: Vec::new(),
+            };
+            for (layer, drawing_id) in showing {
                 let (Some(drawing), Some(ids)) =
-                    (doc.drawing(*drawing_id), selection.in_drawing(*drawing_id))
+                    (doc.drawing(drawing_id), selection.in_drawing(drawing_id))
                 else {
                     continue;
                 };
-                let selected: Vec<Stroke> = drawing
-                    .strokes()
-                    .filter(|s| ids.contains(&s.id))
-                    .map(|s| (**s).clone())
-                    .collect();
-                for chunk in Drawing::from_strokes(selected).chunks() {
+                built_from
+                    .showing
+                    .push((layer, drawing_id, drawing.chunks().to_vec()));
+                let mut selected = Drawing::new();
+                for stroke in drawing.strokes().filter(|s| ids.contains(&s.id)) {
+                    selected.push_shared(stroke.clone());
+                }
+                for chunk in selected.chunks() {
                     let Some(built) = build_mesh(&tessellate_chunk(chunk)) else {
                         continue;
                     };
-                    let mut node = MeshInstance3D::new_alloc();
-                    node.set_name("Selected");
-                    node.set_layer_mask(HELPER_LAYERS);
-                    node.set_mesh(&built.mesh);
+                    if used == self.highlights.len() {
+                        let mut node = MeshInstance3D::new_alloc();
+                        node.set_name("Selected");
+                        node.set_layer_mask(HELPER_LAYERS);
+                        parent.add_child(&node);
+                        self.highlights.push(Highlight {
+                            node,
+                            layer,
+                            drawing: drawing_id,
+                            origin: DVec3::ZERO,
+                        });
+                    }
+                    let highlight = &mut self.highlights[used];
+                    used += 1;
+                    highlight.node.set_mesh(&built.mesh);
                     if let Some(material) = &self.highlight_material {
                         for surface in 0..built.kinds.len() {
-                            node.set_surface_override_material(surface as i32, material);
+                            highlight
+                                .node
+                                .set_surface_override_material(surface as i32, material);
                         }
                     }
-                    parent.add_child(&node);
-                    self.highlights.push(Highlight {
-                        node,
-                        layer: *layer,
-                        origin: built.origin,
-                    });
+                    highlight.node.set_visible(true);
+                    highlight.layer = layer;
+                    highlight.drawing = drawing_id;
+                    highlight.origin = built.origin;
                 }
             }
-            self.built_from = Some(from);
+            for highlight in self.highlights.iter_mut().skip(used) {
+                highlight.node.set_visible(false);
+                highlight
+                    .node
+                    .set_mesh(Gd::<godot::classes::Mesh>::null_arg());
+            }
+            self.highlights_used = used;
+            self.built_from = Some(built_from);
         }
-        for highlight in &mut self.highlights {
+        let carried = session.selection_motion();
+        for highlight in self.highlights.iter_mut().take(self.highlights_used) {
             let Some(state) = frame.get(highlight.layer) else {
                 continue;
             };
-            let matrix =
-                *viewer_from_world * state.world * DAffine3::from_translation(highlight.origin);
+            let moved = carried
+                .as_ref()
+                .filter(|c| c.strokes_in(highlight.drawing).is_some())
+                .map_or(DAffine3::IDENTITY, |c| c.motion.to_affine());
+            let matrix = *viewer_from_world
+                * moved
+                * state.world
+                * DAffine3::from_translation(highlight.origin);
             highlight.node.set_transform(transform3d(&matrix));
         }
     }
@@ -317,6 +390,7 @@ impl Overlays {
         for highlight in self.highlights.drain(..) {
             highlight.node.clone().queue_free();
         }
+        self.highlights_used = 0;
         if let Some(at_hand) = self.at_hand.take() {
             at_hand.node.clone().queue_free();
         }

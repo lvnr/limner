@@ -27,7 +27,7 @@ pub use gesture::{Cursor, StrokeAtHand};
 pub use gimbal::{
     Gimbal, GimbalHandle, ARROW_END, ARROW_START, CENTER_RADIUS, PLANE_FAR, PLANE_NEAR,
 };
-pub use grab::Subject;
+pub use grab::{CarriedSplit, SelectionMotion, Subject};
 pub use history::History;
 pub use input::{Feedback, HandInput, InputFrame};
 pub use options::{AutoSelect, Options};

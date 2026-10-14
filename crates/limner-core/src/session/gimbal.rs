@@ -420,6 +420,14 @@ impl HandleGesture {
         Ok(HandleGesture::Pivot { drag, start })
     }
 
+    /// What a ring turned by the trigger carries.
+    pub(crate) fn carried(&self) -> Option<&Carried> {
+        match self {
+            HandleGesture::Turn { carried, .. } => Some(carried),
+            HandleGesture::Pivot { .. } => None,
+        }
+    }
+
     pub(crate) fn handle(&self) -> GimbalHandle {
         match self {
             HandleGesture::Turn { drag, .. } | HandleGesture::Pivot { drag, .. } => drag.handle,
@@ -462,11 +470,9 @@ impl HandleGesture {
     }
 
     pub(crate) fn end(self, session: &mut Session) {
-        if let HandleGesture::Turn {
-            carried, motion, ..
-        } = self
-        {
-            session.pending_repeat = carried.repeat(session, &motion);
+        if let HandleGesture::Turn { carried, .. } = self {
+            carried.finish(session);
+            session.pending_repeat = carried.repeat(session);
         }
     }
 }

@@ -1302,3 +1302,345 @@ fn the_stroke_the_lower_button_would_delete_is_named_before_it_is_pressed() {
     session.update(&main_only(over_second));
     assert_eq!(session.stroke_at_hand(), None, "nothing is left in reach");
 }
+
+// ---- carrying a selection: shown moved, written once ----
+
+/// The drawing the paint layer shows.
+fn shown_drawing(session: &Session, layer: LayerId) -> crate::model::DrawingId {
+    let paint = session.doc().layer(layer).unwrap().as_paint().unwrap();
+    paint.drawings[paint.frames[0] as usize]
+}
+
+/// Where the first point of the first selected stroke is seen, in viewer space, as
+/// an interface shows it: moved by the selection's motion while it is carried.
+fn first_selected_seen(session: &Session, layer: LayerId) -> DVec3 {
+    let drawing = shown_drawing(session, layer);
+    let ids = session.selection().in_drawing(drawing).unwrap();
+    let stroke = strokes(session, layer)
+        .into_iter()
+        .find(|s| ids.contains(&s.id))
+        .unwrap();
+    let in_world = session.evaluate().world_xform(session.doc(), layer);
+    let motion = session
+        .selection_motion()
+        .map_or(Xform::IDENTITY, |m| m.motion);
+    session
+        .view
+        .viewer_from_world()
+        .mul(&motion)
+        .mul(&in_world)
+        .transform_point(stroke.points()[0].position().as_dvec3())
+}
+
+#[test]
+fn a_carried_selection_is_shown_moved_and_written_into_the_strokes_once() {
+    let (mut session, layer) = one_of_two_selected();
+    let drawing = shown_drawing(&session, layer);
+    let before = starts(&session, layer);
+    let depth = session.history().undo_depth();
+    let took = DVec3::new(0.1, 1.0, -0.5);
+    let by = DVec3::new(0.0, 0.05, 0.1);
+    assert!(session.selection_motion().is_none());
+
+    session.update(&main_only(at(took)));
+    session.update(&main_only(gripping(took)));
+    let carried = session
+        .selection_motion()
+        .expect("the selection is carried");
+    assert_eq!(
+        carried.strokes_in(drawing),
+        session.selection().in_drawing(drawing)
+    );
+    assert_eq!(carried.drawings().collect::<Vec<_>>(), [drawing]);
+    let serial = carried.serial;
+    let edits = session.edit_count();
+    for i in 1..=4 {
+        session.update(&main_only(gripping(took + by * (i as f64 / 4.0))));
+        // The strokes stay where they are in the document while they are carried:
+        // nothing has to be made again but the motion.
+        assert_eq!(starts(&session, layer), before);
+        assert_eq!(session.edit_count(), edits);
+    }
+    let carried = session.selection_motion().unwrap();
+    assert_eq!(carried.serial, serial);
+    assert!(close(carried.motion.translation, by));
+    let shown = first_selected_seen(&session, layer);
+    assert!(close(shown, before[0] + by));
+    assert!((session.selection_pivot().unwrap() - (took + by)).length() < 1e-6);
+
+    session.update(&main_only(at(took + by)));
+    assert!(session.selection_motion().is_none());
+    let after = starts(&session, layer);
+    assert!((after[0] - (before[0] + by)).length() < 1e-6);
+    assert_eq!(after[1], before[1], "the other stroke stays");
+    assert!(
+        (first_selected_seen(&session, layer) - shown).length() < 1e-6,
+        "it lands where it was shown"
+    );
+    assert_eq!(session.history().undo_depth(), depth + 1);
+    assert_eq!(session.history().undo_label(), Some("Move strokes"));
+
+    // One undo puts it back; the next carry is told apart from the last.
+    session.undo();
+    assert_eq!(starts(&session, layer), before);
+    session.update(&main_only(at(took)));
+    session.update(&main_only(gripping(took)));
+    assert_ne!(session.selection_motion().unwrap().serial, serial);
+    session.update(&main_only(at(took)));
+}
+
+#[test]
+fn cancelling_a_carry_puts_back_the_selection_and_any_copy() {
+    let (mut session, layer) = one_of_two_selected();
+    let before = starts(&session, layer);
+    let selected = session.selection().clone();
+    let depth = session.history().undo_depth();
+    let took = DVec3::new(0.1, 1.0, -0.5);
+
+    for (modifier, copies) in [(at(REST_OFF), false), (alt(), true)] {
+        session.update(&both(at(took), modifier));
+        session.update(&both(gripping(took), modifier));
+        session.update(&both(gripping(took + DVec3::Y * 0.1), modifier));
+        assert!(session.selection_motion().is_some());
+        session.cancel_gesture();
+        assert!(session.selection_motion().is_none());
+        assert!(!session.is_grabbing(0));
+        assert_eq!(starts(&session, layer), before);
+        assert_eq!(session.history().undo_depth(), depth);
+        // Letting go afterwards does nothing more.
+        session.update(&both(at(took + DVec3::Y * 0.1), at(REST_OFF)));
+        assert_eq!(starts(&session, layer), before);
+        assert_eq!(session.history().undo_depth(), depth);
+        if !copies {
+            assert_eq!(session.selection(), &selected);
+        }
+    }
+}
+
+#[test]
+fn a_copy_is_made_at_once_and_carried_like_any_selection() {
+    let (mut session, layer) = one_of_two_selected();
+    let drawing = shown_drawing(&session, layer);
+    let took = DVec3::new(0.1, 1.0, -0.5);
+    let step = DVec3::new(0.0, 0.0, 0.1);
+    session.update(&both(at(took), alt()));
+    session.update(&both(gripping(took), alt()));
+    session.update(&both(gripping(took + step), alt()));
+    // The copy is in the document where the original is, and it is what is carried.
+    let now = starts(&session, layer);
+    assert_eq!(now.len(), 3);
+    assert_eq!(now[2], now[0]);
+    let carried = session.selection_motion().unwrap();
+    let copy = strokes(&session, layer)[2].id;
+    assert_eq!(
+        carried
+            .strokes_in(drawing)
+            .map(|ids| ids.iter().copied().collect::<Vec<_>>()),
+        Some(vec![copy])
+    );
+    session.update(&both(at(took + step), at(REST_OFF)));
+    let now = starts(&session, layer);
+    assert!((now[2] - (now[0] + step)).length() < 1e-6);
+    assert_eq!(session.history().undo_label(), Some("Duplicate strokes"));
+    assert!(session.can_transform_again());
+}
+
+#[test]
+fn a_carried_selection_on_a_mirrored_layer_lands_where_it_was_shown() {
+    let (mut session, layer) = session();
+    let placed = Xform {
+        rotation: DQuat::from_rotation_y(0.6),
+        scale: 2.0,
+        translation: DVec3::new(0.3, -0.2, 0.1),
+        flip: crate::math::Flip::X,
+    };
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": layer, "transform": placed}),
+    );
+    for y in [1.0, 1.2] {
+        drag(
+            &mut session,
+            DVec3::new(0.0, y, -0.5),
+            DVec3::new(0.2, y, -0.5),
+            20,
+        );
+    }
+    session.tools.select_tool(ToolKind::Select);
+    session.tools.select.size = 0.03;
+    let lower = DVec3::new(0.1, 1.0, -0.5);
+    drag(&mut session, lower, lower, 1);
+    assert_eq!(session.selection().count(), 1);
+    let before = first_selected_seen(&session, layer);
+    assert!((before - DVec3::new(0.0, 1.0, -0.5)).length() < 1e-6);
+
+    // Turned a quarter about the hand and moved.
+    let turned = |position: DVec3| HandInput {
+        rotation: DQuat::from_rotation_y(FRAC_PI_2),
+        ..gripping(position)
+    };
+    let by = DVec3::new(0.05, 0.1, 0.0);
+    session.update(&main_only(at(lower)));
+    session.update(&main_only(gripping(lower)));
+    session.update(&main_only(turned(lower + by)));
+    let shown = first_selected_seen(&session, layer);
+    let expected = lower + by + DQuat::from_rotation_y(FRAC_PI_2) * (before - lower);
+    assert!((shown - expected).length() < 1e-6);
+    session.update(&main_only(at(lower + by)));
+    assert!(session.selection_motion().is_none());
+    assert!((first_selected_seen(&session, layer) - shown).length() < 1e-6);
+}
+
+#[test]
+fn turning_a_selection_with_the_gimbal_is_shown_and_written_once() {
+    let (mut session, layer) = one_of_two_selected();
+    run(
+        &mut session,
+        json!({"cmd": "set_options", "values": {"show_gimbal": true}}),
+    );
+    session.update(&main_only(at(REST_MAIN)));
+    let gimbal = session.gimbal().unwrap();
+    let before = starts(&session, layer);
+    let depth = session.history().undo_depth();
+    let axis = gimbal.rotation * DVec3::Z;
+    let around = |angle: f64| {
+        gimbal.position
+            + DQuat::from_axis_angle(axis, angle) * (gimbal.rotation * DVec3::X) * gimbal.size
+    };
+    let pressed = |angle: f64, trigger: f32| {
+        main_only(HandInput {
+            trigger,
+            ..at(around(angle))
+        })
+    };
+    // The trigger on a ring turns in steps; the strokes stay put until it lets go.
+    session.update(&pressed(0.5, 0.0));
+    session.update(&pressed(0.5, 1.0));
+    session.update(&pressed(0.5 + FRAC_PI_2, 1.0));
+    let carried = session.selection_motion().expect("turned by the gimbal");
+    assert!(
+        (carried.motion.rotation.angle_between(DQuat::IDENTITY) - FRAC_PI_2).abs() < 1e-9,
+        "a quarter turn is a whole number of steps"
+    );
+    assert_eq!(starts(&session, layer), before);
+    let shown = first_selected_seen(&session, layer);
+    session.update(&pressed(0.5 + FRAC_PI_2, 0.0));
+    assert!(session.selection_motion().is_none());
+    assert_eq!(session.history().undo_depth(), depth + 1);
+    assert_eq!(session.history().undo_label(), Some("Turn strokes"));
+    assert!((first_selected_seen(&session, layer) - shown).length() < 1e-6);
+    assert!((session.gimbal().unwrap().position - gimbal.position).length() < 1e-6);
+}
+
+#[test]
+fn only_strokes_that_can_move_are_carried() {
+    let (mut session, layer) = one_of_two_selected();
+    let drawing = shown_drawing(&session, layer);
+    let other = new_layer(
+        &mut session,
+        json!({"cmd": "add_layer", "kind": "paint", "name": "Other"}),
+    );
+    run(
+        &mut session,
+        json!({"cmd": "select_layers", "layers": [other]}),
+    );
+    session.tools.select_tool(ToolKind::Paint);
+    drag(
+        &mut session,
+        DVec3::new(0.0, 1.0, -0.4),
+        DVec3::new(0.2, 1.0, -0.4),
+        10,
+    );
+    session.tools.select_tool(ToolKind::Select);
+    run(
+        &mut session,
+        json!({"cmd": "set_options", "values": {"select_in_all_layers": true}}),
+    );
+    run(&mut session, json!({"cmd": "select_all"}));
+    assert_eq!(session.selection().drawings().count(), 2);
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": other, "locked": true}),
+    );
+    let took = DVec3::new(0.1, 1.0, -0.5);
+    session.update(&main_only(at(took)));
+    session.update(&main_only(gripping(took)));
+    let carried = session.selection_motion().unwrap();
+    assert_eq!(carried.drawings().collect::<Vec<_>>(), [drawing]);
+    assert_eq!(carried.strokes_in(shown_drawing(&session, other)), None);
+    session.update(&main_only(at(took)));
+}
+
+#[test]
+fn a_drawing_splits_into_what_stays_and_what_is_carried() {
+    use crate::model::{Brush, Drawing, Point};
+    let point = |x: f32| Point {
+        pos: [x, 0.0, 0.0],
+        normal: [0.0, 0.0, 1.0],
+        dir: [1.0, 0.0, 0.0],
+        color: [1.0; 3],
+        opacity: 1.0,
+        width: 0.01,
+    };
+    let stroke = |id: u32| {
+        crate::model::Stroke::new(
+            id,
+            Brush::Ribbon,
+            false,
+            (0..10)
+                .map(|i| point(id as f32 + i as f32 * 0.01))
+                .collect(),
+        )
+    };
+    let mut drawing = Drawing::new();
+    for id in 0..6 {
+        drawing.push_stroke_in_new_chunk(stroke(id));
+        drawing.push_stroke(stroke(id + 100));
+    }
+    assert_eq!(drawing.chunks().len(), 6);
+    let carried: std::collections::BTreeSet<u32> = [1, 101, 103, 4].into();
+    let split = super::grab::split_drawing(&drawing, &carried);
+    let ids = |chunks: &[std::sync::Arc<crate::model::StrokeChunk>]| -> Vec<Vec<u32>> {
+        chunks
+            .iter()
+            .map(|c| c.strokes().iter().map(|s| s.id).collect())
+            .collect()
+    };
+    // A chunk emptied entirely is left out; untouched chunks are the drawing's own.
+    assert_eq!(
+        ids(&split.staying),
+        [vec![0, 100], vec![2, 102], vec![3], vec![104], vec![5, 105]]
+    );
+    for (index, chunk) in [(0, 0), (2, 1), (5, 4)] {
+        assert!(std::sync::Arc::ptr_eq(
+            &split.staying[chunk],
+            &drawing.chunks()[index]
+        ));
+    }
+    let carried_ids: Vec<u32> = split.carried.strokes().map(|s| s.id).collect();
+    assert_eq!(carried_ids, [1, 101, 103, 4], "in drawing order");
+    assert!(std::sync::Arc::ptr_eq(
+        split.carried.strokes().next().unwrap(),
+        &drawing.chunks()[1].strokes()[0]
+    ));
+}
+
+#[test]
+fn a_copy_is_not_repeated_once_other_strokes_are_selected() {
+    let (mut session, layer) = one_of_two_selected();
+    let took = DVec3::new(0.1, 1.0, -0.5);
+    carry(&mut session, took, took + DVec3::Z * 0.1, alt());
+    assert!(session.can_transform_again());
+    // Selecting the other stroke changes no stroke, but the repeat was of the copy.
+    drag(
+        &mut session,
+        DVec3::new(0.1, 1.2, -0.5),
+        DVec3::new(0.1, 1.2, -0.5),
+        1,
+    );
+    assert_eq!(session.selection().count(), 1);
+    assert!(!session.can_transform_again());
+    let count = strokes(&session, layer).len();
+    assert_eq!(session.redo(), None);
+    assert_eq!(strokes(&session, layer).len(), count, "nothing was copied");
+}
