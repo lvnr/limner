@@ -108,7 +108,6 @@ pub fn read(path: &Path) -> Result<Import, MediaError> {
         return Err(MediaError::NeedsEngine);
     }
     let bytes = std::fs::read(path)?;
-    let mut warnings = Vec::new();
     let (layer_kind, data) = match kind {
         FileKind::Png | FileKind::Jpg => {
             let (format, size) = match kind {
@@ -138,21 +137,16 @@ pub fn read(path: &Path) -> Result<Import, MediaError> {
             )
         }
         FileKind::Obj => {
+            // The same checks as geometry the engine decodes: nothing that cannot be
+            // drawn gets into the mesh.
             let parsed = parse_obj(&String::from_utf8_lossy(&bytes));
-            warnings = parsed.warnings;
-            if parsed.mesh.indices.is_empty() {
-                return Err(MediaError::EmptyModel);
-            }
-            (
-                MediaLayerKind::Model,
-                MediaData::Mesh(Arc::new(parsed.mesh)),
-            )
+            return model_from_mesh(path, parsed.mesh, parsed.warnings);
         }
         FileKind::Gltf | FileKind::Fbx => unreachable!("returned above"),
     };
     Ok(Import {
         media: new_media(path, layer_kind, data),
-        warnings,
+        warnings: Vec::new(),
     })
 }
 
@@ -375,7 +369,8 @@ pub fn parse_obj(text: &str) -> ParsedObj {
                         .nth(1)
                         .filter(|n| !n.is_empty())
                         .and_then(|n| resolve_index(n, normals.len()));
-                    let Some(position) = position.filter(|p| positions[*p][0].is_finite()) else {
+                    let finite = |p: &usize| positions[*p].iter().all(|v| v.is_finite());
+                    let Some(position) = position.filter(finite) else {
                         usable = false;
                         break;
                     };
@@ -692,6 +687,26 @@ mod tests {
         assert_eq!(parsed.mesh.colors.len(), 3);
         assert_eq!(parsed.mesh.colors[0], [1.0, 0.0, 0.0]);
         assert!((parsed.mesh.colors[1][1] - 0.214).abs() < 0.001);
+    }
+
+    #[test]
+    fn obj_positions_must_be_finite_in_every_component() {
+        let parsed = parse_obj(
+            "v 0 0 0\nv 1 x 0\nv 0 1 0\nv 0 0 nan\nv 1 1 1\n\
+             f 1 2 3\n\
+             f 1 4 3\n\
+             f 1 3 5\n",
+        );
+        assert_eq!(parsed.mesh.indices.len(), 3, "only the last face is usable");
+        assert!(parsed
+            .mesh
+            .positions
+            .iter()
+            .all(|p| p.iter().all(|v| v.is_finite())));
+        assert!(parsed
+            .warnings
+            .iter()
+            .any(|w| w.contains("2 face(s) of the model were skipped")));
     }
 
     #[test]

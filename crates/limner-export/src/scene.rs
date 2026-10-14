@@ -21,7 +21,7 @@ use limner_core::model::{
     Attenuation, Document, Drawing, DrawingId, Layer, LayerId, LayerKind, LightKind, MediaId,
     Shading, SoundKind, SoundModifier, Stroke, OPAQUE_THRESHOLD,
 };
-use limner_core::tess::{point_frame, ring_profile};
+use limner_core::tess::{ring_profile, stroke_frames};
 use limner_core::time::{self, Flicks, FrameRate};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -485,8 +485,9 @@ fn append_stroke(stroke: &Stroke, out: &mut ExportMesh) {
     let base = first_vertex as u32;
     let mut finite = true;
 
+    let frames = stroke_frames(points);
     for (i, point) in points.iter().enumerate() {
-        let frame = point_frame(points, i);
+        let frame = frames[i];
         let centre = point.position();
         let sanitise = |c: f32| if c.is_finite() { c } else { 0.0 };
         let color = [
@@ -729,8 +730,10 @@ pub fn build_scene(doc: &Document, options: &ExportOptions) -> ExportScene {
         nodes: Vec::new(),
         meshes: Vec::new(),
     };
-    // Layer-space meshes by drawing, shared between layers that show the same drawing.
-    let mut shared_meshes: HashMap<DrawingId, Vec<usize>> = HashMap::new();
+    // Layer-space meshes by drawing, shared between layers that show the same strokes.
+    // Keyed by the strokes themselves rather than by drawing id: layers that show one
+    // Quill record have drawings of their own that share the same strokes.
+    let mut shared_meshes: HashMap<*const Drawing, Vec<usize>> = HashMap::new();
     // Node index of each sampled layer, when it became a node.
     let mut node_of: Vec<Option<usize>> = vec![None; layers.len()];
     // Whether a light or camera that is exported lies somewhere below each layer.
@@ -784,7 +787,7 @@ pub fn build_scene(doc: &Document, options: &ExportOptions) -> ExportScene {
                         indices
                     } else {
                         shared_meshes
-                            .entry(*id)
+                            .entry(std::sync::Arc::as_ptr(drawing))
                             .or_insert_with(|| {
                                 let mut indices = Vec::new();
                                 for mesh in tessellate_drawing(drawing) {

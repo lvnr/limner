@@ -15,9 +15,11 @@ pub(crate) const MEDIA_DIR: &str = "media";
 pub(crate) const BLOB_EXTENSION: &str = "lstk";
 pub(crate) const TMP_SUFFIX: &str = ".tmp";
 
-/// `drawings/ab/abcdef….lstk` for a blob hash in hexadecimal.
+/// `drawings/ab/abcdef….lstk` for a blob hash in hexadecimal. Callers check the
+/// hash first; a name too short to shard does not panic but gets no shard.
 pub(crate) fn blob_path(hex: &str) -> String {
-    format!("{DRAWINGS_DIR}/{}/{hex}.{BLOB_EXTENSION}", &hex[..2])
+    let shard = hex.get(..2).unwrap_or_default();
+    format!("{DRAWINGS_DIR}/{shard}/{hex}.{BLOB_EXTENSION}")
 }
 
 pub(crate) fn media_path(file: &str) -> String {

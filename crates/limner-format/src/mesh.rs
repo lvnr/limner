@@ -38,6 +38,10 @@ pub(crate) fn encode(mesh: &MeshData) -> Result<Canonical, String> {
     header.extend_from_slice(&0u32.to_le_bytes());
 
     let vectors = mesh.positions.len() + mesh.normals.len() + mesh.colors.len();
+    crate::container::check_payload_len(
+        vectors as u64 * 12 + mesh.indices.len() as u64 * 4,
+        "a mesh",
+    )?;
     let mut payload = Vec::with_capacity(vectors * 12 + mesh.indices.len() * 4);
     for list in [&mesh.positions, &mesh.normals, &mesh.colors] {
         for vector in list {

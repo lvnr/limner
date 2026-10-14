@@ -15,6 +15,15 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+/// How much decoded drawing and media data an import may hold, as a multiple of the
+/// size of `Quill.qbin`, plus [`DECODED_ALLOWANCE`]. Every record is read once, and
+/// none decodes to more than about three times its stored size (a grey picture
+/// becomes RGB), so real projects stay far below it. A damaged or hostile
+/// `Quill.json` that points many layers at overlapping records stops here instead
+/// of multiplying the file in memory.
+const DECODED_PER_QBIN_BYTE: usize = 4;
+const DECODED_ALLOWANCE: usize = 1 << 20;
+
 /// Placeholders Quill's sharing dialog wrote when the artist typed nothing.
 const DEFAULT_TITLE: &str = "Untitled";
 const DEFAULT_DESCRIPTION: &str = "Shared from Quill";
@@ -41,6 +50,7 @@ pub(crate) fn convert(root: &Value, qbin: Option<&[u8]>) -> Result<Converted, Im
         return Err(ImportError::Format("the root layer is not a group".into()));
     }
 
+    let qbin_len = qbin.map_or(0, <[u8]>::len);
     let mut c = Converter {
         qbin: Qbin::new(qbin.unwrap_or(&[])),
         has_data: qbin.is_some_and(|bytes| !bytes.is_empty()),
@@ -51,6 +61,10 @@ pub(crate) fn convert(root: &Value, qbin: Option<&[u8]>) -> Result<Converted, Im
         totals: DrawingReport::default(),
         damaged_drawings: 0,
         unreadable_drawings: 0,
+        decoded: 0,
+        budget: qbin_len
+            .saturating_mul(DECODED_PER_QBIN_BYTE)
+            .saturating_add(DECODED_ALLOWANCE),
     };
     if qbin.is_some_and(|bytes| bytes.is_empty()) {
         c.warn("Quill.qbin is empty; all drawings and media are empty".to_owned());
@@ -73,6 +87,13 @@ pub(crate) fn convert(root: &Value, qbin: Option<&[u8]>) -> Result<Converted, Im
             c.warn(format!("the default spawn area \"{path}\" was not found"));
         }
     }
+    if c.over_budget() {
+        return Err(ImportError::Format(format!(
+            "Quill.json points at overlapping records that decode to more than {} bytes \
+             from a {qbin_len}-byte Quill.qbin",
+            c.budget
+        )));
+    }
     c.summarise_drawing_problems();
     c.doc
         .validate()
@@ -90,15 +111,44 @@ struct Converter<'a> {
     has_data: bool,
     doc: Document,
     warnings: Vec<String>,
-    /// Several layers can point at the same record; they then share one drawing.
-    drawings_by_offset: HashMap<u64, DrawingId>,
+    /// Several layers can point at the same record. Each gets a drawing of its own,
+    /// since edits change one drawing of one layer, but the strokes are read once and
+    /// shared until one of them is edited.
+    drawings_by_offset: HashMap<u64, Arc<Drawing>>,
     media_by_offset: HashMap<(MediaKind, u64), MediaId>,
     totals: DrawingReport,
     damaged_drawings: usize,
     unreadable_drawings: usize,
+    /// Bytes of drawing and media data decoded so far, and how many may be.
+    decoded: usize,
+    budget: usize,
+}
+
+/// Bytes a decoded media item holds.
+fn media_bytes(data: &MediaData) -> usize {
+    match data {
+        MediaData::Encoded { bytes, .. } => bytes.len(),
+        MediaData::RawImage { pixels, .. } => pixels.len(),
+        MediaData::RawAudio { samples, .. } => samples.len(),
+        MediaData::Mesh(mesh) => mesh_bytes(mesh),
+    }
+}
+
+fn mesh_bytes(mesh: &limner_core::model::MeshData) -> usize {
+    (mesh.positions.len() + mesh.normals.len() + mesh.colors.len()) * 12 + mesh.indices.len() * 4
 }
 
 impl Converter<'_> {
+    /// True once more has been decoded than the import allows. Nothing more is read
+    /// then, and the import fails.
+    fn over_budget(&self) -> bool {
+        self.decoded > self.budget
+    }
+
+    fn spend(&mut self, bytes: usize) {
+        self.decoded = self.decoded.saturating_add(bytes);
+    }
+
     fn warn(&mut self, message: String) {
         self.warnings.push(message);
     }
@@ -123,6 +173,12 @@ impl Converter<'_> {
         }
         if let Some(end) = json::get_i64(sequence, "ExportEnd") {
             settings.range_end = time::from_quill_ticks(end);
+        }
+        if settings.range_end < settings.range_start {
+            settings.range_end = settings.range_start;
+            self.warnings.push(
+                "the export range ended before it started; it now ends where it starts".to_owned(),
+            );
         }
         if let Some([w, h]) = sequence.get("CameraResolution").and_then(json::floats::<2>) {
             if w >= 1.0 && h >= 1.0 {
@@ -480,8 +536,12 @@ impl Converter<'_> {
             ));
             return self.doc.add_drawing(Drawing::new());
         };
-        if let Some(id) = self.drawings_by_offset.get(&offset) {
-            return *id;
+        if let Some(shared) = self.drawings_by_offset.get(&offset) {
+            let shared = shared.clone();
+            return self.doc.add_shared_drawing(shared);
+        }
+        if self.over_budget() {
+            return self.doc.add_drawing(Drawing::new());
         }
         let drawing = match self.qbin.read_drawing(offset) {
             Some((drawing, report)) => {
@@ -499,9 +559,13 @@ impl Converter<'_> {
                 Drawing::new()
             }
         };
-        let id = self.doc.add_drawing(drawing);
-        self.drawings_by_offset.insert(offset, id);
-        id
+        self.spend(
+            drawing.point_count() * std::mem::size_of::<limner_core::model::Point>()
+                + drawing.stroke_count() * crate::qbin::STROKE_HEADER_LEN,
+        );
+        let drawing = Arc::new(drawing);
+        self.drawings_by_offset.insert(offset, drawing.clone());
+        self.doc.add_shared_drawing(drawing)
     }
 
     fn summarise_drawing_problems(&mut self) {
@@ -648,8 +712,12 @@ impl Converter<'_> {
         if let Some(id) = self.media_by_offset.get(&(MediaKind::Image, offset)) {
             return Some(*id);
         }
+        if self.over_budget() {
+            return None;
+        }
         match self.qbin.read_picture(offset) {
             Ok((data, notes)) => {
+                self.spend(media_bytes(&data));
                 if let Some(image_type) = notes.unexpected_type {
                     self.warn(format!(
                         "{path}: the {what} is stored as image type {image_type}, not a flat image; it was read as one grid of pixels"
@@ -706,6 +774,9 @@ impl Converter<'_> {
         if let Some(id) = self.media_by_offset.get(&(MediaKind::Mesh, offset)) {
             return Some(*id);
         }
+        if self.over_budget() {
+            return None;
+        }
         let (mesh, notes) = match self.qbin.read_mesh(offset) {
             Ok(read) => read,
             Err(reason) => {
@@ -749,6 +820,7 @@ impl Converter<'_> {
                 "{path}: the model has more than one vertex stream; only the first was imported"
             ));
         }
+        self.spend(mesh_bytes(&mesh));
         let id = self
             .doc
             .add_media(name, MediaKind::Mesh, MediaData::Mesh(Arc::new(mesh)));
@@ -920,8 +992,12 @@ impl Converter<'_> {
         if let Some(id) = self.media_by_offset.get(&(MediaKind::Audio, offset)) {
             return Some(*id);
         }
+        if self.over_budget() {
+            return None;
+        }
         match self.qbin.read_sound(offset) {
             Ok((data, _layout)) => {
+                self.spend(media_bytes(&data));
                 let id = self.doc.add_media(name, MediaKind::Audio, data);
                 self.media_by_offset.insert((MediaKind::Audio, offset), id);
                 Some(id)
@@ -1197,7 +1273,9 @@ mod tests {
         let doc = &converted.document;
         assert_eq!(doc.layer_count(), 9);
         assert_eq!(doc.media_items().count(), 5);
-        assert_eq!(doc.stroke_count(), 2);
+        // The layer lists its one record twice: two drawings sharing two strokes.
+        assert_eq!(doc.drawing_count(), 2);
+        assert_eq!(doc.stroke_count(), 4);
     }
 
     #[test]
@@ -1362,5 +1440,96 @@ mod tests {
         );
         assert_eq!(file_name("/home/me/a.jpg"), Some("a.jpg"));
         assert_eq!(file_name(""), None);
+    }
+
+    #[test]
+    fn layers_that_share_a_record_get_drawings_of_their_own() {
+        use crate::testing::*;
+        let mut qbin = QbinBuilder::default();
+        let record = qbin.drawing(&[StrokeSpec::new(0, 2, tube(0.0, 5))]);
+        let quill = project(vec![
+            paint("A", &[&record], &[0]),
+            paint("B", &[&record, &record], &[0, 1]),
+        ]);
+        let mut doc = convert(&quill, Some(&qbin.bytes)).unwrap().document;
+        let drawings = |doc: &Document, name: &str| {
+            doc.layer(doc.find_by_path(&format!("Root/{name}")).unwrap())
+                .unwrap()
+                .as_paint()
+                .unwrap()
+                .drawings
+                .clone()
+        };
+        let (a, b) = (drawings(&doc, "A"), drawings(&doc, "B"));
+        let all = [a[0], b[0], b[1]];
+        assert_eq!(
+            all.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            3,
+            "every use has its own id"
+        );
+        for id in &all[1..] {
+            assert!(Arc::ptr_eq(
+                doc.drawing(all[0]).unwrap(),
+                doc.drawing(*id).unwrap()
+            ));
+        }
+        let layer_a = doc.find_by_path("Root/A").unwrap();
+        assert_eq!(doc.layer_of_drawing(a[0]), Some(layer_a));
+
+        // Painting on one layer leaves the other as it was.
+        doc.drawing_mut(a[0]).unwrap().retain(|_| false);
+        assert!(doc.drawing(a[0]).unwrap().is_empty());
+        assert_eq!(doc.drawing(b[0]).unwrap().stroke_count(), 1);
+    }
+
+    #[test]
+    fn records_that_overlap_cannot_multiply_the_file_in_memory() {
+        use crate::testing::*;
+        // Strokes laid end to end, each ending in a width whose bits read as a stroke
+        // count of 300. Four bytes before any stroke therefore parse as a drawing that
+        // runs from that stroke to the end, so each offset decodes most of the file.
+        const STROKES: usize = 300;
+        let mut qbin = QbinBuilder::default();
+        let mut points = tube(0.0, 10);
+        points[9].width = f32::from_bits(STROKES as u32);
+        let strokes: Vec<StrokeSpec> = (0..STROKES)
+            .map(|i| StrokeSpec::new(i as u32, 2, points.clone()))
+            .collect();
+        let first = u64::from_str_radix(&qbin.drawing(&strokes), 16).unwrap() as usize;
+        let stroke_len = 40 + 10 * std::mem::size_of::<limner_core::model::Point>();
+        let layers: Vec<Value> = (0..STROKES)
+            .map(|i| {
+                let offset = format!("{:016x}", first + i * stroke_len);
+                paint(&format!("P{i}"), &[&offset], &[0])
+            })
+            .collect();
+        let quill = project(layers);
+        let error = convert(&quill, Some(&qbin.bytes)).err().expect("refused");
+        assert!(error.to_string().contains("overlapping records"), "{error}");
+
+        // The same strokes pointed at once each import normally.
+        let one = project(vec![paint("P", &[&format!("{first:016x}")], &[0])]);
+        let converted = convert(&one, Some(&qbin.bytes)).unwrap();
+        assert_eq!(converted.document.stroke_count(), STROKES);
+    }
+
+    #[test]
+    fn an_export_range_that_ends_before_it_starts_is_repaired() {
+        use crate::testing::*;
+        let mut quill = project(vec![]);
+        quill["Sequence"]["ExportStart"] = json!(5000);
+        quill["Sequence"]["ExportEnd"] = json!(100);
+        let converted = convert(&quill, Some(&[0u8; 8][..])).unwrap();
+        let settings = &converted.document.settings;
+        assert_eq!(settings.range_start, settings.range_end);
+        assert_eq!(settings.range_start, time::from_quill_ticks(5000));
+        assert!(
+            converted
+                .warnings
+                .iter()
+                .any(|w| w.contains("export range")),
+            "{:?}",
+            converted.warnings
+        );
     }
 }

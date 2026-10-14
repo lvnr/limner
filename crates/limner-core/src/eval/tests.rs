@@ -534,3 +534,79 @@ fn a_smooth_key_turns_about_the_pivot_as_the_other_modes_do() {
             < 1e-9
     );
 }
+
+#[test]
+fn extreme_key_times_from_a_file_do_not_overflow() {
+    use crate::model::Interp;
+    let mut s = Scene::new();
+    let root = s.doc.root();
+    let seq = s.sequence(root, "Seq", 0, 0);
+    let layer = s.paint(seq, "P", 3, 0);
+    {
+        let l = s.doc.layer_mut(layer).unwrap();
+        l.anim.visibility = Track::from_keys([Key::step(Flicks::MIN, true)]);
+        l.anim.offset = Track::from_keys([Key::step(Flicks::MIN, Flicks::MAX)]);
+        l.anim
+            .transform
+            .set(Flicks::MIN, Xform::IDENTITY, Interp::Smooth);
+        l.anim
+            .transform
+            .set(Flicks::MAX, Xform::from_scale(2.0), Interp::Smooth);
+        l.anim.opacity.set(Flicks::MIN, 0.0, Interp::Linear);
+        l.anim.opacity.set(Flicks::MAX, 1.0, Interp::Linear);
+    }
+    let seq_layer = s.doc.layer_mut(seq).unwrap();
+    seq_layer.anim.visibility = Track::from_keys([Key::step(Flicks::MIN, true)]);
+    for time in [Flicks::MIN, -1, 0, 1, Flicks::MAX] {
+        let frame = evaluate(
+            &s.doc,
+            Clock {
+                time,
+                held: Flicks::MAX,
+            },
+        );
+        let state = frame.get(layer).unwrap();
+        assert!(state.in_clip);
+        assert!(state.local.scale.is_finite() && state.own_opacity.is_finite());
+    }
+    // Half way across the whole range of time is half way between the keys.
+    let l = s.doc.layer(layer).unwrap();
+    assert!((layer_opacity_at(l, 0) - 0.5).abs() < 1e-6);
+}
+
+#[test]
+fn smooth_keys_keep_negative_scales_negative() {
+    use crate::model::Interp;
+    let mut doc = Document::new();
+    let layer = doc.find_by_path("Root/Paint").unwrap();
+    {
+        let l = doc.layer_mut(layer).unwrap();
+        l.anim
+            .transform
+            .set(0, Xform::from_scale(-2.0), Interp::Smooth);
+        l.anim
+            .transform
+            .set(100, Xform::from_scale(-1.0), Interp::Smooth);
+    }
+    let l = doc.layer(layer).unwrap();
+    for time in [0, 25, 50, 75, 100] {
+        let scale = layer_transform_at(l, time).scale;
+        let linear = -2.0 + time as f64 / 100.0;
+        assert!((scale - linear).abs() < 1e-9, "at {time}: {scale}");
+    }
+
+    // A positive scale passing through zero to a negative one is not held above zero.
+    let mut doc = Document::new();
+    {
+        let l = doc.layer_mut(layer).unwrap();
+        l.anim
+            .transform
+            .set(0, Xform::from_scale(1.0), Interp::Smooth);
+        l.anim
+            .transform
+            .set(100, Xform::from_scale(-1.0), Interp::Smooth);
+    }
+    let l = doc.layer(layer).unwrap();
+    assert!((layer_transform_at(l, 75).scale + 0.5).abs() < 1e-9);
+    assert_eq!(layer_transform_at(l, 100).scale, -1.0);
+}

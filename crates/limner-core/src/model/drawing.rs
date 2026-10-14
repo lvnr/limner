@@ -52,9 +52,20 @@ pub struct StrokeAddr {
     pub index: u32,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct Drawing {
     chunks: Vec<Arc<StrokeChunk>>,
+    /// The tessellated vertex count of the last chunk, when known, so appending
+    /// strokes one by one does not add up the last chunk again for every stroke.
+    /// Every change to the chunks other than appending clears it.
+    tail_vertices: Option<usize>,
+}
+
+/// Drawings are equal when their chunks are; the cached count is not content.
+impl PartialEq for Drawing {
+    fn eq(&self, other: &Self) -> bool {
+        self.chunks == other.chunks
+    }
 }
 
 impl Drawing {
@@ -140,6 +151,8 @@ impl Drawing {
 
     /// Mutable access to one stroke, copying the chunk and the stroke if they are shared.
     pub fn stroke_mut(&mut self, addr: StrokeAddr) -> Option<&mut Stroke> {
+        // The stroke may come back longer or shorter.
+        self.tail_vertices = None;
         let chunk = Arc::make_mut(self.chunks.get_mut(addr.chunk as usize)?);
         Some(Arc::make_mut(chunk.strokes.get_mut(addr.index as usize)?))
     }
@@ -174,13 +187,20 @@ impl Drawing {
 
     /// Appends a stroke that may be shared with another drawing.
     pub fn push_shared(&mut self, stroke: Arc<Stroke>) -> StrokeAddr {
-        let fits = self
-            .chunks
-            .last()
-            .is_some_and(|c| c.vertex_count() + stroke.vertex_count() <= MAX_CHUNK_VERTICES);
-        if !fits {
-            self.chunks.push(Arc::new(StrokeChunk::default()));
-        }
+        let added = stroke.vertex_count();
+        let tail = match (self.tail_vertices, self.chunks.last()) {
+            (_, None) => None,
+            (Some(known), Some(_)) => Some(known),
+            (None, Some(last)) => Some(last.vertex_count()),
+        };
+        let total = match tail {
+            Some(tail) if tail + added <= MAX_CHUNK_VERTICES => tail + added,
+            _ => {
+                self.chunks.push(Arc::new(StrokeChunk::default()));
+                added
+            }
+        };
+        self.tail_vertices = Some(total);
         let chunk_index = self.chunks.len() - 1;
         let chunk = Arc::make_mut(&mut self.chunks[chunk_index]);
         chunk.strokes.push(stroke);
@@ -193,6 +213,7 @@ impl Drawing {
     /// Appends a stroke in a chunk of its own. Used while a stroke is being drawn, so
     /// only a small mesh is rebuilt as it grows; call [`Drawing::merge_tail`] afterwards.
     pub fn push_stroke_in_new_chunk(&mut self, stroke: Stroke) -> StrokeAddr {
+        self.tail_vertices = None;
         self.chunks.push(Arc::new(StrokeChunk {
             strokes: vec![Arc::new(stroke)],
         }));
@@ -204,6 +225,7 @@ impl Drawing {
 
     /// Folds the last chunk into the one before it when both fit in one chunk.
     pub fn merge_tail(&mut self) {
+        self.tail_vertices = None;
         let n = self.chunks.len();
         if n < 2 {
             return;
@@ -221,6 +243,7 @@ impl Drawing {
     /// Removes the strokes for which `keep` returns false and returns how many were removed.
     /// Chunks without a removed stroke stay shared.
     pub fn retain(&mut self, mut keep: impl FnMut(&Stroke) -> bool) -> usize {
+        self.tail_vertices = None;
         let mut removed = 0;
         for chunk in &mut self.chunks {
             let drop_any = chunk.strokes.iter().any(|s| !keep(s));
@@ -243,6 +266,7 @@ impl Drawing {
         mut candidate: impl FnMut(&Aabb) -> bool,
         mut edit: impl FnMut(&Stroke) -> Option<Stroke>,
     ) -> usize {
+        self.tail_vertices = None;
         let mut changed = 0;
         for chunk in &mut self.chunks {
             if !candidate(&chunk.bounds()) {
@@ -264,6 +288,7 @@ impl Drawing {
 
     /// Splits chunks that have grown past the soft limit.
     pub fn rebalance(&mut self) {
+        self.tail_vertices = None;
         if self
             .chunks
             .iter()
@@ -308,6 +333,55 @@ mod tests {
             width: 0.01,
         };
         Stroke::new(id, Brush::Cylinder, false, vec![p; points])
+    }
+
+    /// Chunk sizes, in strokes, that appending `strokes` one at a time should give,
+    /// worked out from scratch: a stroke joins the last chunk while it fits.
+    fn expected_layout(strokes: &[Stroke]) -> Vec<usize> {
+        let mut layout: Vec<(usize, usize)> = Vec::new();
+        for stroke in strokes {
+            let n = stroke.vertex_count();
+            match layout.last_mut() {
+                Some((count, vertices)) if *vertices + n <= MAX_CHUNK_VERTICES => {
+                    *count += 1;
+                    *vertices += n;
+                }
+                _ => layout.push((1, n)),
+            }
+        }
+        layout.into_iter().map(|(count, _)| count).collect()
+    }
+
+    fn layout(d: &Drawing) -> Vec<usize> {
+        d.chunks().iter().map(|c| c.len()).collect()
+    }
+
+    #[test]
+    fn appending_strokes_fills_chunks_as_before() {
+        let strokes: Vec<Stroke> = (0..200)
+            .map(|i| stroke(i, 1 + (i as usize * 37) % 900))
+            .collect();
+        let d = Drawing::from_strokes(strokes.clone());
+        assert_eq!(layout(&d), expected_layout(&strokes));
+
+        // A stroke that grows while it is drawn is counted at its new length.
+        let mut d = Drawing::from_strokes([stroke(0, 10)]);
+        let addr = d.last_addr().unwrap();
+        d.stroke_mut(addr)
+            .unwrap()
+            .points_mut()
+            .extend(std::iter::repeat_n(stroke(0, 1).points()[0], 8_000));
+        d.push_stroke(stroke(1, 1_000));
+        assert_eq!(layout(&d), [1, 1], "8,010 points of tube fill a chunk");
+
+        // So does one taken away, merged or rebalanced.
+        let mut d = Drawing::from_strokes((0..5).map(|i| stroke(i, 1_000)));
+        d.retain(|s| s.id == 0);
+        d.push_stroke_in_new_chunk(stroke(9, 1_000));
+        d.merge_tail();
+        d.push_stroke(stroke(10, 1_000));
+        assert_eq!(layout(&d), [3]);
+        assert_eq!(d, Drawing::from_strokes(d.strokes().map(|s| (**s).clone())));
     }
 
     #[test]

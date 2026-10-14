@@ -20,7 +20,9 @@ pub struct Loaded {
 }
 
 /// The content hash a media file name starts with: `<64 hex digits>.<extension>`.
-fn media_hash(file: &str) -> Option<ContentHash> {
+/// Any other name, in particular one with a path separator, a drive letter or `..`
+/// in it, gives `None`.
+pub(crate) fn media_hash(file: &str) -> Option<ContentHash> {
     let (stem, extension) = file.split_once('.')?;
     let plain = !extension.is_empty() && extension.bytes().all(|b| b.is_ascii_alphanumeric());
     ContentHash::from_hex(stem).filter(|_| plain)

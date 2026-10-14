@@ -7,16 +7,22 @@ use crate::model::{Interp, Key, Track};
 use crate::time::Flicks;
 
 /// Shifts the keys at `times` by `delta`. A moved key replaces one already at its
-/// new time. Times are kept at or after zero.
+/// new time. Keys that start at or after zero are kept there; keys already before
+/// zero (from an imported file, say) move freely.
 pub fn move_keys<T: Clone>(track: &mut Track<T>, times: &[Flicks], delta: Flicks) -> usize {
     let moving: Vec<Key<T>> = times.iter().filter_map(|t| track.remove(*t)).collect();
     let count = moving.len();
     // The earliest moved key decides how far left the group can go, so that keys
-    // pushed against zero keep their spacing.
+    // pushed against zero keep their spacing. The ends of the range of time stop
+    // the group the same way.
     let earliest = moving.iter().map(|k| k.time).min().unwrap_or(0);
-    let delta = delta.max(-earliest);
+    let latest = moving.iter().map(|k| k.time).max().unwrap_or(0);
+    let floor = if earliest >= 0 { 0 } else { Flicks::MIN };
+    let delta = delta
+        .max(floor.saturating_sub(earliest))
+        .min(Flicks::MAX.saturating_sub(latest));
     for mut key in moving {
-        key.time += delta;
+        key.time = key.time.saturating_add(delta);
         track.insert(key);
     }
     count
@@ -74,8 +80,11 @@ pub fn reverse_keys<T: Clone>(track: &mut Track<T>, times: &[Flicks]) -> usize {
         } else {
             mirrored(chosen[i - 1].interp)
         };
+        // first + last - time lies between first and last, so it fits even when
+        // the sum on its way there would not.
+        let mirrored_time = first as i128 + last as i128 - key.time as i128;
         track.insert(Key {
-            time: first + last - key.time,
+            time: mirrored_time as Flicks,
             value: key.value.clone(),
             interp,
         });
@@ -147,6 +156,44 @@ mod tests {
             contents(&t),
             [(0, 1, Interp::Step), (30, 2, Interp::Linear)],
             "a moved key replaces the one it lands on"
+        );
+    }
+
+    #[test]
+    fn keys_before_zero_move_the_way_they_are_dragged() {
+        let mut t = track(&[(-100, 1, Interp::Step), (50, 2, Interp::Step)]);
+        move_keys(&mut t, &[-100, 50], -10);
+        assert_eq!(
+            contents(&t),
+            [(-110, 1, Interp::Step), (40, 2, Interp::Step)],
+            "a key already before zero does not push the group to the right"
+        );
+        move_keys(&mut t, &[-110], 30);
+        assert_eq!(contents(&t)[0], (-80, 1, Interp::Step));
+    }
+
+    #[test]
+    fn extreme_key_times_do_not_overflow() {
+        let mut t = track(&[
+            (Flicks::MIN, 1, Interp::Step),
+            (Flicks::MAX, 2, Interp::Step),
+        ]);
+        move_keys(&mut t, &[Flicks::MIN], -1);
+        move_keys(&mut t, &[Flicks::MAX], 1);
+        assert_eq!(
+            contents(&t),
+            [
+                (Flicks::MIN, 1, Interp::Step),
+                (Flicks::MAX, 2, Interp::Step)
+            ]
+        );
+        assert_eq!(reverse_keys(&mut t, &[Flicks::MIN, Flicks::MAX]), 2);
+        assert_eq!(
+            contents(&t),
+            [
+                (Flicks::MIN, 2, Interp::Step),
+                (Flicks::MAX, 1, Interp::Step)
+            ]
         );
     }
 

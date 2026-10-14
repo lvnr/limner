@@ -1,6 +1,6 @@
 //! Turns a chunk of strokes into renderable triangle meshes.
 
-use super::frame::{point_frame, ring_profile};
+use super::frame::{ring_profile, stroke_frames};
 use crate::math::Aabb;
 use crate::model::{Stroke, StrokeChunk, OPAQUE_THRESHOLD};
 use glam::Vec3;
@@ -123,8 +123,7 @@ fn append_stroke(stroke: &Stroke, origin: Vec3, out: &mut SurfaceMesh) {
     let base = out.positions.len() as u32;
     let seed = (stroke.id & 0xff) as u8;
 
-    for (i, point) in points.iter().enumerate() {
-        let frame = point_frame(points, i);
+    for (point, frame) in points.iter().zip(stroke_frames(points)) {
         let centre = point.position() - origin;
         let color = [
             linear_to_srgb8(point.color[0]),

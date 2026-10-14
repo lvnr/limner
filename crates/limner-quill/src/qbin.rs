@@ -63,7 +63,7 @@ pub(crate) struct PictureNotes {
     pub unexpected_type: Option<u8>,
 }
 
-const STROKE_HEADER_LEN: usize = 40;
+pub(crate) const STROKE_HEADER_LEN: usize = 40;
 const POINT_LEN: usize = std::mem::size_of::<Point>();
 
 /// What went wrong, or was repaired, while reading one drawing.

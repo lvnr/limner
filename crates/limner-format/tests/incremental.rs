@@ -196,3 +196,31 @@ fn a_new_frame_reusing_a_drawing_adds_no_blob() {
     assert_eq!(blob_files(dir.path()).len(), blobs.len() + 1);
     assert_documents_equal(&doc, &load_project(dir.path()).unwrap().document);
 }
+
+#[test]
+fn garbage_collection_keeps_an_embedded_file_whose_format_is_tmp() {
+    use limner_core::model::{MediaData, MediaKind};
+    let mut doc = limner_core::model::Document::new();
+    let media = doc.add_media(
+        "odd.tmp",
+        MediaKind::Image,
+        MediaData::Encoded {
+            format: "tmp".into(),
+            bytes: std::sync::Arc::from(&b"an embedded file"[..]),
+        },
+    );
+    let spawn = doc.find_by_path("Root/Spawn Area").unwrap();
+    if let LayerKind::Viewpoint(v) = &mut doc.layer_mut(spawn).unwrap().kind {
+        v.thumbnail = Some(media);
+    }
+    let dir = tempfile::tempdir().unwrap();
+    save_project(&doc, dir.path(), &fast()).unwrap();
+    // A second save collects garbage with the file already in place.
+    let report = save_project(&doc, dir.path(), &fast()).unwrap();
+    assert_eq!(report.files_removed, 0);
+    let loaded = load_project(dir.path()).unwrap().document;
+    assert_documents_equal(&doc, &loaded);
+    assert!(file_names(dir.path())
+        .iter()
+        .all(|name| !name.ends_with(".tmp")));
+}

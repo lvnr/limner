@@ -196,6 +196,8 @@ pub fn graft_document(
     for child in other.children(other.root()) {
         graft_layer(doc, other, *child, group, &mut drawings, &mut media)?;
     }
+    // Everything brought in must refer only to this document's own items.
+    doc.validate()?;
     Ok(group)
 }
 
@@ -254,7 +256,11 @@ fn graft_layer(
             bring(&mut sound.media, doc);
             Vec::new()
         }
-        _ => Vec::new(),
+        LayerKind::Viewpoint(viewpoint) => {
+            bring(&mut viewpoint.thumbnail, doc);
+            Vec::new()
+        }
+        LayerKind::Camera(_) | LayerKind::Light(_) => Vec::new(),
     };
     let id = doc.insert_layer(layer, parent, usize::MAX)?;
     for child in children {
@@ -410,12 +416,20 @@ pub fn reset_pivot(doc: &mut Document, id: LayerId) -> Result<(), OpError> {
 }
 
 /// Makes the pivot the layer's origin without moving anything: the pivot is folded
-/// into the layer's transform and taken back out of its content.
+/// into the layer's transform and taken back out of its content. Only paint layers
+/// and groups have content that can be moved the other way; for any other kind the
+/// layer itself would jump, so it is refused.
 pub fn make_pivot_origin(doc: &mut Document, id: LayerId) -> Result<(), OpError> {
     let layer = doc.layer(id).ok_or(OpError::NoSuchLayer(id))?.clone();
     let pivot = layer.pivot;
     if pivot.is_identity() {
         return Ok(());
+    }
+    if !matches!(layer.kind, LayerKind::Paint(_) | LayerKind::Group(_)) {
+        return Err(OpError::Invalid(format!(
+            "only paint layers and groups can make their pivot the origin, not {} layers",
+            layer.type_name().to_lowercase()
+        )));
     }
     let undo_pivot = pivot.inverse();
     match &layer.kind {
@@ -441,7 +455,7 @@ pub fn make_pivot_origin(doc: &mut Document, id: LayerId) -> Result<(), OpError>
                 }
             }
         }
-        _ => {}
+        _ => unreachable!("other kinds were refused above"),
     }
     let layer = doc.layer_mut(id).expect("checked above");
     layer.transform = layer.transform.mul(&pivot);
@@ -1017,5 +1031,67 @@ mod tests {
         set_group_is_sequence(&mut doc, group, false).unwrap();
         assert!(!doc.layer(group).unwrap().is_sequence());
         assert!(set_group_is_sequence(&mut doc, root, false).is_err());
+    }
+
+    #[test]
+    fn importing_a_project_brings_spawn_area_thumbnails_along() {
+        use crate::model::{MediaData, MediaKind};
+        let picture = |byte: u8| MediaData::Encoded {
+            format: "png".into(),
+            bytes: Arc::from(vec![byte; 4]),
+        };
+        let mut other = Document::new();
+        let thumbnail = other.add_media("thumb.png", MediaKind::Image, picture(1));
+        let spawn = other.find_by_path("Root/Spawn Area").unwrap();
+        match &mut other.layer_mut(spawn).unwrap().kind {
+            LayerKind::Viewpoint(v) => v.thumbnail = Some(thumbnail),
+            _ => unreachable!(),
+        }
+
+        // This document has an item of its own under the same id.
+        let mut doc = Document::new();
+        while doc.next_id() <= thumbnail.0 {
+            doc.add_media("mine.png", MediaKind::Image, picture(2));
+        }
+        let mine = doc.media(thumbnail).unwrap().data.clone();
+
+        let root = doc.root();
+        let group = graft_document(&mut doc, &other, root, usize::MAX, "Other").unwrap();
+        doc.validate().unwrap();
+        let grafted = doc.find_by_path("Root/Other/Spawn Area").unwrap();
+        assert_eq!(doc.parent_of(grafted), Some(group));
+        let LayerKind::Viewpoint(v) = &doc.layer(grafted).unwrap().kind else {
+            panic!("not a spawn area");
+        };
+        let id = v.thumbnail.expect("the thumbnail came along");
+        assert_ne!(id, thumbnail, "under a new id of this document");
+        assert_eq!(doc.media(id).unwrap().data, picture(1));
+        assert_eq!(
+            doc.media(thumbnail).unwrap().data,
+            mine,
+            "ours is untouched"
+        );
+    }
+
+    #[test]
+    fn only_paint_layers_and_groups_make_their_pivot_the_origin() {
+        let mut doc = Document::empty();
+        let root = doc.root();
+        for kind in [
+            NewLayerKind::Camera,
+            NewLayerKind::Light,
+            NewLayerKind::Viewpoint,
+        ] {
+            let id = add_layer(&mut doc, kind, root, 0, None, 0).unwrap();
+            let layer = doc.layer_mut(id).unwrap();
+            layer.pivot = Xform::from_translation(DVec3::new(1.0, 2.0, 3.0));
+            layer.transform = Xform::from_rotation(DQuat::from_rotation_y(0.5));
+            let before = doc.clone();
+            assert!(make_pivot_origin(&mut doc, id).is_err(), "{kind:?}");
+            assert!(doc.same_as(&before), "{kind:?}: the layer did not move");
+        }
+        let group = add_layer(&mut doc, NewLayerKind::Group, root, 0, None, 0).unwrap();
+        doc.layer_mut(group).unwrap().pivot = Xform::from_translation(DVec3::X);
+        make_pivot_origin(&mut doc, group).unwrap();
     }
 }

@@ -45,6 +45,12 @@ pub enum DocumentError {
 /// something that cannot be saved.
 pub const MAX_LAYER_DEPTH: usize = 48;
 
+/// The largest id a layer, drawing or media item may have: the largest integer every
+/// JSON reader holds exactly (readers that store numbers as doubles lose precision
+/// above it). Keeping the counter this low also leaves it so far from the end of
+/// `u64` that handing out ids can never run out.
+pub const MAX_ID: u64 = (1 << 53) - 1;
+
 impl Default for Document {
     fn default() -> Self {
         Self::new()
@@ -96,7 +102,11 @@ impl Document {
 
     fn alloc(&mut self) -> u64 {
         let id = self.next_id;
-        self.next_id += 1;
+        // A valid document keeps the counter at or below `MAX_ID + 1`, so even an
+        // id handed out every nanosecond would take thousands of years to get here.
+        self.next_id = id
+            .checked_add(1)
+            .expect("the id counter is far below the end of u64 in a valid document");
         id
     }
 
@@ -244,7 +254,7 @@ impl Document {
         let index = index.min(group.children.len());
         group.children.insert(index, id);
         layer.parent = Some(parent);
-        self.next_id = self.next_id.max(id.0 + 1);
+        self.next_id = self.next_id.max(id.0.saturating_add(1));
         self.layers.insert(id, Arc::new(layer));
         Ok(id)
     }
@@ -409,7 +419,7 @@ impl Document {
 
     /// Inserts a drawing under a known id (used by loaders).
     pub fn insert_drawing(&mut self, id: DrawingId, drawing: Arc<Drawing>) {
-        self.next_id = self.next_id.max(id.0 + 1);
+        self.next_id = self.next_id.max(id.0.saturating_add(1));
         self.drawings.insert(id, drawing);
     }
 
@@ -493,7 +503,7 @@ impl Document {
 
     /// Inserts a media item under its own id (used by loaders).
     pub fn insert_media(&mut self, media: Media) {
-        self.next_id = self.next_id.max(media.id.0 + 1);
+        self.next_id = self.next_id.max(media.id.0.saturating_add(1));
         self.media.insert(media.id, Arc::new(media));
     }
 
@@ -523,6 +533,8 @@ impl Document {
     /// Checks the invariants the rest of the code relies on.
     pub fn validate(&self) -> Result<(), DocumentError> {
         let bad = |message: String| Err(DocumentError::Inconsistent(message));
+        self.validate_settings()?;
+        self.validate_ids()?;
         let root = match self.layer(self.root) {
             Some(root) => root,
             None => return bad("root layer is missing".into()),
@@ -589,9 +601,6 @@ impl Document {
                     return bad(format!("paint layer {id} has an invalid frame rate"));
                 }
             }
-            if layer.id.0 >= self.next_id {
-                return bad(format!("layer id {id} is not below the id counter"));
-            }
         }
         if let Some(missing) = self
             .referenced_media()
@@ -599,6 +608,51 @@ impl Document {
             .find(|m| !self.media.contains_key(m))
         {
             return bad(format!("a layer refers to missing media {missing}"));
+        }
+        Ok(())
+    }
+
+    /// The document-wide settings the timeline and cameras divide by and loop over.
+    fn validate_settings(&self) -> Result<(), DocumentError> {
+        let bad = |message: &str| Err(DocumentError::Inconsistent(message.to_owned()));
+        let s = &self.settings;
+        if !s.rate.is_valid() {
+            return bad("the document frame rate must have a positive numerator and denominator");
+        }
+        if s.range_end < s.range_start {
+            return bad("the working range ends before it starts");
+        }
+        if s.camera_resolution.contains(&0) {
+            return bad("the camera resolution must be at least one pixel on each side");
+        }
+        Ok(())
+    }
+
+    /// Every id is in `1..=MAX_ID` and below the counter, so new ids never collide.
+    fn validate_ids(&self) -> Result<(), DocumentError> {
+        if self.next_id > MAX_ID + 1 {
+            return Err(DocumentError::Inconsistent(format!(
+                "the id counter {} is above the largest id, {MAX_ID}",
+                self.next_id
+            )));
+        }
+        let ids = self
+            .layers
+            .keys()
+            .map(|id| ("layer", id.0))
+            .chain(self.drawings.keys().map(|id| ("drawing", id.0)))
+            .chain(self.media.keys().map(|id| ("media", id.0)));
+        for (kind, id) in ids {
+            if id == 0 || id > MAX_ID {
+                return Err(DocumentError::Inconsistent(format!(
+                    "{kind} id {id} is outside 1 to {MAX_ID}"
+                )));
+            }
+            if id >= self.next_id {
+                return Err(DocumentError::Inconsistent(format!(
+                    "{kind} id {id} is not below the id counter"
+                )));
+            }
         }
         Ok(())
     }
@@ -737,6 +791,66 @@ mod tests {
         let kept = doc.layer(paint).unwrap().as_paint().unwrap().drawings[0];
         assert!(doc.drawing(kept).is_some());
         doc.validate().unwrap();
+    }
+
+    fn inconsistent(doc: &Document) -> bool {
+        matches!(doc.validate(), Err(DocumentError::Inconsistent(_)))
+    }
+
+    #[test]
+    fn validation_requires_usable_document_settings() {
+        use crate::time::FrameRate;
+        for rate in [FrameRate::new(24, 0), FrameRate::new(0, 1)] {
+            let mut doc = Document::new();
+            doc.settings.rate = rate;
+            assert!(inconsistent(&doc), "{rate:?}");
+        }
+        let mut doc = Document::new();
+        doc.settings.range_end = doc.settings.range_start - 1;
+        assert!(inconsistent(&doc));
+        // An empty range, and one that starts before zero, are allowed.
+        doc.settings.range_start = -10;
+        doc.settings.range_end = -10;
+        doc.validate().unwrap();
+        for resolution in [[0, 1080], [1920, 0]] {
+            let mut doc = Document::new();
+            doc.settings.camera_resolution = resolution;
+            assert!(inconsistent(&doc), "{resolution:?}");
+        }
+    }
+
+    #[test]
+    fn ids_near_the_end_of_u64_are_refused_without_overflowing() {
+        let mut doc = Document::new();
+        // Loaders insert items under the ids a file gives; none of these may panic.
+        doc.insert_drawing(DrawingId(u64::MAX), Arc::new(Drawing::new()));
+        doc.insert_media(Media {
+            id: MediaId(u64::MAX),
+            name: String::new(),
+            kind: MediaKind::Image,
+            data: MediaData::Encoded {
+                format: "png".into(),
+                bytes: Arc::from(Vec::new()),
+            },
+        });
+        let layer = Layer::new(LayerId(u64::MAX), "Far", LayerKind::Group(Group::default()));
+        let root = doc.root();
+        doc.insert_layer(layer, root, 0).unwrap();
+        assert_eq!(doc.next_id(), u64::MAX);
+        assert!(inconsistent(&doc));
+
+        let mut doc = Document::new();
+        doc.reserve_ids(u64::MAX);
+        assert!(inconsistent(&doc), "a counter past MAX_ID is refused");
+
+        // The largest id that is allowed still leaves room to hand out new ones.
+        let mut doc = Document::new();
+        doc.insert_drawing(DrawingId(MAX_ID), Arc::new(Drawing::new()));
+        doc.validate().unwrap();
+        assert_eq!(doc.next_id(), MAX_ID + 1);
+        let next = doc.add_drawing(Drawing::new());
+        assert_eq!(next.0, MAX_ID + 1);
+        assert!(inconsistent(&doc), "ids past MAX_ID are refused");
     }
 
     #[test]

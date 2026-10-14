@@ -221,6 +221,47 @@ fn garbage_json_is_rejected() {
 }
 
 #[test]
+fn settings_the_timeline_cannot_use_are_rejected() {
+    let edits: [(&str, serde_json::Value); 5] = [
+        ("rate", serde_json::json!([24, 0])),
+        ("rate", serde_json::json!([0, 1])),
+        ("camera_resolution", serde_json::json!([0, 1080])),
+        ("range_start", serde_json::json!(i64::MAX)),
+        ("range_end", serde_json::json!(i64::MIN)),
+    ];
+    for (member, value) in edits {
+        let error = with_manifest(|m| m["settings"][member] = value.clone());
+        assert!(
+            matches!(error, FormatError::Invalid { .. }),
+            "{member} = {value}: {error}"
+        );
+        assert!(error.to_string().contains("limn.json"), "{error}");
+    }
+}
+
+#[test]
+fn ids_at_the_end_of_the_number_range_are_rejected() {
+    let error = with_manifest(|m| m["next_id"] = serde_json::json!(u64::MAX));
+    assert!(matches!(error, FormatError::Invalid { .. }), "{error}");
+    assert!(error.to_string().contains("id counter"), "{error}");
+    for id in [u64::MAX, u64::MAX - 1, 1 << 53] {
+        let error = with_manifest(|m| m["root"]["children"][0]["id"] = serde_json::json!(id));
+        assert!(
+            matches!(error, FormatError::Invalid { .. }),
+            "{id}: {error}"
+        );
+        let error = with_manifest(|m| m["drawings"][0]["id"] = serde_json::json!(id));
+        assert!(
+            matches!(
+                error,
+                FormatError::Invalid { .. } | FormatError::Manifest { .. }
+            ),
+            "{id}: {error}"
+        );
+    }
+}
+
+#[test]
 fn manifests_that_describe_no_possible_document_are_rejected() {
     // A paint layer pointing at a drawing the table does not have.
     let error = with_manifest(|m| {

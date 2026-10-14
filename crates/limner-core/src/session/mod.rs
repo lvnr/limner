@@ -838,8 +838,9 @@ impl Session {
                 here.rotation = glam::DQuat::from_rotation_y(yaw);
                 here.flip = crate::math::Flip::None;
                 let frame = self.evaluate();
-                let parent_world =
-                    parent.map_or(crate::math::Xform::IDENTITY, |p| frame.world_xform(&self.doc, p));
+                let parent_world = parent.map_or(crate::math::Xform::IDENTITY, |p| {
+                    frame.world_xform(&self.doc, p)
+                });
                 self.write_transform_as(layer, parent_world.inverse().mul(&here), false)?;
                 Ok(Value::Null)
             }

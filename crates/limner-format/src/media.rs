@@ -105,10 +105,12 @@ fn png_color(channels: u8) -> Option<png::ColorType> {
 }
 
 /// The extension for an embedded file: its format when that is a short plain word.
+/// Never `tmp`, which marks the leftovers of an interrupted save.
 fn encoded_extension(format: &str) -> Cow<'static, str> {
     let plain = !format.is_empty()
         && format.len() <= 8
-        && format.bytes().all(|b| b.is_ascii_alphanumeric());
+        && format.bytes().all(|b| b.is_ascii_alphanumeric())
+        && !format.eq_ignore_ascii_case("tmp");
     if plain {
         Cow::Owned(format.to_ascii_lowercase())
     } else {
@@ -135,6 +137,7 @@ pub(crate) fn prepare(data: &MediaData) -> Result<Prepared<'_>, String> {
                 && *height > 0
                 && *width as u64 * *height as u64 * *channels as u64 == pixels.len() as u64;
             let color = png_color(*channels).filter(|_| exact);
+            container::check_payload_len(pixels.len() as u64, "a picture")?;
             Prepared {
                 storage: Storage::RawImage,
                 hash: ContentHash::of(&[&header, pixels]),
@@ -163,6 +166,7 @@ pub(crate) fn prepare(data: &MediaData) -> Result<Prepared<'_>, String> {
             };
             let header = audio_header(spec, samples.len());
             let wav = spec.fits_wav(samples.len()).then_some(spec);
+            container::check_payload_len(samples.len() as u64, "a sound")?;
             Prepared {
                 storage: Storage::RawAudio,
                 hash: ContentHash::of(&[&header, samples]),
@@ -236,6 +240,10 @@ fn check(hash: ContentHash, expected: Option<&ContentHash>) -> Result<(), String
     }
 }
 
+/// Deflate, which compresses the pixels of a PNG file, expands data at most 1032
+/// times: a 258-byte repeat coded in two bits.
+const MAX_DEFLATE_EXPANSION: u64 = 1032;
+
 fn decode_png(bytes: &[u8]) -> Result<(u32, u32, u8, Vec<u8>), String> {
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.set_transformations(png::Transformations::IDENTITY);
@@ -254,6 +262,16 @@ fn decode_png(bytes: &[u8]) -> Result<(u32, u32, u8, Vec<u8>), String> {
     let size = reader
         .output_buffer_size()
         .ok_or_else(|| "it is too large to decode".to_owned())?;
+    // The header alone decides the size, so check it is possible for a file of this
+    // length before committing memory to it.
+    let (width, height) = reader.info().size();
+    if size as u64 > (bytes.len() as u64).saturating_mul(MAX_DEFLATE_EXPANSION) {
+        return Err(format!(
+            "its header describes a {width} by {height} picture, more than {} bytes of PNG data can hold",
+            bytes.len()
+        ));
+    }
+    container::check_payload_len(size as u64, "the picture")?;
     let mut pixels = Vec::new();
     pixels
         .try_reserve_exact(size)
@@ -488,5 +506,65 @@ mod tests {
         assert!(err.contains("hashes to"), "{err}");
         let err = decode(Storage::Encoded, Some("png"), b"abc".to_vec(), Some(&other)).unwrap_err();
         assert!(err.contains("hashes to"), "{err}");
+    }
+
+    /// A PNG file whose header claims a `width` by `height` RGBA picture, with only
+    /// a few bytes of pixel data behind it.
+    fn png_claiming(width: u32, height: u32) -> Vec<u8> {
+        fn crc32(data: &[u8]) -> u32 {
+            let mut crc = !0u32;
+            for byte in data {
+                crc ^= *byte as u32;
+                for _ in 0..8 {
+                    crc = if crc & 1 != 0 {
+                        (crc >> 1) ^ 0xEDB8_8320
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        }
+        fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            let start = out.len();
+            out.extend_from_slice(kind);
+            out.extend_from_slice(data);
+            let crc = crc32(&out[start..]);
+            out.extend_from_slice(&crc.to_be_bytes());
+        }
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&width.to_be_bytes());
+        ihdr.extend_from_slice(&height.to_be_bytes());
+        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
+        let mut out = PNG_SIGNATURE.to_vec();
+        chunk(&mut out, b"IHDR", &ihdr);
+        // A zlib stream holding nothing but the start of a stored block.
+        chunk(
+            &mut out,
+            b"IDAT",
+            &[0x78, 0x01, 0x01, 0x00, 0x00, 0xFF, 0xFF],
+        );
+        chunk(&mut out, b"IEND", &[]);
+        out
+    }
+
+    #[test]
+    fn a_small_png_cannot_claim_a_huge_picture() {
+        let bytes = png_claiming(50_000, 50_000);
+        assert!(bytes.len() < 100);
+        let err = decode(Storage::RawImage, None, bytes, None).unwrap_err();
+        assert!(err.contains("50000 by 50000"), "{err}");
+    }
+
+    #[test]
+    fn an_embedded_file_of_format_tmp_is_not_named_like_a_leftover() {
+        let data = MediaData::Encoded {
+            format: "TMP".into(),
+            bytes: Arc::from(&b"not a leftover"[..]),
+        };
+        let (extension, _) = round_trip(&data);
+        assert_eq!(extension, "bin");
+        assert!(!prepare(&data).unwrap().file_name().ends_with(".tmp"));
     }
 }

@@ -50,7 +50,7 @@ A packed project is a single file, by convention `Name.limnz`: a ZIP archive who
 - Entry order is not significant. Directory entries may be present and are ignored. Entries the manifest does not refer to are ignored, apart from `state.json` and `thumbnail.png`.
 - A reader recognises a packed project by its content (a ZIP archive with a root entry `limn.json`), not by its extension.
 
-When it packs a folder, the reference writer writes `limn.json`, `state.json`, `thumbnail.png`, then the stroke blobs and the media files in name order, each with the time stamp 1980-01-01 00:00:00 and the same permissions, so packing the same folder twice gives identical bytes. Only the files the manifest refers to are packed. A packed file is written under `Name.limnz.tmp`, flushed, and renamed over the final name.
+When it packs a folder, the reference writer writes `limn.json`, `state.json`, `thumbnail.png`, then the stroke blobs and the media files in name order, each with the time stamp 1980-01-01 00:00:00 and the same permissions, so packing the same folder twice gives identical bytes. Only the files the manifest refers to are packed, and the reference writer refuses a manifest whose drawing or media names are not hashes of the shape section 4 requires, as a reader would. A packed file is written under `Name.limnz.tmp`, flushed, and renamed over the final name.
 
 ## 3. Content hashes
 
@@ -88,6 +88,7 @@ H       …     body
 - The canonical form is the header with the four `flags` bytes set to zero, followed by the uncompressed payload.
 - The body must be exactly one frame (or exactly the payload); trailing bytes are an error.
 - A reader must compute the payload length from the header before decompressing and must not allocate more than that.
+- A payload is at most 4 GiB (2^32 bytes); a writer must refuse to write more, and a reader rejects a header that declares more. zstd expands data at most 32,768 times (a 128 KiB block repeating one byte costs four bytes), so a reader also rejects a compressed body shorter than 1/32,768 of the payload its header declares, without decompressing it.
 
 The reference writer compresses at zstd level 3 and stores the payload uncompressed when compression would not make it smaller. Both choices are free: they do not affect the hash.
 
@@ -157,7 +158,7 @@ Recommended `.gitattributes` for a repository holding projects:
 | `drawings` | array | `[]` | The drawing table (section 4.10), in increasing id order. |
 | `media` | array | `[]` | The media table (section 4.11), in increasing id order. |
 
-**Ids.** Layers, drawings and media items share one id space: positive integers handed out by one counter, unique across all three kinds within a document. The reference reader rejects two layers, two drawings or two media items with the same id, and warns when items of different kinds share one.
+**Ids.** Layers, drawings and media items share one id space: positive integers handed out by one counter, unique across all three kinds within a document. The reference reader rejects two layers, two drawings or two media items with the same id, and warns when items of different kinds share one. Every id is at most 2^53 − 1, the largest integer every JSON reader holds exactly, and below `next_id`; `next_id` is at most 2^53. A reader rejects a document that breaks this.
 
 **Time.** Every time and duration is an integer number of **flicks**: 1/705,600,000 of a second. Every common frame rate divides it exactly. Times on a layer are measured on the clock of the nearest enclosing sequence (section 4.6).
 
@@ -171,11 +172,11 @@ Recommended `.gitattributes` for a repository holding projects:
 | `description` | string | `""` | Free text. |
 | `background` | [r, g, b] *f32* | `[0.8, 0.8, 0.8]` | Background colour. |
 | `ambient_light` | [r, g, b] *f32* | `[0.35, 0.35, 0.35]` | Light that reaches lit paint and models from everywhere, as a share of their own colour: how bright they are where no light layer reaches. |
-| `rate` | [num, den] integers | `[24, 1]` | Document frame rate in frames per second, as the fraction num/den. `[24000, 1001]` is 23.976. |
+| `rate` | [num, den] integers | `[24, 1]` | Document frame rate in frames per second, as the fraction num/den. `[24000, 1001]` is 23.976. Both numbers must be positive. |
 | `range_start` | flicks | 0 | Start of the working range: what loops in the editor and what cameras render. |
-| `range_end` | flicks | 7056000000 (10 s) | End of the working range. |
+| `range_end` | flicks | 7056000000 (10 s) | End of the working range. Must not be before `range_start`. |
 | `default_viewpoint` | layer id or null | null | The viewpoint layer a viewer starts at. |
-| `camera_resolution` | [width, height] integers | `[1920, 1080]` | Pixel size of camera renders. |
+| `camera_resolution` | [width, height] integers | `[1920, 1080]` | Pixel size of camera renders. Both must be at least 1. |
 | `palette` | array of [r, g, b] *f32* | 16 × `[0.82, 0.82, 0.82]` | Colour swatches. The application uses 16; the format keeps however many are present. |
 
 ### 4.4 Layers
@@ -491,7 +492,7 @@ Every bit pattern is stored as it is; writers must not normalise values (for exa
 
 ### 6.1 `encoded`
 
-The file is an image, sound or model in its own format, kept byte for byte. Canonical form: the file itself. The extension is the lowercase `format` when that is 1 to 8 ASCII letters and digits, and `bin` otherwise; the exact `format` string is in the manifest.
+The file is an image, sound or model in its own format, kept byte for byte. Canonical form: the file itself. The extension is the lowercase `format` when that is 1 to 8 ASCII letters and digits other than `tmp`, and `bin` otherwise; the exact `format` string is in the manifest. (`tmp` would make the file look like the leftover of an interrupted save.)
 
 ### 6.2 `raw_image`
 
@@ -515,7 +516,7 @@ The file in `media/` is one of:
 - **a PNG file** (extension `png`), when `width` and `height` are at least 1, `channels` is 1 to 4 and `N = width · height · channels`: 8 bits per sample, colour type greyscale, greyscale with alpha, truecolour or truecolour with alpha by channel count, not interlaced, no palette, no colour-management chunks. This is the normal case, and it means other tools can open the image;
 - **the container itself** (extension `limg`), compressed or not as `flags` says, when PNG cannot carry the image exactly.
 
-A reader tells the two apart by the first eight bytes. To verify a PNG it decodes the pixels without any transformation, builds the canonical form from the decoded width, height, channel count and pixels, and compares the hash with the file name. The PNG encoding itself (filters, compression level) is therefore free and does not affect the name.
+A reader tells the two apart by the first eight bytes. Before decoding a PNG it checks that the picture its header describes is possible: no more than 4 GiB of pixels, and no more than 1,032 times the length of the file, since deflate expands data at most that much. To verify a PNG it decodes the pixels without any transformation, builds the canonical form from the decoded width, height, channel count and pixels, and compares the hash with the file name. The PNG encoding itself (filters, compression level) is therefore free and does not affect the name.
 
 ### 6.3 `raw_audio`
 
@@ -582,7 +583,7 @@ To save a document into a project folder:
 1. **Check** that the document is consistent and within the format's limits (section 4.4). If not, stop: nothing has been written.
 2. **Write new content.** For every drawing and media item, compute the content hash. If the file it names exists, leave it. Otherwise write the bytes to `<final name>.tmp` in the same folder, flush that file to the disk (`fsync`; `F_FULLFSYNC` on macOS), and rename it to its final name. Then flush each folder that received a file, so the renames themselves are durable.
 3. **Replace the manifest.** Build the new `limn.json`. If the existing file has exactly these bytes, leave it. Otherwise write `limn.json.tmp`, flush it, rename it over `limn.json`, and flush the project folder.
-4. **Collect garbage** (optional). Delete, in `drawings/*/`, files named `<64 hex digits>.lstk` that the new manifest does not name; in `media/`, files whose name starts with 64 hexadecimal digits and a dot that the manifest does not name; files ending in `.tmp` in those folders; and `limn.json.tmp`, `state.json.tmp` and `thumbnail.png.tmp` beside the manifest. Remove shard folders left empty. Delete nothing else.
+4. **Collect garbage** (optional). Delete, in `drawings/*/`, files named `<64 hex digits>.lstk`, and in `media/`, files whose name starts with 64 hexadecimal digits and a dot, and in those folders files ending in `.tmp`, in each case only when the new manifest does not name them; and `limn.json.tmp`, `state.json.tmp` and `thumbnail.png.tmp` beside the manifest. Remove shard folders left empty. Delete nothing else, and never a file the manifest names.
 
 Why this is safe: until the rename in step 3, the old manifest is in place and every file it names is untouched, because content files are never modified or deleted before that point; new files only add names nothing refers to. The rename is atomic, so afterwards the new manifest is in place and every file it names was completely written and flushed in step 2. Step 4 deletes only what the manifest now in place does not name. A crash at any point therefore leaves a project that loads: the old one before the rename, the new one after. Leftover `.tmp` files and unreferenced content files are harmless and are removed by the next save that collects garbage.
 
@@ -602,7 +603,7 @@ The reference implementation reports, for each save, how many blobs and media fi
 1. Read `limn.json`. Check `format` and `version` (section 4.1), then parse the rest.
 2. For each entry of the drawing table, read the blob and verify its hash. A blob named by several entries need be read only once.
 3. For each entry of the media table, read the file as its `storage` says and verify its hash.
-4. Rebuild the layer tree with the stored ids, and check that it is a consistent document: ids are unique, every paint layer has at least one frame and one drawing, every frame index is in range, every drawing and media id referred to exists, frame rates are positive.
+4. Rebuild the layer tree with the stored ids, and check that it is a consistent document: ids are unique and within the limits of section 4.2, every paint layer has at least one frame and one drawing, every frame index is in range, every drawing and media id referred to exists, frame rates are positive, the working range does not end before it starts, and the camera resolution is at least one pixel each way.
 
 A missing file, a file that fails verification, or an inconsistent document must fail the load with an error that names the file. A reader must not substitute empty content.
 
@@ -633,7 +634,8 @@ A packed project is loaded by the same steps, reading each entry from the archiv
 | Strokes per drawing | 2^32 − 1 |
 | Points per stroke | 2^32 − 1 |
 | Mesh positions, normals, colours, indices | 2^32 − 1 each |
-| Ids | 1 to 2^64 − 1; the root layer is 1 |
+| Ids | 1 to 2^53 − 1; the root layer is 1 |
+| Container payload, decoded PNG pixels | 4 GiB |
 | Times | −2^63 to 2^63 − 1 flicks |
 
 Reserved fields and flag bits must be written as zero and rejected when non-zero, so that they can be given meaning in a later version without older readers misreading new files.

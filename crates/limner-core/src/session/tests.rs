@@ -1429,14 +1429,23 @@ fn a_spawn_area_moved_here_gives_this_view_back_upright() {
     assert!(view.rotation.angle_between(DQuat::from_rotation_y(0.7)) < 1e-9);
 
     // Inside a moved group it still lands in the same place in the world.
-    let group = layer_id(&run(&mut session, json!({ "cmd": "add_layer", "kind": "group" })));
+    let group = layer_id(&run(
+        &mut session,
+        json!({ "cmd": "add_layer", "kind": "group" }),
+    ));
     run(
         &mut session,
         json!({ "cmd": "set_layer", "layer": group, "transform": { "rotation": [0.0, 0.0, 0.0, 1.0], "scale": 0.5, "translation": [1.0, 0.0, 0.0] } }),
     );
-    run(&mut session, json!({ "cmd": "move_layer", "layer": spawn, "parent": group, "index": 0 }));
+    run(
+        &mut session,
+        json!({ "cmd": "move_layer", "layer": spawn, "parent": group, "index": 0 }),
+    );
     session.view.world_from_viewer = Xform::from_translation(DVec3::new(-1.0, 1.6, 4.0));
-    run(&mut session, json!({ "cmd": "place_viewpoint_here", "layer": spawn }));
+    run(
+        &mut session,
+        json!({ "cmd": "place_viewpoint_here", "layer": spawn }),
+    );
     session.view.world_from_viewer = Xform::IDENTITY;
     session.go_to_viewpoint(spawn);
     assert!(
@@ -1444,5 +1453,8 @@ fn a_spawn_area_moved_here_gives_this_view_back_upright() {
     );
 
     // Only spawn areas.
-    fail(&mut session, json!({ "cmd": "place_viewpoint_here", "layer": group }));
+    fail(
+        &mut session,
+        json!({ "cmd": "place_viewpoint_here", "layer": group }),
+    );
 }

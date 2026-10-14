@@ -5,6 +5,7 @@ use limner_core::time::{from_quill_ticks, FrameRate};
 use limner_quill::testing::*;
 use limner_quill::{import_project, is_quill_project, ImportError};
 use serde_json::json;
+use std::sync::Arc;
 
 #[test]
 fn imports_a_modern_project() {
@@ -220,11 +221,14 @@ fn imports_a_modern_project() {
         .as_paint()
         .unwrap()
         .clone();
-    assert_eq!(
-        shared.drawings[0], anim.drawings[0],
-        "one file record, one drawing"
-    );
-    assert_eq!(doc.drawing_count(), 2);
+    // One file record, read once: each layer has a drawing of its own, so painting on
+    // one leaves the other alone, but the strokes are shared until then.
+    assert_ne!(shared.drawings[0], anim.drawings[0]);
+    assert!(Arc::ptr_eq(
+        doc.drawing(shared.drawings[0]).unwrap(),
+        doc.drawing(anim.drawings[0]).unwrap()
+    ));
+    assert_eq!(doc.drawing_count(), 3);
 
     let a = doc.drawing(anim.drawings[0]).unwrap();
     let strokes: Vec<_> = a.strokes().collect();
@@ -244,8 +248,9 @@ fn imports_a_modern_project() {
     );
     let b = doc.drawing(anim.drawings[1]).unwrap();
     assert_eq!(b.strokes().next().unwrap().brush, Brush::Cube);
-    assert_eq!(doc.stroke_count(), 3);
-    assert_eq!(doc.point_count(), 12);
+    // The shared record counts once per layer that shows it.
+    assert_eq!(doc.stroke_count(), 5);
+    assert_eq!(doc.point_count(), 20);
 
     // Picture.
     let LayerKind::Picture(picture) = &doc
@@ -343,9 +348,12 @@ fn imports_legacy_layouts() {
         .map(|k| (k.time, k.value))
         .collect();
     assert_eq!(offsets, [(from_quill_ticks(1050), from_quill_ticks(525))]);
-    assert_eq!(
-        numeric.as_paint().unwrap().drawings,
-        old_paint.drawings,
+    let (numeric, old) = (
+        numeric.as_paint().unwrap().drawings[0],
+        old_paint.drawings[0],
+    );
+    assert!(
+        Arc::ptr_eq(doc.drawing(numeric).unwrap(), doc.drawing(old).unwrap()),
         "padded and bare offsets name the same record"
     );
 }

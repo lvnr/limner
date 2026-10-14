@@ -18,10 +18,17 @@ pub struct Frame {
 }
 
 fn tangent(points: &[Point], i: usize) -> Vec3 {
+    tangent_between(points, i, i + 1, i)
+}
+
+/// The tangent at point `i`, looking for neighbours from `after` onwards and before
+/// `before`. Every point in between must be exactly where point `i` is, so skipping
+/// them changes nothing.
+fn tangent_between(points: &[Point], i: usize, after: usize, before: usize) -> Vec3 {
     let here = points[i].position();
     // First neighbour on each side that is not on top of this point.
     let mut forward = Vec3::ZERO;
-    for other in &points[i + 1..] {
+    for other in &points[after..] {
         let d = other.position() - here;
         let len = d.length();
         if len >= EPSILON {
@@ -30,7 +37,7 @@ fn tangent(points: &[Point], i: usize) -> Vec3 {
         }
     }
     let mut backward = Vec3::ZERO;
-    for other in points[..i].iter().rev() {
+    for other in points[..before].iter().rev() {
         let d = here - other.position();
         let len = d.length();
         if len >= EPSILON {
@@ -51,8 +58,48 @@ fn tangent(points: &[Point], i: usize) -> Vec3 {
 }
 
 /// The frame at point `i`: `t` along the stroke, `u` across it, `v` along the stored normal.
+///
+/// Finding the tangent scans past points on top of this one, so calling this for
+/// every point of a stroke that stays in one place is quadratic; use
+/// [`stroke_frames`] for whole strokes.
 pub fn point_frame(points: &[Point], i: usize) -> Frame {
-    let t = tangent(points, i);
+    frame_with_tangent(points, i, tangent(points, i))
+}
+
+/// The frame at every point of a stroke, the same as [`point_frame`] gives, in
+/// time proportional to the number of points: runs of points at exactly the same
+/// place are stepped over in one go.
+pub fn stroke_frames(points: &[Point]) -> Vec<Frame> {
+    let n = points.len();
+    // For each point, where the run of points at exactly its place ends and begins.
+    let mut run_end = vec![n; n];
+    for i in (0..n.saturating_sub(1)).rev() {
+        run_end[i] = if points[i + 1].position() == points[i].position() {
+            run_end[i + 1]
+        } else {
+            i + 1
+        };
+    }
+    let mut run_start = vec![0; n];
+    for i in 1..n {
+        run_start[i] = if points[i - 1].position() == points[i].position() {
+            run_start[i - 1]
+        } else {
+            i
+        };
+    }
+    (0..n)
+        .map(|i| {
+            frame_with_tangent(
+                points,
+                i,
+                tangent_between(points, i, run_end[i], run_start[i]),
+            )
+        })
+        .collect()
+}
+
+fn frame_with_tangent(points: &[Point], i: usize, t: Vec3) -> Frame {
     let normal = Vec3::from_array(points[i].normal);
     let mut u = normal.cross(t);
     let len = u.length();
@@ -199,6 +246,43 @@ mod tests {
             let f = point_frame(&points, i);
             assert!((f.t - Vec3::X).length() < 1e-5, "point {i}: {:?}", f.t);
         }
+    }
+
+    #[test]
+    fn whole_stroke_frames_match_point_frames() {
+        let mut points = line_along_x(5);
+        // Runs of coincident points at the start, in the middle and at the end, and
+        // a point that is only nearly on top of its neighbour.
+        for at in [0, 3, 3, 3, 6] {
+            points.insert(at, points[at]);
+        }
+        let len = points.len();
+        points.push(points[len - 1]);
+        let mut nearly = points[2];
+        nearly.pos[1] += 1e-9;
+        points.insert(2, nearly);
+        let tilted: Vec<Point> = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| pt([p.pos[0], (i as f32 * 0.7).sin(), p.pos[2]], p.normal, 0.05))
+            .collect();
+        let same = vec![pt([1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 0.1); 4];
+        for stroke in [&points, &tilted, &same, &line_along_x(1), &Vec::new()] {
+            let whole = stroke_frames(stroke);
+            assert_eq!(whole.len(), stroke.len());
+            for (i, frame) in whole.iter().enumerate() {
+                assert_eq!(*frame, point_frame(stroke, i), "point {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn many_coincident_points_take_linear_time() {
+        // Quadratic work over this many points would take minutes in a debug build.
+        let points = vec![pt([1.0, 1.0, 1.0], [0.0, 1.0, 0.0], 0.1); 200_000];
+        let frames = stroke_frames(&points);
+        assert_eq!(frames.len(), points.len());
+        assert!(frames.iter().all(|f| f.t.is_finite()));
     }
 
     #[test]

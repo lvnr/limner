@@ -1,6 +1,8 @@
 //! Packed projects: a `.limnz` file is a zip archive of a project folder.
 
 use crate::error::FormatError;
+use crate::hash::ContentHash;
+use crate::load::media_hash;
 use crate::manifest;
 use crate::save::{finish_archive, stored_entry};
 use crate::store::{
@@ -36,22 +38,26 @@ pub fn pack(dir: &Path, file: &Path) -> Result<(), FormatError> {
             entries.push(optional.to_owned());
         }
     }
-    let content: BTreeSet<String> = manifest
-        .drawings
-        .iter()
-        .map(|d| blob_path(&d.blob))
-        .chain(manifest.media.iter().map(|m| media_path(&m.file)))
-        .collect();
-    for relative in &content {
-        if relative
-            .split('/')
-            .any(|part| part.is_empty() || part == ".." || part == ".")
-        {
-            return Err(FormatError::manifest(
-                &manifest_path,
-                format!("it refers to \"{relative}\", which is not a file of the project"),
-            ));
+    // The same checks as loading: a name that is not a hash (and an extension)
+    // could point anywhere, `..\..\x` and `C:\x` on Windows included.
+    let not_ours = |name: &str| {
+        FormatError::manifest(
+            &manifest_path,
+            format!("it refers to \"{name}\", which is not a file of the project"),
+        )
+    };
+    let mut content: BTreeSet<String> = BTreeSet::new();
+    for drawing in &manifest.drawings {
+        if ContentHash::from_hex(&drawing.blob).is_none() {
+            return Err(not_ours(&drawing.blob));
         }
+        content.insert(blob_path(&drawing.blob));
+    }
+    for media in &manifest.media {
+        if media_hash(&media.file).is_none() {
+            return Err(not_ours(&media.file));
+        }
+        content.insert(media_path(&media.file));
     }
     entries.extend(content);
 

@@ -125,14 +125,16 @@ pub fn clip_at(anim: &LayerAnim, time: Flicks) -> ClipState {
         return ClipState {
             active: true,
             start: 0,
-            local_time: time + offset,
+            local_time: time.saturating_add(offset),
         };
     }
     match anim.visibility.key_at_or_before(time) {
         Some(key) if key.value => ClipState {
             active: true,
             start: key.time,
-            local_time: time - key.time + offset,
+            // Times come from files and may be anywhere in the range; saturate
+            // rather than overflow.
+            local_time: time.saturating_sub(key.time).saturating_add(offset),
         },
         _ => ClipState {
             active: false,
@@ -198,7 +200,7 @@ pub fn eval_track_with<T: Clone>(
     if last.interp == Interp::Step || next.time <= last.time {
         return Some(last.value.clone());
     }
-    let t = (time - last.time) as f64 / (next.time - last.time) as f64;
+    let t = span_between(last.time, time) / span_between(last.time, next.time);
     if last.interp == Interp::Smooth {
         return Some(curve(&Span {
             before: i.checked_sub(1).map(|b| &keys[b]),
@@ -209,6 +211,11 @@ pub fn eval_track_with<T: Clone>(
         }));
     }
     Some(mix(&last.value, &next.value, last.interp.ease(t)))
+}
+
+/// `to - from` as a float, exact in sign and never overflowing, whatever the times.
+fn span_between(from: Flicks, to: Flicks) -> f64 {
+    (to as i128 - from as i128) as f64
 }
 
 /// A curve through the values of a span's keys that arrives at each key at its
@@ -223,11 +230,11 @@ where
         + std::ops::Mul<f64, Output = V>,
 {
     let (p0, p1) = (value(&span.from.value), value(&span.to.value));
-    let length = (span.to.time - span.from.time) as f64;
+    let length = span_between(span.from.time, span.to.time);
     let straight = p1 - p0;
     // Slopes are per unit of time, and scaled by the length of this stretch below.
     let slope = |a: &Key<T>, b: &Key<T>| {
-        let between = (b.time - a.time) as f64;
+        let between = span_between(a.time, b.time);
         if between > 0.0 {
             (value(&b.value) - value(&a.value)) * (length / between)
         } else {
@@ -259,12 +266,29 @@ pub fn layer_transform_at(layer: &Layer, time: Flicks) -> Xform {
             let turned = Xform::mix_about_pivot(&span.from.value, &span.to.value, pivot, span.t);
             let mut placed = turned.mul(pivot);
             placed.translation = curve_through(span, |x: &Xform| x.mul(pivot).translation);
-            placed.scale = curve_through(span, |x: &Xform| x.mul(pivot).scale)
-                .max(span.from.value.scale.min(span.to.value.scale) * 1e-3);
+            placed.scale = keep_scale_sign(
+                curve_through(span, |x: &Xform| x.mul(pivot).scale),
+                span.from.value.scale,
+                span.to.value.scale,
+            );
             placed.mul(&pivot.inverse())
         },
     )
     .unwrap_or(layer.transform)
+}
+
+/// Stops a curved scale from overshooting through zero, which would turn the layer
+/// inside out, when both keys have the same sign: its size stays at least a
+/// thousandth of the smaller key's, on the keys' side of zero. Keys of opposite
+/// sign pass through zero anyway, so their curve is left alone.
+fn keep_scale_sign(curved: f64, from: f64, to: f64) -> f64 {
+    if from > 0.0 && to > 0.0 {
+        curved.max(from.min(to) * 1e-3)
+    } else if from < 0.0 && to < 0.0 {
+        curved.min(from.max(to) * 1e-3)
+    } else {
+        curved
+    }
 }
 
 /// A layer's own opacity at `time` (the time of its enclosing sequence).
@@ -348,7 +372,7 @@ fn visit(doc: &Document, id: LayerId, context: &Context, is_root: bool, frame: &
     if let LayerKind::Group(group) = &layer.kind {
         if let Some(sequence) = &group.sequence {
             if !is_root {
-                local_time += context.held;
+                local_time = local_time.saturating_add(context.held);
                 child_held = 0;
             }
             child_time = sequence_time(sequence, local_time);

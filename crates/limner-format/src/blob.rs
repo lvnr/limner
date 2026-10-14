@@ -71,6 +71,10 @@ pub(crate) fn encode(drawing: &Drawing) -> Result<Canonical, String> {
     header.extend_from_slice(&(point_count as u64).to_le_bytes());
 
     let table_len = stroke_count as usize * ENTRY_LEN;
+    crate::container::check_payload_len(
+        table_len as u64 + point_count as u64 * POINT_LEN as u64,
+        "a drawing",
+    )?;
     let mut payload = vec![0u8; table_len + point_count * POINT_LEN];
     let (table, planes) = payload.split_at_mut(table_len);
     let mut index = 0usize;

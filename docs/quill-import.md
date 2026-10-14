@@ -61,7 +61,7 @@ GitHub code search finds no `Quill.json` with a sound layer, a 360 or cubemap pi
 
 A model imported with its hierarchy is a group flagged `IsModelTopLayer` holding model layers; it imports as a group of model layers and the flag is dropped. If a `Model` layer has children as well as a mesh, it becomes a group whose first child is a model layer of the same name holding the mesh.
 
-Records are read once per file offset: two layers that point at the same drawing, picture, mesh or sound share one drawing or media item.
+Records are read once per file offset. Two layers that point at the same picture, mesh or sound share one media item. Two uses of the same drawing record (on two layers, or twice in one layer's drawing list) each get a drawing of their own, because every edit changes one drawing of one layer; the strokes are read once and shared in memory until one of them is edited, and a save stores them once.
 
 Media items are named after the file in `ImportFilePath`, or after the layer when no path is stored.
 
@@ -122,6 +122,7 @@ A document's title is the metadata title, else the folder name.
 - Integers and times may be numbers or strings; numbers that are not finite read as missing.
 - Every read of the binary file is bounds-checked. A `Quill.qbin` cut at any byte still imports, with a warning for each record that no longer fits. A missing or empty `Quill.qbin` gives one warning and an otherwise complete layer tree.
 - Unit tests corrupt random bytes of the binary file and replace random values of the JSON with values of other shapes; the importer returns a document or an error and never panics.
+- Decoded drawings and media may total at most four times the size of `Quill.qbin` plus 1 MiB. A real project decodes each record once, to at most about three times its stored size, so it stays well inside this; a damaged or hostile `Quill.json` that points many layers at overlapping records fails with `Quill.json points at overlapping records that decode to more than N bytes from a N-byte Quill.qbin` instead of multiplying the file in memory.
 - The result is checked with `Document::validate()` before it is returned.
 
 ## Warnings
@@ -135,6 +136,7 @@ Whole project:
 - `State.json could not be read; editor state was not imported`
 - `Quill.json declares format version N; this importer was written for version 1`
 - `the default spawn area "…" was not found`
+- `the export range ended before it started; it now ends where it starts`
 - `N gallery poster(s) saved for Quill's sharing feature were not imported`
 - `the home position of this 2017 file is not imported; viewers start at the origin`
 - `the tracking origin of this 2017 file (N) is not imported; floor level is assumed`

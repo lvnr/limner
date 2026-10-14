@@ -293,10 +293,10 @@ fn collect_garbage(dir: &Path, manifest: &ManifestDto) -> usize {
             continue;
         }
         for (path, name, is_dir) in names(&shard) {
-            let stale = name.ends_with(TMP_SUFFIX)
-                || (name.ends_with(&format!(".{BLOB_EXTENSION}"))
-                    && is_hash_name(&name)
-                    && !blobs.contains(&name));
+            // Anything the manifest names is kept, whatever it looks like.
+            let stale = !blobs.contains(&name)
+                && (name.ends_with(TMP_SUFFIX)
+                    || (name.ends_with(&format!(".{BLOB_EXTENSION}")) && is_hash_name(&name)));
             if !is_dir && stale {
                 remove(&path);
             }
@@ -306,7 +306,7 @@ fn collect_garbage(dir: &Path, manifest: &ManifestDto) -> usize {
     }
     for (path, name, is_dir) in names(&dir.join(MEDIA_DIR)) {
         let stale =
-            name.ends_with(TMP_SUFFIX) || (is_hash_name(&name) && !media.contains(name.as_str()));
+            !media.contains(name.as_str()) && (name.ends_with(TMP_SUFFIX) || is_hash_name(&name));
         if !is_dir && stale {
             remove(&path);
         }

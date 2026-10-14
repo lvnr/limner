@@ -255,3 +255,37 @@ fn editor_state_is_kept_apart_from_the_document() {
     // A broken state file does not stop the document from loading.
     assert_documents_equal(&edited, &load_project(dir.path()).unwrap().document);
 }
+
+#[test]
+fn packing_refuses_names_that_are_not_project_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("p.limn");
+    save_project(&exhaustive_document(), &project, &fast()).unwrap();
+    let manifest_path = project.join("limn.json");
+    let original: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    let hash = original["drawings"][0]["blob"].as_str().unwrap().to_owned();
+    let edits: Vec<(&str, &str, String)> = vec![
+        ("drawings", "blob", "a".to_owned()),
+        ("drawings", "blob", String::new()),
+        ("drawings", "blob", hash.to_uppercase()),
+        ("drawings", "blob", "../../../../etc/passwd".to_owned()),
+        ("media", "file", r"..\..\x".to_owned()),
+        ("media", "file", r"C:\x".to_owned()),
+        ("media", "file", format!(r"{hash}.png\..\..\x")),
+        ("media", "file", format!("{hash}.")),
+        ("media", "file", "readme".to_owned()),
+    ];
+    for (table, member, name) in edits {
+        let mut manifest = original.clone();
+        manifest[table][0][member] = serde_json::json!(name);
+        std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let packed = dir.path().join("p.limnz");
+        let error = pack(&project, &packed).unwrap_err();
+        assert!(
+            matches!(error, FormatError::Manifest { .. }),
+            "{table} {name:?}: {error}"
+        );
+        assert!(!packed.exists());
+    }
+}

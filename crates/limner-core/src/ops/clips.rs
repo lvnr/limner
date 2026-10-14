@@ -56,7 +56,9 @@ pub fn clips_of(anim: &LayerAnim) -> Vec<Clip> {
 }
 
 /// Writes `clips` as the layer's visibility and offset keys. Clips are put in order,
-/// empty ones are dropped, and one that runs into the next is cut short there.
+/// empty ones are dropped, and one that runs into the next is cut short there. Two
+/// clips cannot start at the same time; only the first of them is kept, so edits
+/// check with [`starts_overlap`] first and refuse instead.
 pub fn set_clips(anim: &mut LayerAnim, clips: &[Clip]) {
     let mut clips: Vec<Clip> = clips
         .iter()
@@ -89,6 +91,18 @@ pub fn set_clips(anim: &mut LayerAnim, clips: &[Clip]) {
     anim.offset = offset;
 }
 
+/// True when two clips that are not empty start at the same moment, which the
+/// visibility keys cannot say: one of them would be lost.
+pub fn starts_overlap(clips: &[Clip]) -> bool {
+    let mut starts: Vec<Flicks> = clips
+        .iter()
+        .filter(|c| c.end.is_none_or(|end| end > c.start))
+        .map(|c| c.start)
+        .collect();
+    starts.sort_unstable();
+    starts.windows(2).any(|pair| pair[0] == pair[1])
+}
+
 fn edit<T>(
     doc: &mut Document,
     id: LayerId,
@@ -97,6 +111,11 @@ fn edit<T>(
     let layer = doc.layer_mut(id).ok_or(OpError::NoSuchLayer(id))?;
     let mut clips = clips_of(&layer.anim);
     let result = change(&mut clips)?;
+    if starts_overlap(&clips) {
+        return Err(OpError::Invalid(
+            "another clip of this layer already starts at that time".into(),
+        ));
+    }
     set_clips(&mut layer.anim, &clips);
     Ok(result)
 }
@@ -134,7 +153,7 @@ pub fn split_clip(doc: &mut Document, id: LayerId, time: Flicks) -> Result<(), O
         let second = Clip {
             start: time,
             end: clip.end,
-            trim: clip.trim + (time - clip.start),
+            trim: clip.trim.saturating_add(time.saturating_sub(clip.start)),
         };
         clip.end = Some(time);
         clips.push(second);
@@ -154,7 +173,7 @@ fn shift_keys<T: Clone>(track: &mut Track<T>, from: Flicks, until: Option<Flicks
         track.remove(key.time);
     }
     for mut key in moving {
-        key.time += delta;
+        key.time = key.time.saturating_add(delta);
         track.insert(key);
     }
 }
@@ -171,9 +190,9 @@ pub fn move_clip(
     let moved = edit(doc, id, |clips| {
         let clip = clips.get_mut(index).ok_or_else(|| no_clip(index))?;
         let before = *clip;
-        let delta = start - clip.start;
+        let delta = start.saturating_sub(clip.start);
         clip.start = start;
-        clip.end = clip.end.map(|end| end + delta);
+        clip.end = clip.end.map(|end| end.saturating_add(delta));
         Ok((before, delta))
     })?;
     let (before, delta) = moved;
@@ -206,8 +225,8 @@ pub fn trim_clip(
         if let Some(start) = start {
             // Trimming the start eats into the content; pulling it back out reveals it
             // again, as far as there is content to reveal.
-            let start = start.max(0).max(clip.start - clip.trim);
-            clip.trim += start - clip.start;
+            let start = start.max(0).max(clip.start.saturating_sub(clip.trim));
+            clip.trim = clip.trim.saturating_add(start.saturating_sub(clip.start));
             clip.start = start;
         }
         if let Some(end) = end {
@@ -242,7 +261,9 @@ pub fn duplicate_clip(
         let start = start.max(0);
         clips.push(Clip {
             start,
-            end: source.end.map(|end| end - source.start + start),
+            end: source
+                .end
+                .map(|end| end.saturating_sub(source.start).saturating_add(start)),
             trim: source.trim,
         });
         Ok(())
@@ -456,5 +477,51 @@ mod tests {
         delete_clip(&mut doc, id, 0).unwrap();
         assert!(spans(&doc, id).is_empty());
         assert!(delete_clip(&mut doc, id, 0).is_err());
+    }
+
+    #[test]
+    fn a_clip_moved_or_copied_onto_another_clips_start_is_refused() {
+        let (mut doc, id) = doc();
+        let clips = [
+            Clip {
+                start: 0,
+                end: Some(100),
+                trim: 0,
+            },
+            Clip {
+                start: 200,
+                end: Some(300),
+                trim: 7,
+            },
+        ];
+        set_clips(&mut doc.layer_mut(id).unwrap().anim, &clips);
+        let before = spans(&doc, id);
+        assert!(move_clip(&mut doc, id, 0, 200).is_err());
+        assert_eq!(spans(&doc, id), before, "neither clip is lost");
+        assert!(duplicate_clip(&mut doc, id, 1, 0).is_err());
+        assert!(duplicate_clip(&mut doc, id, 0, 0).is_err());
+        assert_eq!(spans(&doc, id), before);
+        // Landing anywhere else is fine: an overlapped clip is cut short as before.
+        move_clip(&mut doc, id, 0, 150).unwrap();
+        assert_eq!(spans(&doc, id), [(150, Some(200), 0), (200, Some(300), 7)]);
+    }
+
+    #[test]
+    fn extreme_clip_times_from_a_file_do_not_overflow() {
+        let (mut doc, id) = doc();
+        let clips = [Clip {
+            start: Flicks::MAX - 10,
+            end: None,
+            trim: Flicks::MIN,
+        }];
+        set_clips(&mut doc.layer_mut(id).unwrap().anim, &clips);
+        split_clip(&mut doc, id, Flicks::MAX - 5).unwrap();
+        // Pulling the start out reveals content as far as it goes: here, nowhere.
+        trim_clip(&mut doc, id, 1, Some(0), None).unwrap();
+        move_clip(&mut doc, id, 1, 0).unwrap();
+        duplicate_clip(&mut doc, id, 0, Flicks::MAX - 1).unwrap();
+        assert_eq!(spans(&doc, id).len(), 3);
+        assert!(clip_at(&doc.layer(id).unwrap().anim, Flicks::MAX - 1).active);
+        doc.validate().unwrap();
     }
 }
