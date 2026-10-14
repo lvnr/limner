@@ -159,6 +159,10 @@ func export_file() -> Dictionary:
 	lines.append("%s, written in %s s" % [String.humanize_size(int(reply.bytes)), String.num(seconds, 1)])
 	if seconds > 0.5:
 		lines.append("The window did not respond while the file was written.")
+	# What the format could not hold, such as sounds in glTF.
+	var warnings: PackedStringArray = reply.get("warnings", PackedStringArray())
+	for warning in warnings:
+		lines.append(warning)
 	lines.append(path)
 	_report.text = "\n".join(lines)
 	editor.message.emit("Exported %s" % path, false)

@@ -304,6 +304,26 @@ func test_every_format_is_written_with_what_its_report_says() -> void:
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
+func test_what_a_format_leaves_out_is_shown() -> void:
+	var panel := await _panel()
+	var section := panel.model
+	LimnerDemo.run(editor)
+	var folder := _scratch("sound")
+	DirAccess.make_dir_recursive_absolute(folder)
+	editor.import_file(LayerTestKit.wav(folder.path_join("tone.wav"), 0.3, 1))
+	await _choose(section._format, 0)
+	check_eq(section.format_chosen(), "glb", "glTF first")
+	section._target.set_path(folder.path_join("with_sound.glb"))
+	var reply: Dictionary = await section.export_file()
+	check(reply.ok, "written: %s" % reply.error)
+	var warnings: PackedStringArray = reply.get("warnings", PackedStringArray())
+	check_eq(warnings.size(), 1, "glTF holds no sound, and says so: %s" % [warnings])
+	if warnings.size() == 1:
+		check(section._report.text.contains(warnings[0]), "the panel shows it: %s" % section._report.text)
+	_remove(folder)
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
 func test_an_export_that_cannot_be_made_says_why() -> void:
 	LimnerDemo.run(editor)
 	var folder := _scratch("refused")
