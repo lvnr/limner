@@ -28,6 +28,11 @@ pub struct Playback {
     carry: f64,
 }
 
+/// The latest time the playhead goes to, and the longest a sequence may loop:
+/// ten thousand hours. Far beyond any piece, and far enough below the largest
+/// number of flicks that arithmetic on times near it cannot overflow.
+pub(crate) const MAX_TIME: Flicks = 10_000 * 3600 * FLICKS_PER_SECOND;
+
 /// The working range, when the document has a usable one.
 fn range(doc: &Document) -> Option<(Flicks, Flicks)> {
     let (start, end) = (doc.settings.range_start.max(0), doc.settings.range_end);
@@ -49,7 +54,7 @@ impl Playback {
 
     /// Moves the playhead. Scrubbing ignores Stops and forgets time spent waiting at them.
     pub fn seek(&mut self, time: Flicks) {
-        self.time = time.max(0);
+        self.time = time.clamp(0, MAX_TIME);
         self.held = 0;
         self.waiting_at = None;
         self.carry = 0.0;
@@ -91,7 +96,7 @@ impl Playback {
             self.held += step;
             return None;
         }
-        let target = self.time + step;
+        let target = self.time.saturating_add(step);
 
         // The first chapter mark in (time, target].
         let mark = doc.layer(doc.root()).and_then(|root| {
@@ -102,9 +107,9 @@ impl Playback {
                 .find(|k| k.time > self.time && k.time <= target && k.value != Action::Play)
                 .map(|k| (k.time, k.value))
         });
-        let end = range(doc)
-            .map(|(_, end)| end)
-            .filter(|end| *end > self.time && *end <= target);
+        // The playhead may already be past the end, moved there while playing: that
+        // counts as reaching it too.
+        let end = range(doc).map(|(_, end)| end).filter(|end| *end <= target);
 
         match (mark, end) {
             (Some((at, action)), end) if end.is_none_or(|end| at <= end) => match action {
@@ -125,7 +130,8 @@ impl Playback {
                     self.seek(start + (target - end) % (end - start));
                     Some(PlaybackEvent::Looped)
                 } else {
-                    self.time = end;
+                    // A playhead already past the end stays where it was put.
+                    self.time = self.time.max(end);
                     self.playing = false;
                     Some(PlaybackEvent::ReachedEnd)
                 }
@@ -145,7 +151,7 @@ impl Playback {
         } else {
             0
         };
-        let before = self.time - slack;
+        let before = self.time.saturating_sub(slack);
         let marks = doc
             .layer(doc.root())
             .map(|root| {

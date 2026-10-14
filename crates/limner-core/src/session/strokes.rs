@@ -100,8 +100,12 @@ impl Session {
             .drawing_mut(target.drawing)
             .ok_or_else(|| CommandError::invalid("that frame no longer exists"))?;
         let mut ids = BTreeSet::new();
+        // Found once and counted up: looking for a free id per stroke would go over
+        // every stroke in the drawing each time.
+        let mut next_id = drawing.next_stroke_id();
         for (brush, points) in built {
-            let id = drawing.next_stroke_id();
+            let id = next_id;
+            next_id = next_id.wrapping_add(1);
             drawing.push_stroke(crate::model::Stroke::new(id, brush, false, points));
             ids.insert(id);
         }
@@ -204,6 +208,8 @@ impl Session {
             vec![Drawing::new()]
         };
         let mut moved: BTreeMap<usize, BTreeSet<u32>> = BTreeMap::new();
+        // The new drawings start empty, so their ids simply count up from zero.
+        let mut next_ids = vec![0u32; new_drawings.len()];
         for (layer, drawing_id, ids) in &selected {
             let slot = if keeps_frames {
                 source_paint
@@ -227,7 +233,8 @@ impl Session {
                     Some(x) => transformed_stroke(stroke, x),
                     None => (**stroke).clone(),
                 };
-                copy_of.id = new_drawings[slot].next_stroke_id();
+                copy_of.id = next_ids[slot];
+                next_ids[slot] = next_ids[slot].wrapping_add(1);
                 moved.entry(slot).or_default().insert(copy_of.id);
                 new_drawings[slot].push_stroke(copy_of);
             }

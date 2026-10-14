@@ -255,10 +255,15 @@ impl Session {
             self.paint_layer = Some(paint);
         }
         self.transform_target = target.filter(|id| *id != self.doc.root());
-        if let Ok(view) = serde_json::from_value::<crate::math::Xform>(state["view"].clone()) {
-            if view.is_finite() && view.scale > 0.0 {
-                self.view.world_from_viewer = view;
-            }
+        // A view with no usable rotation keeps the default; one zoomed beyond the
+        // limits comes back at the nearest limit, where it can still be zoomed.
+        if let Some(mut view) = serde_json::from_value::<crate::math::Xform>(state["view"].clone())
+            .ok()
+            .and_then(crate::math::Xform::usable)
+        {
+            let (smallest, largest) = super::DEFAULT_ZOOM_LIMITS;
+            view.scale = view.scale.clamp(smallest, largest);
+            self.view.world_from_viewer = view;
         }
         if let Some(time) = state["time"].as_i64() {
             self.playback.seek(time);

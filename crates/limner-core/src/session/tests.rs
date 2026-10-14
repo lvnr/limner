@@ -4,6 +4,7 @@ use crate::model::{Brush, Drawing, Interp, Point, Stroke};
 use crate::time::{from_seconds, FrameRate};
 use glam::DQuat;
 use serde_json::json;
+use std::collections::BTreeSet;
 
 fn run(session: &mut Session, command: Value) -> Value {
     session
@@ -947,4 +948,455 @@ fn ready_made_strokes_can_be_added_from_either_space() {
     session.undo();
     session.undo();
     assert_eq!(session.doc().stroke_count(), 0);
+}
+
+// ---- edits nested inside each other ----
+
+/// One frame of input: the drawing hand at `position` with its grip and trigger as
+/// given, the other hand at rest.
+fn hands(position: DVec3, grip: f32, trigger: f32) -> InputFrame {
+    InputFrame {
+        main: HandInput {
+            tracked: true,
+            position,
+            grip,
+            trigger,
+            ..HandInput::default()
+        },
+        off: HandInput {
+            tracked: true,
+            position: DVec3::new(-0.2, 1.0, -0.3),
+            ..HandInput::default()
+        },
+        ..InputFrame::default()
+    }
+}
+
+#[test]
+fn an_inner_edit_cancelled_puts_back_only_what_it_did() {
+    let mut session = Session::new(Document::new());
+    let paint = session.paint_layer().unwrap();
+    session.begin_transaction("Change layer opacity");
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "opacity": 0.5}),
+    );
+    session.begin_transaction("Inner");
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "opacity": 0.2}),
+    );
+    session.cancel_transaction();
+    assert!(session.in_transaction(), "the outer edit goes on");
+    assert_eq!(session.doc().layer(paint).unwrap().opacity, 0.5);
+
+    session.begin_transaction("Inner");
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "opacity": 0.3}),
+    );
+    session.commit_transaction();
+    assert!(session.in_transaction());
+    assert_eq!(session.history().undo_depth(), 0, "not a step of its own");
+    session.commit_transaction();
+    assert!(!session.in_transaction());
+    assert_eq!(session.history().undo_depth(), 1);
+    assert_eq!(
+        session.history().undo_label(),
+        Some("Change layer opacity"),
+        "the step is named after the outer edit"
+    );
+    session.undo();
+    assert_eq!(session.doc().layer(paint).unwrap().opacity, 1.0);
+}
+
+#[test]
+fn a_tool_that_cannot_start_leaves_a_carried_layer_alone() {
+    let mut session = Session::new(Document::new());
+    let paint = session.paint_layer().unwrap();
+    let light = layer_id(&run(
+        &mut session,
+        json!({"cmd": "add_layer", "kind": "light"}),
+    ));
+    run(
+        &mut session,
+        json!({"cmd": "set_transform_target", "layer": light}),
+    );
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "locked": true}),
+    );
+    let steps = session.history().undo_depth();
+    let start = session.doc().layer(light).unwrap().transform;
+    let from = DVec3::new(0.2, 1.0, -0.3);
+    session.update(&hands(from, 0.0, 0.0));
+    session.update(&hands(from, 1.0, 0.0));
+    session.update(&hands(from + DVec3::X * 0.1, 1.0, 0.0));
+    // The paint layer is locked, so the trigger cannot paint.
+    let feedback = session.update(&hands(from + DVec3::X * 0.1, 1.0, 1.0));
+    assert!(feedback.iter().any(|f| matches!(f, Feedback::Message(_))));
+    assert!(session.in_transaction(), "the layer is still being moved");
+    assert_ne!(
+        session.doc().layer(light).unwrap().transform,
+        start,
+        "and stays where the hand took it"
+    );
+    session.update(&hands(from + DVec3::X * 0.2, 1.0, 1.0));
+    session.update(&hands(from + DVec3::X * 0.2, 1.0, 0.0));
+    let revision = session.doc_revision();
+    session.update(&hands(from + DVec3::X * 0.2, 0.0, 0.0));
+    assert!(!session.in_transaction());
+    assert!(session.doc_revision() > revision, "interfaces hear of it");
+    assert_eq!(session.history().undo_depth(), steps + 1);
+    assert_eq!(session.history().undo_label(), Some("Move layer"));
+    session.undo();
+    assert_eq!(session.doc().layer(light).unwrap().transform, start);
+}
+
+#[test]
+fn a_carry_that_cannot_start_leaves_a_stroke_in_flight_alone() {
+    let mut session = Session::new(Document::new());
+    let paint = session.paint_layer().unwrap();
+    let light = layer_id(&run(
+        &mut session,
+        json!({"cmd": "add_layer", "kind": "light"}),
+    ));
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": light, "locked": true}),
+    );
+    run(
+        &mut session,
+        json!({"cmd": "set_transform_target", "layer": light}),
+    );
+    run(
+        &mut session,
+        json!({"cmd": "select_layers", "layers": [paint]}),
+    );
+    session.tools.paint.brush = tools::BrushStyle::Ribbon;
+    let steps = session.history().undo_depth();
+    let from = DVec3::new(0.0, 1.0, -0.5);
+    session.update(&hands(from, 0.0, 0.0));
+    for i in 0..5 {
+        session.update(&hands(from + DVec3::X * (i as f64 * 0.02), 0.0, 1.0));
+    }
+    // The light is locked, so the grip cannot carry it.
+    let feedback = session.update(&hands(from + DVec3::X * 0.1, 1.0, 1.0));
+    assert!(feedback.iter().any(|f| matches!(f, Feedback::Message(_))));
+    for i in 6..10 {
+        session.update(&hands(from + DVec3::X * (i as f64 * 0.02), 1.0, 1.0));
+    }
+    session.update(&hands(from + DVec3::X * 0.2, 1.0, 0.0));
+    assert_eq!(session.history().undo_depth(), steps + 1);
+    assert_eq!(session.history().undo_label(), Some("Paint stroke"));
+    assert_eq!(session.doc().stroke_count(), 1, "the stroke was kept");
+    let drawn = super::tools::tests::strokes(&session, paint);
+    let start = session
+        .view
+        .viewer_from_world()
+        .transform_point(drawn[0].points()[0].position().as_dvec3());
+    assert!(
+        start.distance(from) < 0.01,
+        "whole, from where the trigger was pulled: {start:?}"
+    );
+    session.update(&hands(from + DVec3::X * 0.2, 0.0, 0.0));
+    assert!(!session.in_transaction());
+}
+
+// ---- transforms from outside ----
+
+#[test]
+fn a_transform_whose_rotation_is_not_a_rotation_is_refused() {
+    let mut session = Session::new(Document::new());
+    let paint = session.paint_layer().unwrap();
+    let before = session.doc().clone();
+    for rotation in [json!([0.0, 0.0, 0.0, 0.0]), json!([0.0, 0.0, 0.0, 1e-300])] {
+        let transform = json!({"rotation": rotation, "scale": 1.0, "translation": [0.0, 0.0, 0.0]});
+        assert!(matches!(
+            fail(
+                &mut session,
+                json!({"cmd": "set_layer", "layer": paint, "transform": transform})
+            ),
+            CommandError::Invalid(_)
+        ));
+        assert!(matches!(
+            fail(
+                &mut session,
+                json!({"cmd": "set_layer", "layer": paint, "pivot": transform})
+            ),
+            CommandError::Invalid(_)
+        ));
+    }
+    assert_eq!(session.doc(), &before);
+
+    // A rotation that is only the wrong length is a rotation all the same.
+    let long =
+        json!({"rotation": [0.0, 0.0, 0.0, 2.0], "scale": 1.0, "translation": [1.0, 0.0, 0.0]});
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "transform": long, "pivot": long}),
+    );
+    let layer = session.doc().layer(paint).unwrap();
+    assert_eq!(layer.transform.rotation, DQuat::IDENTITY);
+    assert_eq!(layer.pivot.rotation, DQuat::IDENTITY, "the pivot too");
+    assert!(layer.pivot.is_usable());
+}
+
+#[test]
+fn a_saved_view_that_is_not_usable_is_not_restored() {
+    let mut session = Session::new(Document::new());
+    let view = session.view;
+    session.restore_editor_state(&json!({
+        "view": {"rotation": [0.0, 0.0, 0.0, 0.0], "scale": 1.0, "translation": [1.0, 2.0, 3.0]}
+    }));
+    assert_eq!(
+        session.view, view,
+        "a rotation of zero length is no rotation"
+    );
+
+    session.restore_editor_state(&json!({
+        "view": {"rotation": [0.0, 0.0, 0.0, 1.0], "scale": 1e30, "translation": [1.0, 2.0, 3.0]}
+    }));
+    let (smallest, largest) = DEFAULT_ZOOM_LIMITS;
+    assert_eq!(session.view.world_from_viewer.scale, largest);
+    assert_eq!(
+        session.view.world_from_viewer.translation,
+        DVec3::new(1.0, 2.0, 3.0)
+    );
+    session.restore_editor_state(&json!({
+        "view": {"rotation": [0.0, 0.0, 0.0, 1.0], "scale": 1e-30, "translation": [0.0, 0.0, 0.0]}
+    }));
+    assert_eq!(session.view.world_from_viewer.scale, smallest);
+    // A view inside the limits can still be zoomed.
+    session
+        .view
+        .zoom_about(DVec3::ZERO, 0.5, DEFAULT_ZOOM_LIMITS);
+    assert!(session.view.world_from_viewer.scale > smallest);
+}
+
+// ---- whether there is something to save ----
+
+#[test]
+fn the_document_is_clean_whenever_it_is_as_it_was_saved() {
+    let mut session = Session::new(Document::new());
+    let paint = session.paint_layer().unwrap();
+    assert!(!session.is_dirty());
+
+    // Setting a value to what it already is.
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "opacity": 1.0}),
+    );
+    assert!(!session.is_dirty(), "nothing changed");
+
+    // A slider dragged away and back.
+    session.begin_transaction("Change layer opacity");
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "opacity": 0.4}),
+    );
+    assert!(session.is_dirty(), "changed for now");
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "opacity": 1.0}),
+    );
+    session.commit_transaction();
+    assert!(!session.is_dirty(), "dragged back to where it was");
+
+    // A cancelled edit.
+    session.begin_transaction("Change layer opacity");
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "opacity": 0.4}),
+    );
+    session.cancel_transaction();
+    assert!(!session.is_dirty(), "cancelled");
+
+    // Undoing back to the saved state, and redoing away from it.
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "opacity": 0.4}),
+    );
+    assert!(session.is_dirty());
+    session.undo();
+    assert!(!session.is_dirty(), "undone back to the saved state");
+    session.redo();
+    assert!(session.is_dirty());
+    session.mark_saved();
+    assert!(!session.is_dirty());
+    session.undo();
+    assert!(session.is_dirty(), "the saved state had the change");
+    session.redo();
+    assert!(!session.is_dirty(), "redone back to the saved state");
+
+    // Saving does not stop a later change counting.
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": paint, "visible": false}),
+    );
+    assert!(session.is_dirty());
+    session.mark_unsaved();
+    session.undo();
+    assert!(session.is_dirty(), "marked unsaved, whatever was done");
+}
+
+// ---- values too large to work with ----
+
+#[test]
+fn huge_times_and_frame_counts_do_not_overflow() {
+    let mut session = Session::new(Document::new());
+    run(
+        &mut session,
+        json!({"cmd": "step_frames", "frames": i64::MAX}),
+    );
+    assert!(session.playback.time > 0 && session.playback.time <= playback::MAX_TIME);
+    run(
+        &mut session,
+        json!({"cmd": "step_frames", "frames": i64::MAX}),
+    );
+    run(
+        &mut session,
+        json!({"cmd": "step_frames", "frames": i64::MIN}),
+    );
+    assert_eq!(session.playback.time, 0);
+
+    run(&mut session, json!({"cmd": "seek", "time": i64::MAX}));
+    assert_eq!(session.playback.time, playback::MAX_TIME);
+    session.options.loop_range = false;
+    session.playback.playing = true;
+    session.advance(1.0);
+    session.options.loop_range = true;
+    session.playback.playing = true;
+    session.advance(1.0);
+    session.playback.time = i64::MAX;
+    session.playback.playing = true;
+    session.advance(1.0);
+
+    let sequence = layer_id(&run(
+        &mut session,
+        json!({"cmd": "add_layer", "kind": "sequence"}),
+    ));
+    run(
+        &mut session,
+        json!({"cmd": "set_layer_kind", "layer": sequence, "values": {"loop_duration": i64::MAX}}),
+    );
+    let stored = session.doc().layer(sequence).unwrap().as_group().unwrap();
+    assert!(stored.sequence.unwrap().loop_duration <= playback::MAX_TIME);
+    assert!(matches!(
+        fail(
+            &mut session,
+            json!({"cmd": "bake_sequence", "layer": sequence})
+        ),
+        CommandError::Invalid(_)
+    ));
+}
+
+#[test]
+fn playing_past_the_end_of_the_range_stops_or_loops() {
+    let mut session = Session::new(Document::new());
+    let end = session.doc().settings.range_end;
+    session.options.loop_range = false;
+    run(&mut session, json!({"cmd": "play"}));
+    run(
+        &mut session,
+        json!({"cmd": "seek", "time": end + from_seconds(5.0)}),
+    );
+    session.playback.playing = true;
+    assert_eq!(session.advance(0.1), Some(PlaybackEvent::ReachedEnd));
+    assert!(!session.playback.playing);
+
+    session.options.loop_range = true;
+    run(
+        &mut session,
+        json!({"cmd": "seek", "time": end + from_seconds(5.0)}),
+    );
+    session.playback.playing = true;
+    assert_eq!(session.advance(0.1), Some(PlaybackEvent::Looped));
+    assert!(session.playback.time < end);
+}
+
+// ---- stroke ids ----
+
+#[test]
+fn strokes_added_in_one_go_get_ids_of_their_own() {
+    let mut doc = Document::new();
+    let paint = doc.find_by_path("Root/Paint").unwrap();
+    let drawing = doc.layer(paint).unwrap().as_paint().unwrap().drawings[0];
+    let mut existing = stroke_at(0.0);
+    existing.id = 41;
+    *doc.drawing_mut(drawing).unwrap() = Drawing::from_strokes([existing]);
+    let mut session = Session::new(doc);
+    let specs: Vec<Value> = (0..50)
+        .map(|i| json!({"points": [[i as f64, 0.0, 0.0]], "width": 0.1}))
+        .collect();
+    run(
+        &mut session,
+        json!({"cmd": "add_strokes", "layer": paint, "strokes": specs, "select": true}),
+    );
+    let ids: Vec<u32> = session
+        .doc()
+        .drawing(drawing)
+        .unwrap()
+        .strokes()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(ids.len(), 51);
+    assert_eq!(ids[0], 41);
+    assert_eq!(ids[1..], (42..92).collect::<Vec<u32>>());
+
+    // Moved to a layer of their own, the selected strokes are numbered afresh.
+    let moved = layer_id(&run(
+        &mut session,
+        json!({"cmd": "selection_to_new_layer", "copy": true}),
+    ));
+    let paint = session.doc().layer(moved).unwrap().as_paint().unwrap();
+    let ids: BTreeSet<u32> = session
+        .doc()
+        .drawing(paint.drawings[0])
+        .unwrap()
+        .strokes()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(ids, (0..50).collect());
+}
+
+// ---- the Eraser ----
+
+#[test]
+fn the_eraser_removes_only_strokes_it_erased_itself() {
+    use super::tools::tests::{drag, strokes};
+    let mut doc = Document::new();
+    let paint = doc.find_by_path("Root/Paint").unwrap();
+    let drawing = doc.layer(paint).unwrap().as_paint().unwrap().drawings[0];
+    let mut hidden = stroke_at(0.5);
+    hidden.id = 1;
+    for point in hidden.points_mut() {
+        point.opacity = 0.0;
+    }
+    *doc.drawing_mut(drawing).unwrap() = Drawing::from_strokes([stroke_at(0.0), hidden]);
+    let mut session = Session::new(doc);
+    session.view.world_from_viewer = Xform::IDENTITY;
+    session.tools.select_tool(tools::ToolKind::Eraser);
+    session.tools.eraser.size = 0.02;
+    session.tools.eraser.strength = 1.0;
+    // A touch on the visible stroke leaves the invisible one where it is.
+    drag(
+        &mut session,
+        DVec3::new(0.0, 0.0, 0.0),
+        DVec3::new(0.0, 0.0, 0.0),
+        1,
+    );
+    let ids: Vec<u32> = strokes(&session, paint).iter().map(|s| s.id).collect();
+    assert_eq!(ids, [0, 1], "a stroke made invisible on purpose stays");
+    assert_eq!(strokes(&session, paint)[0].points()[0].opacity, 0.0);
+
+    // Erased from end to end, the visible one goes.
+    drag(
+        &mut session,
+        DVec3::new(0.0, 0.0, 0.0),
+        DVec3::new(0.0, 1.0, 0.0),
+        60,
+    );
+    let ids: Vec<u32> = strokes(&session, paint).iter().map(|s| s.id).collect();
+    assert_eq!(ids, [1]);
 }

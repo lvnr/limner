@@ -297,10 +297,21 @@ impl SphereGesture {
         if self.tool != ToolKind::Eraser {
             return;
         }
-        // A stroke erased from end to end is gone, not merely invisible.
+        // A stroke this gesture erased from end to end is gone, not merely invisible.
+        // Only those: a stroke that was already invisible, or that the gesture never
+        // touched (one outside the selection, say), stays as it is.
+        let mut erased: HashMap<DrawingId, HashSet<u32>> = HashMap::new();
+        for ((drawing, id), touched) in &self.touched {
+            if !touched.original.is_fully_erased() {
+                erased.entry(*drawing).or_default().insert(*id);
+            }
+        }
         for drawing in self.drawings {
+            let Some(ids) = erased.get(&drawing) else {
+                continue;
+            };
             session.edit_drawing(drawing, |drawing| {
-                drawing.retain(|stroke| !stroke.is_fully_erased()) > 0
+                drawing.retain(|stroke| !(ids.contains(&stroke.id) && stroke.is_fully_erased())) > 0
             });
         }
     }

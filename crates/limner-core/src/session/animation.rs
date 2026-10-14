@@ -176,9 +176,11 @@ impl Session {
                 continue;
             };
             // A stroke is not copied onto itself.
+            let mut next_id = drawing.next_stroke_id();
             for (_, stroke) in strokes.iter().filter(|(from, _)| *from != target) {
                 let mut copy = stroke.clone();
-                copy.id = drawing.next_stroke_id();
+                copy.id = next_id;
+                next_id = next_id.wrapping_add(1);
                 drawing.push_stroke(copy);
                 copies += 1;
             }
@@ -206,8 +208,11 @@ impl Session {
         if let Some(target) = target {
             let step = paint.rate.frame_duration();
             self.playback.pause();
-            self.playback
-                .seek(self.playback.time + step * (target as i64 - index as i64));
+            self.playback.seek(
+                self.playback
+                    .time
+                    .saturating_add(step.saturating_mul(target as i64 - index as i64)),
+            );
         }
         Ok(())
     }
@@ -468,7 +473,10 @@ impl Session {
             .ok_or_else(|| CommandError::invalid("the root cannot be baked"))?;
         let rate = self.doc.settings.rate;
         let step = rate.frame_duration().max(1);
-        let frame_count = ((sequence.loop_duration + step - 1) / step).max(1) as usize;
+        // Rounded up, without adding to a loop length that may be near the largest
+        // number there is.
+        let frames = sequence.loop_duration / step + i64::from(sequence.loop_duration % step != 0);
+        let frame_count = usize::try_from(frames.max(1)).unwrap_or(usize::MAX);
         if frame_count > MAX_FRAMES {
             return Err(CommandError::invalid("the loop is too long to bake"));
         }
@@ -495,13 +503,15 @@ impl Session {
                 Some((_, index)) => *index,
                 None => {
                     let mut combined = Drawing::new();
+                    let mut next_id = 0u32;
                     for (drawing, placement, opacity) in &parts {
                         let Some(strokes) = self.doc.drawing(*drawing) else {
                             continue;
                         };
                         for stroke in strokes.strokes() {
                             let mut baked = transformed_stroke(stroke, placement);
-                            baked.id = combined.next_stroke_id();
+                            baked.id = next_id;
+                            next_id = next_id.wrapping_add(1);
                             if *opacity < 1.0 {
                                 for point in baked.points_mut() {
                                     point.opacity *= opacity;

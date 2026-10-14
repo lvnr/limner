@@ -8,6 +8,9 @@
 use glam::{DAffine3, DMat3, DQuat, DVec3};
 use serde::{Deserialize, Serialize};
 
+/// How far a rotation's length may be from one and still count as a unit rotation.
+const UNIT_TOLERANCE: f64 = 1e-3;
+
 /// Mirror applied before rotation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -124,6 +127,30 @@ impl Xform {
 
     pub fn is_finite(&self) -> bool {
         self.rotation.is_finite() && self.scale.is_finite() && self.translation.is_finite()
+    }
+
+    /// True when the transform can be stored and worked with as it is: finite, a
+    /// rotation of unit length (give or take rounding), and a scale above zero.
+    /// Finite is not enough: a rotation of zero length turns into NaN when normalised,
+    /// and one of the wrong length makes the inverse wrong.
+    pub fn is_usable(&self) -> bool {
+        self.is_finite()
+            && self.scale > 0.0
+            && (self.rotation.length() - 1.0).abs() <= UNIT_TOLERANCE
+    }
+
+    /// The transform with its rotation brought to unit length, when it is usable after
+    /// that. A rotation of zero (or nearly zero) length has no direction to keep, so a
+    /// transform with one gives `None`, as does anything not finite or a scale that is
+    /// not above zero. Use this on transforms that come from outside.
+    pub fn usable(self) -> Option<Xform> {
+        let length = self.rotation.length();
+        if !(length.is_finite() && length > 1e-12) {
+            return None;
+        }
+        let mut usable = self;
+        usable.rotation = self.rotation * (1.0 / length);
+        usable.is_usable().then_some(usable)
     }
 
     pub fn transform_point(&self, p: DVec3) -> DVec3 {
@@ -435,6 +462,40 @@ mod tests {
         // Plain mixing does not have this property.
         let plain = Xform::mix(&a, &b, 0.5);
         assert!((plain.transform_point(DVec3::X) - start.lerp(end, 0.5)).length() > 1e-3);
+    }
+
+    #[test]
+    fn a_usable_transform_has_a_unit_rotation_and_a_positive_scale() {
+        assert!(Xform::IDENTITY.is_usable());
+        let zero = Xform {
+            rotation: DQuat::from_xyzw(0.0, 0.0, 0.0, 0.0),
+            ..Xform::IDENTITY
+        };
+        assert!(zero.is_finite() && !zero.is_usable());
+        assert_eq!(zero.usable(), None, "nothing to normalise");
+        let tiny = Xform {
+            rotation: DQuat::from_xyzw(0.0, 0.0, 0.0, 1e-300),
+            ..Xform::IDENTITY
+        };
+        assert_eq!(tiny.usable(), None);
+        let long = Xform {
+            rotation: DQuat::from_xyzw(0.0, 0.0, 0.0, 2.0),
+            ..Xform::IDENTITY
+        };
+        assert!(!long.is_usable(), "not a unit rotation as it stands");
+        assert_eq!(long.usable(), Some(Xform::IDENTITY), "but it can be one");
+        let nearly = Xform {
+            rotation: DQuat::from_xyzw(0.0, 0.0, 0.0, 1.0 + 1e-6),
+            ..Xform::IDENTITY
+        };
+        assert!(nearly.is_usable(), "rounding is allowed for");
+        for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let bad = Xform::from_scale(scale);
+            assert!(!bad.is_usable());
+            assert_eq!(bad.usable(), None);
+        }
+        let lost = Xform::from_translation(DVec3::new(f64::NAN, 0.0, 0.0));
+        assert_eq!(lost.usable(), None);
     }
 
     #[test]

@@ -48,11 +48,20 @@ use tools::ToolSettings;
 
 /// An edit in progress that spans several commands or frames of input, such as
 /// dragging a slider. It becomes one undo step.
+///
+/// Edits can start inside one another: a tool can be pulled while a grip carries a
+/// layer, and the other way round. Each start leaves a savepoint, so that cancelling
+/// one puts back only what happened since it started, and the outer edit carries on.
 struct Transaction {
+    label: String,
+    /// One for each edit started and not yet finished, the outermost first.
+    savepoints: Vec<Savepoint>,
+}
+
+/// The document as it was when an edit started.
+struct Savepoint {
     before: Document,
     revision: u64,
-    label: String,
-    depth: u32,
 }
 
 pub struct Session {
@@ -68,10 +77,12 @@ pub struct Session {
     paint_layer: Option<LayerId>,
     /// What grabbing moves; `None` is the view.
     transform_target: Option<LayerId>,
-    /// Counts every change to the document: whether an edit did anything, and
-    /// whether there is something to save.
+    /// Counts every change to the document: whether an edit did anything. It only
+    /// goes up, except that an edit found to change nothing puts it back.
     edits: u64,
-    saved_edits: u64,
+    /// The document as last saved or opened, and the edit count then; `None` when it
+    /// is to count as unsaved whatever is done to it.
+    saved: Option<(u64, Document)>,
     /// Counts document changes an interface should redraw for. A tool at work changes
     /// strokes every frame without touching this until it is done.
     doc_revision: u64,
@@ -119,7 +130,7 @@ impl Session {
             paint_layer: None,
             transform_target: None,
             edits: 1,
-            saved_edits: 1,
+            saved: None,
             doc_revision: 1,
             state_revision: 1,
             transaction: None,
@@ -140,6 +151,7 @@ impl Session {
         };
         session.go_to_default_viewpoint();
         session.adopt_document();
+        session.saved = Some((session.edits, session.doc.clone()));
         session
     }
 
@@ -160,7 +172,7 @@ impl Session {
         self.paint_layer = None;
         self.transform_target = None;
         self.edits += 1;
-        self.saved_edits = self.edits;
+        self.saved = Some((self.edits, self.doc.clone()));
         self.doc_revision += 1;
         self.state_revision += 1;
         self.view = View::default();
@@ -220,19 +232,24 @@ impl Session {
         self.state_revision += 1;
     }
 
-    /// True when the document has changed since it was last saved or opened.
+    /// True when the document differs from what was last saved or opened. Changes
+    /// that were undone, cancelled or dragged back to where they started do not count.
     pub fn is_dirty(&self) -> bool {
-        self.edits != self.saved_edits
+        match &self.saved {
+            None => true,
+            // Comparing is cheap: unchanged parts are shared, and compared by address.
+            Some((edits, doc)) => *edits != self.edits && !self.doc.same_as(doc),
+        }
     }
 
     pub fn mark_saved(&mut self) {
-        self.saved_edits = self.edits;
+        self.saved = Some((self.edits, self.doc.clone()));
         self.touch_state();
     }
 
     /// Counts the document as changed since it was saved, whatever was done to it.
     pub fn mark_unsaved(&mut self) {
-        self.saved_edits = 0;
+        self.saved = None;
         self.touch_state();
     }
 
@@ -365,44 +382,64 @@ impl Session {
 
     /// Starts an edit that spans several commands, such as a slider drag. Everything
     /// until the matching [`Session::commit_transaction`] becomes one undo step.
+    ///
+    /// Started inside another edit, it becomes part of that one: the undo step comes
+    /// when the outermost edit is committed, and takes the outermost edit's name.
     pub fn begin_transaction(&mut self, label: impl Into<String>) {
+        // A document is cheap to copy: its strokes and layers are shared.
+        let savepoint = Savepoint {
+            before: self.doc.clone(),
+            revision: self.edits,
+        };
         match &mut self.transaction {
-            Some(transaction) => transaction.depth += 1,
+            Some(transaction) => transaction.savepoints.push(savepoint),
             None => {
                 self.transaction = Some(Transaction {
-                    before: self.doc.clone(),
-                    revision: self.edits,
                     label: label.into(),
-                    depth: 1,
+                    savepoints: vec![savepoint],
                 })
             }
         }
     }
 
+    /// Finishes the edit started last. What it did stays, inside the edit around it
+    /// if there is one, and becomes an undo step otherwise.
     pub fn commit_transaction(&mut self) {
         let Some(transaction) = &mut self.transaction else {
             return;
         };
-        transaction.depth -= 1;
-        if transaction.depth > 0 {
+        let Some(savepoint) = transaction.savepoints.pop() else {
+            self.transaction = None;
+            return;
+        };
+        if !transaction.savepoints.is_empty() {
             return;
         }
-        let transaction = self.transaction.take().expect("checked above");
-        if transaction.revision != self.edits {
+        let label = std::mem::take(&mut transaction.label);
+        self.transaction = None;
+        if savepoint.revision != self.edits {
             // Many small changes can add up to none at all, such as a slider dragged
             // back to where it started. That is not a step worth undoing.
-            if !self.doc.same_as(&transaction.before) {
-                self.history.record(transaction.before, transaction.label);
+            if !self.doc.same_as(&savepoint.before) {
+                self.history.record(savepoint.before, label);
             }
             self.after_document_change();
         }
     }
 
-    /// Abandons the edit in progress and puts the document back as it was.
+    /// Abandons the edit started last and puts the document back as it was when that
+    /// edit started. An edit around it carries on.
     pub fn cancel_transaction(&mut self) {
-        if let Some(transaction) = self.transaction.take() {
-            if transaction.revision != self.edits {
-                self.doc = transaction.before;
+        let Some(transaction) = &mut self.transaction else {
+            return;
+        };
+        let savepoint = transaction.savepoints.pop();
+        if transaction.savepoints.is_empty() {
+            self.transaction = None;
+        }
+        if let Some(savepoint) = savepoint {
+            if savepoint.revision != self.edits {
+                self.doc = savepoint.before;
                 self.edits += 1;
                 self.after_document_change();
             }
@@ -425,7 +462,15 @@ impl Session {
         match edit(self) {
             Ok(value) => {
                 if self.edits != revision {
-                    if self.transaction.is_none() && !self.doc.same_as(&before) {
+                    if self.doc.same_as(&before) {
+                        // Nothing changed after all, such as a value set to what it
+                        // was. Nobody saw the count in between, so it can go back,
+                        // once nothing remembers a count it passed on the way.
+                        self.edits = revision;
+                        if self.repeat.is_some_and(|(_, at)| at > revision) {
+                            self.repeat = None;
+                        }
+                    } else if self.transaction.is_none() {
                         self.history.record(before, label);
                     }
                     self.after_document_change();
@@ -435,7 +480,7 @@ impl Session {
             Err(error) => {
                 if self.edits != revision {
                     self.doc = before;
-                    self.edits += 1;
+                    self.edits = revision;
                     self.after_document_change();
                 }
                 Err(error)
@@ -545,9 +590,11 @@ impl Session {
         if command.is_cosmetic() {
             // Saved with the document, but not worth an undo step.
             let before = self.doc.clone();
+            let revision = self.edits;
             let result = self.run_edit(command);
-            if result.is_err() {
+            if result.is_err() || self.doc.same_as(&before) {
                 self.doc = before;
+                self.edits = revision;
             }
             self.after_document_change();
             return result;
@@ -598,9 +645,11 @@ impl Session {
         value: Xform,
         quiet: bool,
     ) -> Result<(), CommandError> {
-        if !(value.is_finite() && value.scale > 0.0) {
-            return Err(CommandError::invalid("the transform is not usable"));
-        }
+        let value = value.usable().ok_or_else(|| {
+            CommandError::invalid(
+                "the transform is not usable: it needs a rotation of non-zero length and a scale above zero",
+            )
+        })?;
         let time = self.key_time(id);
         let (recording, interp) = (self.options.recording, self.options.default_interp);
         let doc = if quiet {
@@ -611,8 +660,6 @@ impl Session {
         let layer = doc
             .layer_mut(id)
             .ok_or(crate::ops::OpError::NoSuchLayer(id))?;
-        let mut value = value;
-        value.rotation = value.rotation.normalize();
         if !layer.anim.transform.is_empty() || recording {
             let interp = layer.anim.transform.get(time).map_or(interp, |k| k.interp);
             layer.anim.transform.set(time, value, interp);
@@ -916,9 +963,11 @@ impl Session {
                     self.write_transform(id, transform)?;
                 }
                 if let Some(pivot) = pivot {
-                    if !(pivot.is_finite() && pivot.scale > 0.0) {
-                        return Err(CommandError::invalid("the pivot is not usable"));
-                    }
+                    let pivot = pivot.usable().ok_or_else(|| {
+                        CommandError::invalid(
+                            "the pivot is not usable: it needs a rotation of non-zero length and a scale above zero",
+                        )
+                    })?;
                     self.doc_mut().layer_mut(id).expect("checked above").pivot = pivot;
                 }
                 Ok(Value::Null)
@@ -1276,8 +1325,13 @@ impl Session {
             Command::StepFrames { frames } => {
                 let rate = self.doc.settings.rate;
                 self.playback.pause();
-                self.playback
-                    .seek(rate.frame_start((rate.frame_at(self.playback.time) + frames).max(0)));
+                // Kept to the playhead's limits before turning back into time.
+                let last = rate.frame_at(playback::MAX_TIME);
+                let frame = rate
+                    .frame_at(self.playback.time)
+                    .saturating_add(frames)
+                    .clamp(0, last);
+                self.playback.seek(rate.frame_start(frame));
                 Value::Null
             }
             Command::Rewind => {

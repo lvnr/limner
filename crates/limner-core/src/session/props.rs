@@ -1,7 +1,8 @@
 //! The settings each kind of layer has beyond the common ones, as flat records: what
 //! a property panel shows and what the `set_layer_kind` command changes.
 
-use crate::json::patched;
+use super::playback::MAX_TIME;
+use crate::json::{merge, patched};
 use crate::model::{
     Attenuation, Layer, LayerKind, Light, Projection, Shading, SoundKind, SoundModifier,
 };
@@ -68,6 +69,55 @@ fn finite(value: f32, fallback: f32) -> f32 {
     }
 }
 
+/// What a sound's cone or frustum starts as when a sound first takes that shape:
+/// Quill's own starting angles, in radians. The Layer panel starts from the same.
+fn starting_shape(name: &str) -> Option<Value> {
+    match name {
+        "cone" => Some(json!({"inner": 0.5, "band": 0.1, "outside": 0.0})),
+        "frustum" => Some(json!({"inner_h": 0.6, "inner_v": 0.4, "band": 0.1, "outside": 0.0})),
+        _ => None,
+    }
+}
+
+/// A sound's shape with `change` applied. `change` is `"none"`, or an object naming
+/// one shape and some or all of its values: `{"cone": {"inner": 0.5}}`. Values it
+/// leaves out keep what the sound has, or, when the sound takes a new shape, the
+/// fade and outside volume it had and the new shape's starting angles.
+fn patched_modifier(current: SoundModifier, change: &Value) -> Result<SoundModifier, String> {
+    let Value::Object(named) = change else {
+        return serde_json::from_value(change.clone()).map_err(|e| e.to_string());
+    };
+    let mut entries = named.iter();
+    let (Some((shape, values)), None) = (entries.next(), entries.next()) else {
+        return Err("name exactly one shape: none, cone or frustum".into());
+    };
+    let Some(mut base) = starting_shape(shape) else {
+        return Err(format!("there is no shape named \"{shape}\""));
+    };
+    let Value::Object(values) = values else {
+        return Err(format!("the values of a {shape} go in an object"));
+    };
+    if let Some(unknown) = values.keys().find(|key| base.get(key.as_str()).is_none()) {
+        return Err(format!("a {shape} has no setting named \"{unknown}\""));
+    }
+    // What the sound has now: all of it when it keeps its shape, and only the fade
+    // and outside volume when it changes to the other one.
+    if let Ok(Value::Object(now)) = serde_json::to_value(current) {
+        if let Some(Value::Object(fields)) = now.values().next() {
+            let same_shape = now.contains_key(shape.as_str());
+            for (key, value) in fields {
+                if same_shape || key == "band" || key == "outside" {
+                    base[key.as_str()] = value.clone();
+                }
+            }
+        }
+    }
+    merge(&mut base, &Value::Object(values.clone()));
+    let mut whole = Map::new();
+    whole.insert(shape.clone(), base);
+    serde_json::from_value(Value::Object(whole)).map_err(|e| e.to_string())
+}
+
 /// The kind-specific settings of a layer as a JSON object.
 pub fn kind_props(layer: &Layer) -> Value {
     let value = match &layer.kind {
@@ -125,7 +175,7 @@ pub fn apply_kind_patch(layer: &mut Layer, patch: &Map<String, Value>) -> Result
                 },
                 patch,
             )?;
-            sequence.loop_duration = props.loop_duration.max(0);
+            sequence.loop_duration = props.loop_duration.clamp(0, MAX_TIME);
             sequence.max_repeat = props.max_repeat;
         }
         LayerKind::Paint(paint) => {
@@ -162,13 +212,13 @@ pub fn apply_kind_patch(layer: &mut Layer, patch: &Map<String, Value>) -> Result
             model.wireframe = props.wireframe;
         }
         LayerKind::Sound(sound) => {
-            // The modifier is one of several shapes. A patch replaces it whole: merging
-            // the fields of a frustum into a cone would make neither.
+            // The modifier is one of several shapes, so it is patched on its own.
             let mut patch = patch.clone();
-            if let Some(modifier) = patch.remove("modifier") {
-                sound.modifier =
-                    serde_json::from_value(modifier).map_err(|e| format!("modifier: {e}"))?;
-            }
+            let modifier = match patch.remove("modifier") {
+                Some(change) => patched_modifier(sound.modifier, &change)
+                    .map_err(|e| format!("modifier: {e}"))?,
+                None => sound.modifier,
+            };
             let patch = &patch;
             let props = patched(
                 &SoundProps {
@@ -176,7 +226,7 @@ pub fn apply_kind_patch(layer: &mut Layer, patch: &Map<String, Value>) -> Result
                     gain: sound.gain,
                     looped: sound.looped,
                     attenuation: sound.attenuation,
-                    modifier: sound.modifier,
+                    modifier,
                 },
                 patch,
             )?;
@@ -301,6 +351,144 @@ mod tests {
         assert!(
             apply_kind_patch(&mut layer, &object(json!({"modifier": {"sphere": {}}}))).is_err()
         );
+    }
+
+    fn voice() -> Layer {
+        use crate::model::{Attenuation, Sound, SoundKind, SoundModifier};
+        let sound = Sound {
+            media: None,
+            kind: SoundKind::Positional,
+            gain: 1.0,
+            looped: false,
+            attenuation: Attenuation::default(),
+            modifier: SoundModifier::Cone {
+                inner: 0.5,
+                band: 0.1,
+                outside: 0.2,
+            },
+            source_path: String::new(),
+        };
+        Layer::new(LayerId(1), "Voice", LayerKind::Sound(sound))
+    }
+
+    fn modifier(layer: &Layer) -> SoundModifier {
+        let LayerKind::Sound(sound) = &layer.kind else {
+            unreachable!()
+        };
+        sound.modifier
+    }
+
+    #[test]
+    fn a_partial_sound_shape_changes_only_what_it_names() {
+        let mut layer = voice();
+        // One slider of the cone.
+        apply_kind_patch(
+            &mut layer,
+            &object(json!({"modifier": {"cone": {"inner": 0.9}}})),
+        )
+        .unwrap();
+        assert_eq!(
+            modifier(&layer),
+            SoundModifier::Cone {
+                inner: 0.9,
+                band: 0.1,
+                outside: 0.2
+            }
+        );
+        // The whole cone still works.
+        apply_kind_patch(
+            &mut layer,
+            &object(json!({"modifier": {"cone": {"inner": 0.4, "band": 0.3, "outside": 0.0}}})),
+        )
+        .unwrap();
+        assert_eq!(
+            modifier(&layer),
+            SoundModifier::Cone {
+                inner: 0.4,
+                band: 0.3,
+                outside: 0.0
+            }
+        );
+        // Switching to a frustum with only some of its values keeps the fade and the
+        // outside volume and starts the rest where a new frustum starts.
+        apply_kind_patch(
+            &mut layer,
+            &object(json!({"modifier": {"frustum": {"inner_v": 0.7}}})),
+        )
+        .unwrap();
+        assert_eq!(
+            modifier(&layer),
+            SoundModifier::Frustum {
+                inner_h: 0.6,
+                inner_v: 0.7,
+                band: 0.3,
+                outside: 0.0
+            }
+        );
+        apply_kind_patch(&mut layer, &object(json!({"modifier": "none"}))).unwrap();
+        assert_eq!(modifier(&layer), SoundModifier::None);
+        apply_kind_patch(
+            &mut layer,
+            &object(json!({"modifier": {"cone": {"band": 0.2}}})),
+        )
+        .unwrap();
+        assert_eq!(
+            modifier(&layer),
+            SoundModifier::Cone {
+                inner: 0.5,
+                band: 0.2,
+                outside: 0.0
+            }
+        );
+        // Names that do not belong are refused, and leave the shape as it was.
+        for bad in [
+            json!({"modifier": {"cone": {"sise": 0.2}}}),
+            json!({"modifier": {"cone": {"inner": "wide"}}}),
+            json!({"modifier": {"sphere": {}}}),
+            json!({"modifier": {"cone": {}, "frustum": {}}}),
+            json!({"modifier": 3}),
+        ] {
+            assert!(
+                apply_kind_patch(&mut layer, &object(bad.clone())).is_err(),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            modifier(&layer),
+            SoundModifier::Cone {
+                inner: 0.5,
+                band: 0.2,
+                outside: 0.0
+            }
+        );
+    }
+
+    #[test]
+    fn a_partial_attenuation_keeps_its_other_values() {
+        let mut layer = voice();
+        apply_kind_patch(&mut layer, &object(json!({"attenuation": {"max": 3.0}}))).unwrap();
+        let LayerKind::Sound(sound) = &layer.kind else {
+            unreachable!()
+        };
+        assert_eq!(sound.attenuation.max, 3.0);
+        assert_eq!(sound.attenuation.min, 0.1, "untouched");
+    }
+
+    #[test]
+    fn a_sequence_loop_is_kept_to_a_usable_length() {
+        let mut group = Layer::new(
+            LayerId(2),
+            "Walk",
+            LayerKind::Group(Group {
+                sequence: Some(Default::default()),
+                ..Group::default()
+            }),
+        );
+        apply_kind_patch(&mut group, &object(json!({"loop_duration": i64::MAX}))).unwrap();
+        let LayerKind::Group(g) = &group.kind else {
+            unreachable!()
+        };
+        assert_eq!(g.sequence.unwrap().loop_duration, MAX_TIME);
     }
 
     #[test]
