@@ -223,6 +223,12 @@ impl Session {
         self.touch_state();
     }
 
+    /// Counts the document as changed since it was saved, whatever was done to it.
+    pub fn mark_unsaved(&mut self) {
+        self.saved_edits = 0;
+        self.touch_state();
+    }
+
     pub fn clock(&self) -> Clock {
         self.playback.clock()
     }

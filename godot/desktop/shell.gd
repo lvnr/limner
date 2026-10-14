@@ -45,6 +45,9 @@ var camera: Camera3D
 ## The root of the interface. Hidden with Tab for an unobstructed view.
 var ui: Control
 var layers_panel: LayersPanel
+## Clicks, and the sounds of undo, redo, picking a colour and deleting.
+var sounds: Sounds
+var autosave: Autosave
 var timeline: TimelinePanel
 ## The stand-in for the drawing hand.
 var hand: DesktopHand
@@ -83,7 +86,20 @@ func _ready() -> void:
 	hand.editor = editor
 	hand.camera = camera
 	hand.depth = FOCUS_DISTANCE
+	sounds = Sounds.new()
+	sounds.name = "Sounds"
+	add_child(sounds)
+	hand.sounds = sounds
+	Preferences.shared().apply_at_start(editor)
 	add_child(hand)
+	autosave = Autosave.new()
+	autosave.name = "Autosave"
+	autosave.editor = editor
+	add_child(autosave)
+	world.scene.playback_event.connect(func(event: String) -> void:
+		if event == "stop":
+			sounds.play("stop")
+	)
 	var cursor := ToolCursor.new()
 	cursor.name = "ToolCursor"
 	cursor.scene = world.scene
@@ -95,6 +111,11 @@ func _ready() -> void:
 	editor.state_changed.connect(_refresh)
 	editor.document_replaced.connect(_refresh)
 	_refresh()
+	# Work left unsaved when the app last closed badly is offered back, unless this
+	# run is an automated one.
+	var args := OS.get_cmdline_user_args()
+	if not Autosave.pending().is_empty() and not (args.has("--shot") or args.has("--bench") or args.has("--no-recovery")):
+		_offer_recovery.call_deferred()
 
 
 func _build_interface() -> void:
@@ -154,7 +175,7 @@ func _build_interface() -> void:
 		[ExportPanel.new(editor), "export"],
 		[MonitorPanel.new(editor), "film"],
 		[PerformancePanel.new(editor), "chart"],
-		[SettingsPanel.new(editor), "gear"],
+		[_settings_panel(), "gear"],
 	]:
 		var panel: Control = entry[0]
 		var index := details.get_tab_count()
@@ -179,6 +200,23 @@ func _build_interface() -> void:
 	_file_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	_file_dialog.use_native_dialog = true
 	ui.add_child(_file_dialog)
+
+
+## The Settings panel. Its "Show button map" opens the sheet of what every control
+## of the controllers does, which is worth reading before putting a headset on.
+func _settings_panel() -> SettingsPanel:
+	var panel := SettingsPanel.new(editor)
+	panel.button_map_requested.connect(func() -> void:
+		var dialog := AcceptDialog.new()
+		dialog.title = "Controller buttons"
+		dialog.theme = ui.theme
+		dialog.add_child(XRButtonMap.new())
+		dialog.confirmed.connect(dialog.queue_free)
+		dialog.canceled.connect(dialog.queue_free)
+		ui.add_child(dialog)
+		dialog.popup_centered()
+	)
+	return panel
 
 
 ## Wraps a panel so that it scrolls when it is taller than the room it is given.
@@ -345,12 +383,48 @@ func _on_file_menu(id: int) -> void:
 		FileMenu.EXPORT:
 			show_details("Export")
 		FileMenu.QUIT:
-			_after_saving_changes(get_tree().quit)
+			_after_saving_changes(_quit)
 
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
-		_after_saving_changes(get_tree().quit)
+		_after_saving_changes(_quit)
+
+
+## Quits on purpose: whatever is unsaved now was given up knowingly.
+func _quit() -> void:
+	autosave.discard()
+	get_tree().quit()
+
+
+func _offer_recovery() -> void:
+	var note := Autosave.pending()
+	var dialog := ConfirmationDialog.new()
+	dialog.title = "Recover unsaved work?"
+	dialog.dialog_text = "Limner did not close properly last time.\n\nUnsaved work on \"%s\" from %s was kept. Open it?" % [note.get("title", "Untitled"), str(note.get("time", "")).replace("T", " ")]
+	dialog.ok_button_text = "Recover"
+	dialog.cancel_button_text = "Not now"
+	dialog.add_button("Discard", true, "discard")
+	dialog.confirmed.connect(func() -> void:
+		if autosave.recover():
+			show_message("Recovered. Save it to keep it.")
+	)
+	dialog.custom_action.connect(func(_name: StringName) -> void:
+		autosave.discard()
+		dialog.hide()
+	)
+	# Neither: it is put aside rather than lost.
+	dialog.canceled.connect(func() -> void:
+		var kept := autosave.set_aside()
+		if kept != "":
+			show_message("Kept as %s" % kept)
+	)
+	dialog.visibility_changed.connect(func() -> void:
+		if not dialog.visible:
+			dialog.queue_free()
+	)
+	ui.add_child(dialog)
+	dialog.popup_centered()
 
 
 ## Shows the file dialog and calls `chosen` with the path picked.
@@ -528,6 +602,12 @@ func _frame_radius() -> float:
 ## Fits everything visible in the free part of the window.
 func frame_all() -> void:
 	world.scene.view_frame_all(focus_point(), _frame_radius())
+
+
+## A click for every button pressed.
+func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and get_viewport().gui_get_hovered_control() is BaseButton:
+		sounds.play("click")
 
 
 func _unhandled_input(event: InputEvent) -> void:

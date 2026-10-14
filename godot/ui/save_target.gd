@@ -32,7 +32,9 @@ func _init(limner_editor: LimnerEditor, default_folder: String) -> void:
 
 func _ready() -> void:
 	# A headset has no system dialogs; there the default folder is what there is.
-	_browse.visible = not get_viewport().use_xr
+	# On the headset's palette the viewport is the panel's own, so the window is asked:
+	# a system file dialog is no use to someone who cannot see the desktop.
+	_browse.visible = not get_tree().root.use_xr
 
 
 ## The file to write, ending in `extension`. Without a typed name, each call gives

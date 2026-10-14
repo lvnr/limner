@@ -12,6 +12,10 @@ extends Node
 ##   -- --no-panels          hide the docks
 ##   -- --panel <name>       bring a tabbed panel to the front: Transform, Layer, Document, Export, Monitor, Performance, Settings
 ##   -- --xr | --desktop     start in a headset or on the desktop, whatever is connected
+##   -- --sim | --no-sim     with --xr: use the simulated headset and hands (the default when
+##                           no headset answers), or fail instead of falling back to them;
+##                           the --sim-... options that pose them are in godot/xr/sim_rig.gd
+##   -- --text <words>       write some text in strokes
 ##   -- --render ...         render a camera to a video and quit; see godot/capture/render_job.gd
 ##   -- --static-dither      keep the dither pattern still (for repeatable screenshots)
 ##   -- --shot <file.png>    save a screenshot after a few frames, then quit
@@ -50,18 +54,27 @@ func _ready() -> void:
 		job.start(args)
 		return
 	# A headset is used when one is there, unless the command line says which to use.
-	if args.has("--xr") or (XRShell.is_available() and not args.has("--desktop")):
+	# `--desktop` is looked at first because asking whether a headset is there starts
+	# the headset's own software.
+	var problem := ""
+	if args.has("--xr") or (not args.has("--desktop") and XRShell.is_available()):
 		xr_shell = XRShell.new()
 		xr_shell.name = "Headset"
 		xr_shell.world = world
 		xr_shell.editor = editor
 		add_child(xr_shell)
-	else:
+		if not xr_shell.started:
+			problem = xr_shell.failure
+			xr_shell.queue_free()
+			xr_shell = null
+	if xr_shell == null:
 		shell = DesktopShell.new()
 		shell.name = "Desktop"
 		shell.world = world
 		shell.editor = editor
 		add_child(shell)
+		if problem != "":
+			shell.show_message.call_deferred(problem, true)
 	_apply_arguments.call_deferred()
 
 

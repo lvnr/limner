@@ -15,6 +15,7 @@ const MAX_DEPTH := 20.0
 
 var world: LimnerWorld
 var editor: LimnerEditor
+var sounds: Sounds
 var camera: Camera3D
 ## How far in front of the head the hand works, in viewer-space metres.
 var depth := 1.5
@@ -67,6 +68,11 @@ func _process(delta: float) -> void:
 	for feedback: Dictionary in scene.input_commit(delta):
 		if feedback.type == "message":
 			editor.message.emit(feedback.text, true)
+		elif feedback.type == "sound" and sounds != null:
+			sounds.play(feedback.name)
+	# The soft hiss of paint going down.
+	if sounds != null:
+		sounds.follow_tool(scene)
 
 
 ## How far the modifier is "pressed". Shift is a full press. With the Selection tool,

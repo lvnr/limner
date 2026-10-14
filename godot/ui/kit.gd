@@ -151,6 +151,9 @@ static func make_theme() -> Theme:
 	theme.set_stylebox("embedded_unfocused_border", "Window", _box(BG, 8, 1, BORDER, 10))
 	theme.set_stylebox("panel", "AcceptDialog", _box(BG, 8, 1, BORDER, 12))
 	theme.set_color("title_color", "Window", TEXT)
+	# Pop-ups (the colour picker, drop-downs) are solid: something see-through over a
+	# panel is hard to read, and in a headset it is impossible.
+	theme.set_stylebox("panel", "PopupPanel", _box(Color(BG.lightened(0.03), 1.0), 6, 1, BORDER, 8))
 	return theme
 
 

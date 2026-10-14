@@ -348,6 +348,13 @@ impl LimnerScene {
         }
     }
 
+    /// Counts the document as having unsaved changes, as after recovering work that
+    /// was never saved.
+    #[func]
+    fn mark_edited(&mut self) {
+        self.session.mark_unsaved();
+    }
+
     #[func]
     fn get_warnings(&self) -> PackedStringArray {
         self.warnings.iter().map(GString::from).collect()
