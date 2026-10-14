@@ -218,12 +218,15 @@ func work_frame() -> Transform3D:
 
 ## Writes `text` in strokes of the paint colour on the paint layer, `height` metres
 ## tall, in front of the viewer, and selects it so that it can be moved into place.
-## Returns how many strokes it took, or 0 after reporting why it failed.
-func add_text(text: String, height: float, solid := true, font: Font = null) -> int:
+## Line breaks start new lines; the block stays centred in front of the viewer and
+## `align` (left, centre or right) lines its rows up. `font` is the built-in font when
+## left out (see `TextStrokes.font_named`). Returns how many strokes it took, or 0
+## after reporting why it failed.
+func add_text(text: String, height: float, solid := true, font: Font = null, align := HORIZONTAL_ALIGNMENT_CENTER) -> int:
 	if text.strip_edges().is_empty():
 		message.emit("There is no text to add", true)
 		return 0
-	var strokes := TextStrokes.build(text, font if font != null else ThemeDB.fallback_font, height, work_frame(), solid)
+	var strokes := TextStrokes.build(text, font if font != null else ThemeDB.fallback_font, height, work_frame(), solid, align)
 	if strokes.is_empty():
 		message.emit("The font has no outlines for that text", true)
 		return 0

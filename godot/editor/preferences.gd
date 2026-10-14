@@ -23,6 +23,9 @@ signal changed(key: String)
 ## - `autosave_minutes`: minutes between automatic saves, 0 for never.
 ## - `palette`: the swatches a new document starts with, as linear `[r, g, b]`
 ##   lists: the ones last set in the Colour panel. Empty for the built-in ones.
+## - `text_font`: the family of the font text is written in, empty for the built-in one.
+## - `recent_fonts`: the families last chosen for text, the latest first, at most
+##   `RECENT_FONTS` of them.
 const DEFAULTS := {
 	"dominant_hand": "right",
 	"haptics": true,
@@ -32,6 +35,8 @@ const DEFAULTS := {
 	"theme": "dark",
 	"autosave_minutes": 5,
 	"palette": [],
+	"text_font": "",
+	"recent_fonts": [],
 }
 ## The values a setting may take, for those that are a choice.
 const CHOICES := {
@@ -43,6 +48,9 @@ const RANGES := {
 	"ui_volume": [0.0, 1.0],
 	"autosave_minutes": [0, 120],
 }
+
+## The most font families `recent_fonts` keeps.
+const RECENT_FONTS := 6
 
 ## Where the settings are kept unless a test says otherwise.
 const DEFAULT_PATH := "user://settings.json"
@@ -162,6 +170,30 @@ func _clean_colors(raw: Variant) -> Variant:
 	return colors.slice(0, 64)
 
 
+## A list of words, without empty or repeated ones, or `null` when `raw` is not a list
+## of words. At most `RECENT_FONTS` are kept.
+func _clean_words(raw: Variant) -> Variant:
+	if not raw is Array:
+		return null
+	var words: Array = []
+	for entry: Variant in raw as Array:
+		if not entry is String:
+			return null
+		if not (entry as String).is_empty() and not words.has(entry):
+			words.append(entry)
+	return words.slice(0, RECENT_FONTS)
+
+
+## Makes `family` the font text is written in and puts it first among the recent ones.
+## The empty name is the built-in font, which is not counted as a recent one.
+func choose_font(family: String) -> void:
+	if not family.is_empty():
+		var recent: Array = [family]
+		recent.append_array(_values.get("recent_fonts", []))
+		set_value("recent_fonts", recent)
+	set_value("text_font", family)
+
+
 ## The swatches a new document starts with; empty for the built-in ones.
 func palette() -> Array:
 	return _values.get("palette", [])
@@ -191,7 +223,7 @@ func _read_file() -> Dictionary:
 func _clean(key: String, raw: Variant) -> Variant:
 	var default: Variant = DEFAULTS[key]
 	if default is Array:
-		return _clean_colors(raw)
+		return _clean_colors(raw) if key == "palette" else _clean_words(raw)
 	if default is bool:
 		return raw if raw is bool else null
 	if default is String:

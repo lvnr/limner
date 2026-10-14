@@ -55,6 +55,16 @@ const BLEND_MODES := {
 	"luminosity": "Luminosity (V)",
 	"opacity": "Opacity (A)",
 }
+## How the lines of a text line up, by the key of their button: the word on it, its
+## tooltip and the alignment it stands for.
+const TEXT_ALIGNMENTS := {
+	"left": ["Left", "Line the rows of text up on the left", HORIZONTAL_ALIGNMENT_LEFT],
+	"centre": ["Centre", "Centre each row of text", HORIZONTAL_ALIGNMENT_CENTER],
+	"right": ["Right", "Line the rows of text up on the right", HORIZONTAL_ALIGNMENT_RIGHT],
+}
+## What the font list calls the font that comes with Limner.
+const BUILT_IN_FONT := "Built-in font"
+const FONT_NOTE := "The font the text is written in: the built-in one or one installed on this computer. The ones chosen last are at the top."
 const MIN_SIZE := 0.0005
 const MAX_SIZE := 0.5
 ## Width of the title in front of a control, the same as a slider's.
@@ -80,9 +90,16 @@ var _settings := {}
 ## The toggle showing each editor option, by key.
 var _options := {}
 var _mirror: ChoiceRow
-var _text: LineEdit
+var _text: TextEdit
+var _text_align: ChoiceRow
+## The font drop-down. Each entry's metadata is its family, empty for the built-in font.
+var _text_font: OptionButton
+var _font_search: LineEdit
+var _text_bold: CheckBox
+var _text_italic: CheckBox
 var _text_height: SliderRow
 var _text_solid: CheckBox
+var _fonts_queued := false
 var _selection_status: Label
 ## The buttons that need a selection to act on.
 var _selection_buttons: Array[Button] = []
@@ -123,26 +140,13 @@ func _init(limner_editor: LimnerEditor) -> void:
 	add_child(_titled("Mirror", "What the tools do on one side of the mirror they also do on the other. The mirror stands at the pivot of the layer being painted on: move the pivot to move it.", _mirror))
 
 	add_child(Kit.heading("Text"))
-	_text = LineEdit.new()
-	_text.placeholder_text = "Words to write in strokes"
-	_text.custom_minimum_size = Vector2(0, Kit.ROW)
-	_text.tooltip_text = "Text is written in strokes of the paint colour on the paint layer, in front of you, and selected so that it can be moved into place"
-	_text.text_submitted.connect(func(_submitted: String) -> void: _add_text())
-	add_child(_text)
-	_text_height = SliderRow.new("Height", 0.01, 1.0, 0.001, "How tall the letters are", _millimetres, true)
-	_text_height.set_value(0.1)
-	add_child(_text_height)
-	_text_solid = Kit.toggle("Filled letters", "Fill the letters with paint; otherwise only their outlines are drawn", Callable())
-	_text_solid.button_pressed = true
-	add_child(_text_solid)
-	var add_text := Kit.button("Add text", "Write the text in strokes", _add_text, "plus")
-	add_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	add_child(add_text)
+	_build_text_section()
 
 
 func _ready() -> void:
 	editor.state_changed.connect(refresh)
 	editor.document_replaced.connect(refresh)
+	Preferences.shared().changed.connect(_on_preference_changed)
 	refresh()
 
 
@@ -336,9 +340,160 @@ func _option(key: String, text: String, tooltip: String) -> CheckBox:
 	return toggle
 
 
+# ---- text ----
+
+func _build_text_section() -> void:
+	_text = TextEdit.new()
+	_text.placeholder_text = "Words to write in strokes\nEnter starts a new line"
+	# Three lines show; more scroll.
+	_text.custom_minimum_size = Vector2(0, Kit.ROW * 3)
+	_text.wrap_mode = TextEdit.LINE_WRAPPING_NONE
+	_text.tooltip_text = "Text is written in strokes of the paint colour on the paint layer, in front of you, and selected so that it can be moved into place. Enter starts a new line; Ctrl+Enter (Cmd+Enter on a Mac) adds the text."
+	_text.gui_input.connect(_on_text_input)
+	add_child(_text)
+
+	_text_align = ChoiceRow.new()
+	for key: String in TEXT_ALIGNMENTS:
+		var words: Array = TEXT_ALIGNMENTS[key]
+		_text_align.add_text(key, words[0], words[1])
+	_text_align.set_value("centre")
+	add_child(_titled("Align", "How lines of different lengths line up under each other", _text_align))
+
+	_text_font = Kit.fitted_option([], FONT_NOTE, _on_font_selected)
+	add_child(_titled("Font", FONT_NOTE, _text_font))
+	_font_search = LineEdit.new()
+	_font_search.placeholder_text = "Find a font"
+	_font_search.tooltip_text = "Show only the fonts whose name holds these letters. Enter takes the first of them."
+	_font_search.custom_minimum_size = Vector2(0, Kit.ROW)
+	_font_search.clear_button_enabled = true
+	_font_search.text_changed.connect(func(_typed: String) -> void: _fill_fonts())
+	_font_search.text_submitted.connect(func(_typed: String) -> void: _take_first_font())
+	add_child(_titled("", _font_search.tooltip_text, _font_search))
+	_text_bold = Kit.toggle("Bold", "Heavier letters: the font's own bold, or the letters thickened when it has none", Callable())
+	_text_italic = Kit.toggle("Italic", "Slanted letters: the font's own italic, or the letters leant when it has none", Callable())
+	_text_bold.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_text_italic.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	add_child(Kit.row([_text_bold, _text_italic]))
+	_fill_fonts()
+
+	_text_height = SliderRow.new("Height", 0.01, 1.0, 0.001, "How tall the letters are", _millimetres, true)
+	_text_height.set_value(0.1)
+	add_child(_text_height)
+	_text_solid = Kit.toggle("Filled letters", "Fill the letters with paint; otherwise only their outlines are drawn", Callable())
+	_text_solid.button_pressed = true
+	add_child(_text_solid)
+	var add_text := Kit.button("Add text", "Write the text in strokes", _add_text, "plus")
+	add_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	add_child(add_text)
+
+
+## Fills the font list: the built-in font, then the one in use and the others chosen
+## last, then every font installed, or only those whose name holds what is in the
+## search box. Hundreds of fonts are common, hence the recent ones and the search.
+func _fill_fonts() -> void:
+	var preferences := Preferences.shared()
+	var current := preferences.text("text_font")
+	var search := _font_search.text.strip_edges()
+	_text_font.clear()
+	_add_font(BUILT_IN_FONT, "")
+	var listed := {"": true}
+	var recent: Array = [current]
+	# While searching, only the font in use stays on top, so the matches come first.
+	if search.is_empty():
+		recent.append_array(preferences.value("recent_fonts"))
+	for family: String in recent:
+		if listed.has(family):
+			continue
+		listed[family] = true
+		if TextStrokes.is_installed(family):
+			_add_font(family, family)
+		else:
+			_add_font("%s (not installed)" % family, family)
+	var matches := PackedStringArray()
+	for family in TextStrokes.system_fonts():
+		if search.is_empty() or family.containsn(search):
+			matches.append(family)
+	if search.is_empty():
+		_text_font.add_separator("All fonts")
+	elif matches.is_empty():
+		_text_font.add_separator("No font matches")
+	else:
+		_text_font.add_separator("Found %d" % matches.size())
+	for family in matches:
+		_add_font(family, family)
+	_text_font.select(_font_index(current))
+
+
+func _add_font(text: String, family: String) -> void:
+	_text_font.add_item(text)
+	_text_font.set_item_metadata(_text_font.item_count - 1, family)
+
+
+## The entry of the list that stands for `family`: the first one, which is at the top.
+func _font_index(family: String) -> int:
+	for index in _text_font.item_count:
+		if not _text_font.is_item_separator(index) and str(_text_font.get_item_metadata(index)) == family:
+			return index
+	return 0
+
+
+func _on_font_selected(index: int) -> void:
+	Preferences.shared().choose_font(str(_text_font.get_item_metadata(index)))
+
+
+## Chooses the first font the search found.
+func _take_first_font() -> void:
+	var after_separator := false
+	for index in _text_font.item_count:
+		if _text_font.is_item_separator(index):
+			after_separator = true
+		elif after_separator:
+			Preferences.shared().choose_font(str(_text_font.get_item_metadata(index)))
+			return
+
+
+func _on_preference_changed(key: String) -> void:
+	# Refilled after the drop-down has finished reporting the choice that changed it.
+	if (key == "text_font" or key == "recent_fonts") and not _fonts_queued:
+		_fonts_queued = true
+		_refill_fonts.call_deferred()
+
+
+func _refill_fonts() -> void:
+	_fonts_queued = false
+	_fill_fonts()
+
+
+## Ctrl+Enter (Cmd+Enter on a Mac) in the text box adds the text; Enter alone starts a
+## new line, as it does from the headset's keyboard.
+func _on_text_input(event: InputEvent) -> void:
+	var key := event as InputEventKey
+	if key != null and key.pressed and (key.keycode == KEY_ENTER or key.keycode == KEY_KP_ENTER) and key.is_command_or_control_pressed():
+		_text.accept_event()
+		_add_text()
+
+
+## The font chosen for text, in bold or italic as the switches say. When it is not
+## installed here, the built-in font stands in and `fell_back` is set.
+func _text_font_now(fell_back: Array[bool]) -> Font:
+	var family := Preferences.shared().text("text_font")
+	var font := TextStrokes.font_named(family, _text_bold.button_pressed, _text_italic.button_pressed)
+	if font == null:
+		fell_back[0] = true
+		font = TextStrokes.font_named("", _text_bold.button_pressed, _text_italic.button_pressed)
+	return font
+
+
 func _add_text() -> void:
-	var count := editor.add_text(_text.text, _text_height.get_value(), _text_solid.button_pressed)
-	if count > 0:
+	var fell_back: Array[bool] = [false]
+	var font := _text_font_now(fell_back)
+	var align: HorizontalAlignment = TEXT_ALIGNMENTS.get(_text_align.get_value(), TEXT_ALIGNMENTS["centre"])[2]
+	var count := editor.add_text(_text.text, _text_height.get_value(), _text_solid.button_pressed, font, align)
+	if count == 0:
+		return
+	if fell_back[0]:
+		editor.message.emit("\"%s\" is not installed here, so the text is in the built-in font: %d strokes, selected" % [Preferences.shared().text("text_font"), count], false)
+	else:
 		editor.message.emit("Added the text as %d strokes; it is selected, ready to move" % count, false)
 
 

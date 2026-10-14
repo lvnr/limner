@@ -1,6 +1,6 @@
 class_name TextStrokes
 extends RefCounted
-## Turns a line of text into strokes.
+## Turns text into strokes.
 ##
 ## Limner paints with strokes, so text is strokes too: the outline of every letter as
 ## thin tubes and, when the text is to be solid, rows of flat ribbons that fill it.
@@ -8,7 +8,7 @@ extends RefCounted
 ## exported like any others.
 ##
 ## Shapes come from the font's own outlines, so any font the engine can load and any
-## script it can shape will do.
+## script it can shape will do: the built-in font or one installed on the system.
 
 ## The size the font is shaped at. Outlines scale, so this only has to be large
 ## enough for the engine's fixed-point coordinates not to show.
@@ -19,35 +19,150 @@ const CURVE_STEPS := 5
 const ROWS := 40
 ## Half the thickness of the outline, as a share of the letter height.
 const OUTLINE := 0.012
-## Where the baseline sits below the middle of the block, as a share of the letter height.
+## Where the baseline of a single line sits below the middle of the block, as a share
+## of the letter height.
 const BASELINE := 0.3
+## The least and the most distance from one line's baseline to the next, as a share of
+## the letter height. In between, the font's own line height is used.
+const LINE_SPACING_MIN := 1.2
+const LINE_SPACING_MAX := 1.6
+## How much a font without a bold face of its own is thickened for Bold, and how far a
+## font without an italic face leans for Italic (sideways per unit of height).
+const EMBOLDEN := 0.7
+const SLANT := 0.2
 
 const ON_CURVE := 1
 const OFF_CUBIC := 2
 
+static var _system_fonts := PackedStringArray()
+
 
 ## The strokes of `text` set in `font`, `height` metres tall, placed by `frame`:
-## the text runs along the frame's X axis, centred on its origin, standing along its
-## Y axis and facing along its Z axis. `solid` fills the letters; otherwise only
+## the text runs along the frame's X axis, standing along its Y axis and facing along
+## its Z axis. Each line break starts a new line under the last; the block of lines is
+## centred on the frame's origin, and `align` lines its rows up on the left, in the
+## middle or on the right of the block. `solid` fills the letters; otherwise only
 ## their outlines are drawn. Returns stroke descriptions for the `add_strokes`
 ## command, in the space `frame` is in.
-static func build(text: String, font: Font, height: float, frame: Transform3D, solid := true) -> Array[Dictionary]:
+static func build(text: String, font: Font, height: float, frame: Transform3D, solid := true, align := HORIZONTAL_ALIGNMENT_CENTER) -> Array[Dictionary]:
 	var strokes: Array[Dictionary] = []
 	var server := TextServerManager.get_primary_interface()
 	if text.strip_edges().is_empty() or font == null or server == null:
 		return strokes
-	var shaped := server.create_shaped_text()
-	server.shaped_text_add_string(shaped, text, font.get_rids(), SHAPING_SIZE)
-	server.shaped_text_shape(shaped)
-	var glyphs: Array[Dictionary] = server.shaped_text_get_glyphs(shaped)
-	var total: float = server.shaped_text_get_size(shaped).x
-	server.free_rid(shaped)
+	var lines := split_lines(text)
+	var glyphs_of_lines: Array[Array] = []
+	var widths := PackedFloat32Array()
+	for line in lines:
+		var glyphs: Array[Dictionary] = []
+		var width := 0.0
+		if not line.is_empty():
+			var shaped := server.create_shaped_text()
+			server.shaped_text_add_string(shaped, line, font.get_rids(), SHAPING_SIZE)
+			server.shaped_text_shape(shaped)
+			glyphs = server.shaped_text_get_glyphs(shaped)
+			width = server.shaped_text_get_size(shaped).x
+			server.free_rid(shaped)
+		glyphs_of_lines.append(glyphs)
+		widths.append(width)
+	var block := 0.0
+	for width in widths:
+		block = maxf(block, width)
 
 	var scale := height / float(SHAPING_SIZE)
+	var pitch := line_spacing(font) * height
+	var count := lines.size()
+	for index in count:
+		var left := -widths[index] * 0.5
+		if align == HORIZONTAL_ALIGNMENT_LEFT:
+			left = -block * 0.5
+		elif align == HORIZONTAL_ALIGNMENT_RIGHT:
+			left = block * 0.5 - widths[index]
+		# The middle line, or the gap between the two middle ones, is at the origin.
+		var baseline := -height * BASELINE + ((count - 1) * 0.5 - index) * pitch
+		var glyphs: Array[Dictionary] = []
+		glyphs.assign(glyphs_of_lines[index])
+		strokes.append_array(_line_strokes(server, glyphs, left, baseline, scale, height, frame, solid))
+	return strokes
+
+
+## The lines of `text`, without what trails at the end of each (it would move a line
+## that is not aligned left) and without empty lines before the first or after the last.
+static func split_lines(text: String) -> PackedStringArray:
+	var lines := PackedStringArray()
+	for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+		lines.append(line.strip_edges(false, true))
+	while not lines.is_empty() and lines[0].is_empty():
+		lines.remove_at(0)
+	while not lines.is_empty() and lines[lines.size() - 1].is_empty():
+		lines.remove_at(lines.size() - 1)
+	return lines
+
+
+## The distance from one baseline to the next, as a share of the letter height.
+static func line_spacing(font: Font) -> float:
+	return clampf(font.get_height(SHAPING_SIZE) / float(SHAPING_SIZE), LINE_SPACING_MIN, LINE_SPACING_MAX)
+
+
+# ---- fonts ----
+
+## The families of the fonts installed on the system, sorted. Asked of the system
+## once; it takes a moment when there are many.
+static func system_fonts() -> PackedStringArray:
+	if _system_fonts.is_empty():
+		var found := OS.get_system_fonts()
+		var unique := {}
+		for family in found:
+			unique[family] = true
+		var sorted: Array = unique.keys()
+		sorted.sort_custom(func(a: String, b: String) -> bool: return a.naturalnocasecmp_to(b) < 0)
+		_system_fonts = PackedStringArray(sorted)
+	return _system_fonts
+
+
+## Whether a font family is installed. The empty name is the built-in font, always there.
+static func is_installed(family: String) -> bool:
+	return family.is_empty() or not OS.get_system_font_path(family).is_empty()
+
+
+## The font of a family, in bold or italic or both; the empty name is the built-in
+## font. A family's own bold and italic faces are used where it has them; otherwise
+## the letters are thickened or slanted. Returns `null` when the family is not
+## installed.
+static func font_named(family: String, bold := false, italic := false) -> Font:
+	var font: Font = ThemeDB.fallback_font
+	if not family.is_empty():
+		if not is_installed(family):
+			return null
+		var system := SystemFont.new()
+		system.font_names = PackedStringArray([family])
+		system.font_weight = 700 if bold else 400
+		system.font_italic = italic
+		font = system
+	var style := font.get_font_style()
+	var thicken := bold and (style & TextServer.FONT_BOLD) == 0
+	var slant := italic and (style & TextServer.FONT_ITALIC) == 0
+	if not thicken and not slant:
+		return font
+	var variation := FontVariation.new()
+	variation.base_font = font
+	if thicken:
+		variation.variation_embolden = EMBOLDEN
+	if slant:
+		# The engine takes this as a shear of x by height: the tops of letters go right.
+		variation.variation_transform = Transform2D(Vector2(1.0, SLANT), Vector2(0.0, 1.0), Vector2.ZERO)
+	return variation
+
+
+# ---- shapes ----
+
+## The strokes of one shaped line whose pen starts `left` font units from the middle
+## of the block and whose baseline is `baseline` metres above the frame's origin.
+static func _line_strokes(server: TextServer, glyphs: Array[Dictionary], left: float, baseline: float, scale: float, height: float, frame: Transform3D, solid: bool) -> Array[Dictionary]:
+	var strokes: Array[Dictionary] = []
 	var facing := [frame.basis.z.x, frame.basis.z.y, frame.basis.z.z]
 	# From the font's own units, with y running down, to where the letter stands.
 	var place := func(point: Vector2) -> Array:
-		var local := Vector3((point.x - total * 0.5) * scale, -point.y * scale - height * BASELINE, 0.0)
+		var local := Vector3((left + point.x) * scale, baseline - point.y * scale, 0.0)
 		var placed := frame * local
 		return [placed.x, placed.y, placed.z]
 

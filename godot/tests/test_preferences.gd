@@ -188,3 +188,26 @@ func test_swatches_set_in_the_colour_panel_come_back_in_new_documents() -> void:
 	Preferences.shared().set_value("palette", [])
 	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://test_palette_settings.json"))
 	Preferences.use_file(Preferences.DEFAULT_PATH)
+
+
+func test_the_text_font_and_the_recent_ones_are_remembered() -> void:
+	var preferences := _fresh()
+	check_eq(preferences.text("text_font"), "", "the built-in font by default")
+	check_eq(preferences.value("recent_fonts"), [], "and nothing chosen before")
+	preferences.choose_font("Alpha")
+	preferences.choose_font("Beta")
+	preferences.choose_font("Alpha")
+	check_eq(preferences.text("text_font"), "Alpha", "the font chosen last is the one in use")
+	check_eq(preferences.value("recent_fonts"), ["Alpha", "Beta"], "the latest first, each once")
+	preferences.choose_font("")
+	check_eq(preferences.text("text_font"), "", "the built-in font can be chosen again")
+	check_eq(preferences.value("recent_fonts"), ["Alpha", "Beta"], "and is not a recent one")
+	for family: String in ["C", "D", "E", "F", "G", "H"]:
+		preferences.choose_font(family)
+	check_eq(preferences.value("recent_fonts"), ["H", "G", "F", "E", "D", "C"], "only the last few are kept")
+	var stored: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(SETTINGS))
+	check_eq(stored.get("text_font"), "H", "on disk")
+	_write('{"text_font": 12, "recent_fonts": ["A", 3]}')
+	preferences.load_from_disk()
+	check_eq(preferences.text("text_font"), "", "a font that is not a name falls back to the built-in one")
+	check_eq(preferences.value("recent_fonts"), [], "a list that is not of names is refused")

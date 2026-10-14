@@ -15,7 +15,7 @@ extends Node
 ##   -- --sim | --no-sim     with --xr: use the simulated headset and hands (the default when
 ##                           no headset answers), or fail instead of falling back to them;
 ##                           the --sim-... options that pose them are in godot/xr/sim_rig.gd
-##   -- --text <words>       write some text in strokes
+##   -- --text <words>       write some text in strokes; a literal \n starts a new line
 ##   -- --render ...         render a camera to a video and quit; see godot/capture/render_job.gd
 ##   -- --static-dither      keep the dither pattern still (for repeatable screenshots)
 ##   -- --shot <file.png>    save a screenshot after a few frames, then quit
@@ -120,7 +120,7 @@ func _apply_arguments() -> void:
 				LimnerDemo.run(editor)
 			"--text":
 				i += 1
-				editor.add_text(args[i], 0.25)
+				editor.add_text(args[i].replace("\\n", "\n"), 0.25)
 			"--no-panels":
 				if shell != null:
 					shell.set_panels_visible(false)
