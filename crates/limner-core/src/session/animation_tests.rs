@@ -730,3 +730,114 @@ fn timeline_rows_place_nested_time_on_the_root_timeline() {
     assert_eq!(row(inside)["paint"]["frame_duration"], FRAME);
     let _ = (Interp::Linear, FrameRate::whole(24));
 }
+
+fn row_of(rows: &Value, layer: LayerId) -> Value {
+    rows.as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == json!(layer))
+        .expect("a row for the layer")
+        .clone()
+}
+
+#[test]
+fn timeline_rows_say_which_drawings_are_empty_and_the_clock_follows_the_playhead() {
+    let (mut session, layer) = session();
+    mark(&mut session, 1.0);
+    run(
+        &mut session,
+        json!({ "cmd": "add_frame", "layer": layer, "kind": "blank" }),
+    );
+    run(
+        &mut session,
+        json!({ "cmd": "add_frame", "layer": layer, "kind": "blank" }),
+    );
+
+    let row = row_of(&session.timeline_rows(), layer);
+    assert_eq!(row["paint"]["frames"], json!([0, 1, 2]));
+    assert_eq!(
+        row["paint"]["empty"],
+        json!([1, 2]),
+        "only the first drawing holds a stroke"
+    );
+
+    // The clock is the moving part of the rows, layer for layer.
+    run(&mut session, json!({ "cmd": "seek", "time": FRAME }));
+    let rows = session.timeline_rows();
+    let clock = session.timeline_clock();
+    let ticks = clock.as_array().unwrap();
+    assert_eq!(ticks.len(), rows.as_array().unwrap().len());
+    for (row, tick) in rows.as_array().unwrap().iter().zip(ticks) {
+        assert_eq!(row["id"], tick["id"]);
+        assert_eq!(row["origin"], tick["origin"]);
+        assert_eq!(row["time"], tick["time"]);
+        assert_eq!(row["local_time"], tick["local_time"]);
+        if !row["paint"].is_null() {
+            assert_eq!(row["paint"]["frame"], tick["frame"]);
+        }
+    }
+    let tick = row_of(&clock, layer);
+    assert_eq!(tick["frame"], json!(1));
+    assert_eq!(tick["time"], json!(FRAME));
+}
+
+#[test]
+fn the_status_says_when_keys_are_waiting_to_be_pasted() {
+    let (mut session, layer) = session();
+    assert_eq!(session.status()["copied_keys"], Value::Null);
+    run(
+        &mut session,
+        json!({ "cmd": "set_key", "layer": layer, "track": "opacity" }),
+    );
+    let before = session.state_revision();
+    run(
+        &mut session,
+        json!({ "cmd": "copy_keys", "layer": layer, "track": "opacity", "times": [0] }),
+    );
+    assert_eq!(session.status()["copied_keys"], json!("opacity"));
+    assert!(session.state_revision() > before, "panels are told");
+}
+
+#[test]
+fn trimming_a_clip_start_out_and_back_leaves_it_as_it_was() {
+    let (mut session, layer) = session();
+    let second = crate::time::FLICKS_PER_SECOND;
+    let clip = |session: &Session| row_of(&session.timeline_rows(), layer)["clips"][0].clone();
+    run(
+        &mut session,
+        json!({ "cmd": "move_clip", "layer": layer, "clip": 0, "start": 2 * second }),
+    );
+    // The start stops at the beginning of the content instead of dragging it along.
+    run(
+        &mut session,
+        json!({ "cmd": "trim_clip", "layer": layer, "clip": 0, "start": second }),
+    );
+    assert_eq!(clip(&session)["start"], json!(2 * second));
+    assert_eq!(clip(&session)["trim"], json!(0));
+    // Trimming in eats content, and pulling out again gives all of it back.
+    run(
+        &mut session,
+        json!({ "cmd": "trim_clip", "layer": layer, "clip": 0, "start": 3 * second }),
+    );
+    assert_eq!(clip(&session)["trim"], json!(second));
+    run(
+        &mut session,
+        json!({ "cmd": "trim_clip", "layer": layer, "clip": 0, "start": second }),
+    );
+    assert_eq!(clip(&session)["start"], json!(2 * second));
+    assert_eq!(clip(&session)["trim"], json!(0));
+}
+
+#[test]
+fn selecting_a_layer_that_is_not_there_is_refused() {
+    let (mut session, layer) = session();
+    fail(
+        &mut session,
+        json!({ "cmd": "select_layers", "layers": [9999] }),
+    );
+    assert_eq!(
+        session.current_layer(),
+        Some(layer),
+        "the selection is left alone"
+    );
+}

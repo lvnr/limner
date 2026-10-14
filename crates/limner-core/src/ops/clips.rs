@@ -190,6 +190,10 @@ pub fn move_clip(
 
 /// Changes where a clip starts or ends without moving its content in time.
 /// `end` is `Some(None)` to make the clip open-ended.
+///
+/// The start cannot be pulled out past the beginning of the content: it stops
+/// there. So the content never moves, and trimming in and back out again leaves
+/// the clip as it was.
 pub fn trim_clip(
     doc: &mut Document,
     id: LayerId,
@@ -200,10 +204,10 @@ pub fn trim_clip(
     edit(doc, id, |clips| {
         let clip = clips.get_mut(index).ok_or_else(|| no_clip(index))?;
         if let Some(start) = start {
-            let start = start.max(0);
             // Trimming the start eats into the content; pulling it back out reveals it
             // again, as far as there is content to reveal.
-            clip.trim = (clip.trim + (start - clip.start)).max(0);
+            let start = start.max(0).max(clip.start - clip.trim);
+            clip.trim += start - clip.start;
             clip.start = start;
         }
         if let Some(end) = end {
@@ -429,8 +433,13 @@ mod tests {
         trim_clip(&mut doc, id, 0, Some(1900), Some(None)).unwrap();
         assert_eq!(
             spans(&doc, id),
-            [(1900, None, 0)],
-            "pulled back out past its beginning, and reopened"
+            [(2000, None, 0)],
+            "pulled back out as far as its beginning and no further, and reopened"
+        );
+        assert_eq!(
+            clip_at(&doc.layer(id).unwrap().anim, 2500).local_time,
+            500,
+            "the content never moved"
         );
         assert!(trim_clip(&mut doc, id, 0, None, Some(Some(1900))).is_err());
         assert!(trim_clip(&mut doc, id, 7, None, None).is_err());

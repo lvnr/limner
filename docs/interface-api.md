@@ -43,7 +43,7 @@ The pieces:
 
 ### `status`
 
-`doc_revision`, `state_revision`, `dirty`, `can_undo`, `can_redo`, `undo_label`, `redo_label`, `can_transform_again`, `time` (flicks), `seconds`, `frame`, `playing`, `waiting` (held at a Stop), `tool`, `current_layer`, `paint_layer`, `transform_target` (ids or `null`), `selection_count` (selected strokes), `tool_active` (a trigger gesture is under way), `grabbing` (a grip holds something).
+`doc_revision`, `state_revision`, `dirty`, `can_undo`, `can_redo`, `undo_label`, `redo_label`, `can_transform_again`, `time` (flicks), `seconds`, `frame`, `playing`, `waiting` (held at a Stop), `tool`, `current_layer`, `paint_layer`, `transform_target` (ids or `null`), `selection_count` (selected strokes), `tool_active` (a trigger gesture is under way), `grabbing` (a grip holds something), `copied_keys` (the track the keys waiting to be pasted came from, or `null`).
 
 With nothing to redo, `redo` repeats the last move of a copy (see `transform_again`); `can_redo` and `redo_label` say so.
 
@@ -71,7 +71,7 @@ With nothing to redo, `redo` repeats the last move of a copy (see `transform_aga
 
 ### Timeline rows
 
-`scene.timeline_rows() -> Array` has one dictionary per layer, in the order of the layer rows, with what a timeline draws. Ask for it when `document_changed` fires, and for `time`, `local_time` and `paint.frame` also while the playhead moves.
+`scene.timeline_rows() -> Array` has one dictionary per layer, in the order of the layer rows, with what a timeline draws. Ask for it when the document changes (`status.doc_revision` moved on). For the part that moves with the playhead ask `scene.timeline_clock() -> Array` instead: one `{id, origin, time, local_time, frame}` per layer in the same order, cheap enough for every frame.
 
 | Field | What it is |
 |---|---|
@@ -83,10 +83,12 @@ With nothing to redo, `redo` repeats the last move of a copy (see `transform_aga
 | `transform_keys` | `[{time, interp}]` |
 | `opacity_keys` | `[{time, value, interp}]` |
 | `actions` | `[{time, action}]` with `action` one of `"stop"`, `"play"`, `"loop"`. Chapter marks; they live on the root. |
-| `paint` | For a paint layer `{frames, frame_duration, max_repeat, frame}`: `frames` is the frame table (one drawing index per frame, so a run of equal numbers is a key frame and its holds), `frame` the index showing now. `null` otherwise. |
+| `paint` | For a paint layer `{frames, frame_duration, max_repeat, frame, empty}`: `frames` is the frame table (one drawing index per frame, so a run of equal numbers is a key frame and its holds), `frame` the index showing now, `empty` the drawing indices that hold no strokes. `null` otherwise. |
 | `sequence` | For a sequence `{loop_duration, max_repeat}`; `loop_duration` 0 means it does not loop. `null` otherwise. |
 
 A paint layer's frame `i` of clip `c` covers `origin + c.start - c.trim + i * frame_duration` for one `frame_duration`; when `max_repeat` is 0 the frames repeat to the end of the clip, otherwise the last frame holds.
+
+Drawing indices are places in the layer's list of drawings, and commands that reorder frames may renumber them: after `reverse_frames` the table of a two-frame layer still reads `[0, 1]`, with the two drawings swapped. Read `empty` again with the table instead of remembering it.
 
 ### Document info
 
@@ -154,7 +156,7 @@ Opacity and transform edits write a key at the playhead when the layer is alread
 ### What is being worked on (not undoable)
 | Command | Fields |
 |---|---|
-| `select_layers` | `layers`, optional `mode` (`replace`, `add`, `remove`, `toggle`) |
+| `select_layers` | `layers`, optional `mode` (`replace`, `add`, `remove`, `toggle`). Fails, changing nothing, when one of them does not exist. |
 | `set_transform_target` | `layer` (id, or `null` for the view) |
 | `set_options` | `values` |
 | `set_tool` | `tool` |
@@ -184,7 +186,7 @@ Each acts on the frame the layer shows at the playhead.
 | `toggle_clip` | `layer`, optional `time`: ends the clip there, or starts a new one |
 | `split_clip` | `layer`, optional `time` |
 | `move_clip` | `layer`, `clip`, `start`: the layer's own keys inside the clip move with it |
-| `trim_clip` | `layer`, `clip`, optional `start`, `end`, `open_end` (true removes the end) |
+| `trim_clip` | `layer`, `clip`, optional `start`, `end`, `open_end` (true removes the end). The content stays where it is in time. A start pulled out past the beginning of the content stops there, so trimming in and out again is exact. |
 | `delete_clip` | `layer`, `clip` |
 | `duplicate_clip` | `layer`, `clip`, `start` |
 
@@ -252,6 +254,26 @@ The gimbal shows when `show_gimbal` is on and either a layer is the transform ob
 Pictures and video are taken through `LimnerCapture.of(editor)` and `RenderLauncher`; see `docs/capture.md`.
 
 Materials are made once by `LimnerWorld` and handed to the scene (`set_stroke_materials`, `set_lit_stroke_materials`, `set_layer_materials`, `set_highlight_material`); nothing else should call those.
+
+## The Timeline panel
+
+Three files in `godot/ui/`: `timeline_panel.gd` (the two rows of buttons, what is selected, every command), `timeline_view.gd` (names, ruler, tracks, the playhead, scroll bars, and all presses and drags) and `timeline_scale.gd` (time to pixels and back, zoom, the frame grid). The same panel is mounted in the desktop shell's bottom dock and on the headset palette.
+
+How it behaves, where that is not obvious:
+
+- The tracks read `timeline_rows` when the document changes and `timeline_clock` when only the playhead or the editor's state did. The playhead line is its own overlay, so moving it redraws nothing else.
+- A drag on a clip or on keys is replayed from where it began on every pointer move, inside one edit, and committed on release: one undo step, and none when the drag ends where it started. A clip cannot be dragged over its neighbours.
+- Pressing a clip or a key makes its layer current. Pressing a key of another kind switches the key type; the root switches it to chapter marks. Keys of several layers can be selected together; the clip selection is dropped when another layer becomes current.
+- A drag that starts on empty track space selects the keys it passes over. Clips cover most tracks, so Shift, or the "select a range" switch in the Keys group, makes a drag that starts on a clip do the same.
+- The context row shows the Frames group for a paint layer, Sequence for a sequence and Chapters for the root. What does not apply is greyed out, not hidden, so buttons stay where they are.
+- Besides the thin grip along its top edge the panel has a resize button, which a controller tip can hit.
+
+Left rough:
+
+- The view does not scroll by itself when a drag nears its edge, and Escape does not cancel a drag on the tracks.
+- Pinch and two-finger panning are written but have never been driven by a real trackpad.
+- The two button rows wrap, so a narrow panel is taller: about 290 px at 900 wide against 230 at 1440.
+- In the development build, scrubbing a document with some 300 layers and 9,000 keys took 32 ms a frame before the clock query existed. It has not been measured again since.
 
 ## Trying things out
 

@@ -337,6 +337,17 @@ impl Session {
         Ok(json!({ "keys": count }))
     }
 
+    /// The track the keys waiting to be pasted were copied from.
+    pub fn copied_keys(&self) -> Option<KeyTrack> {
+        self.key_clipboard
+            .as_ref()
+            .map(|clipboard| match clipboard {
+                KeyClipboard::Transform(_) => KeyTrack::Transform,
+                KeyClipboard::Opacity(_) => KeyTrack::Opacity,
+                KeyClipboard::Action(_) => KeyTrack::Action,
+            })
+    }
+
     /// Pastes the copied keys onto `id`, the first of them at `time` or the playhead.
     pub(crate) fn paste_keys(
         &mut self,
@@ -595,35 +606,36 @@ impl Session {
             let Some(layer) = self.doc.layer(id) else {
                 continue;
             };
-            // Root time at which this layer's own time base reads zero.
-            let origin = layer
-                .parent
-                .and_then(|p| origins.get(&p).copied())
-                .unwrap_or(0);
             let layer_clips = clips_of(&layer.anim);
             let state = frame.get(id);
-            if let Some(group) = layer.as_group() {
-                // Children of a sequence count time from the start of its clip.
-                let inner = match (&group.sequence, layer.parent) {
-                    (Some(_), Some(_)) => {
-                        let now = state.map_or(0, |s| s.timeline_time);
-                        let clip = layer_clips
-                            .iter()
-                            .find(|c| c.contains(now))
-                            .or(layer_clips.first());
-                        origin + clip.map_or(0, |c| c.start - c.trim)
-                    }
-                    _ => origin,
-                };
-                origins.insert(id, inner);
-            }
+            let origin = self.time_origin(layer, id, state, &mut origins);
             let keys_of = |times: Vec<(Flicks, Interp)>| -> Value {
                 times
                     .into_iter()
                     .map(|(time, interp)| json!({ "time": time, "interp": interp }))
                     .collect()
             };
-            let paint = layer.as_paint().map(|p| json!({ "frames": p.frames, "frame_duration": p.rate.frame_duration(), "max_repeat": p.max_repeat, "frame": match state.map(|s| s.content) { Some(Content::Paint { frame, .. }) => frame, _ => 0 } }));
+            let paint = layer.as_paint().map(|p| {
+                // Drawings that hold no strokes, by their place in the frame table's numbering.
+                let empty: Vec<usize> = p
+                    .drawings
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, drawing)| {
+                        self.doc
+                            .drawing(**drawing)
+                            .is_none_or(|d| d.stroke_count() == 0)
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+                json!({
+                    "frames": p.frames,
+                    "frame_duration": p.rate.frame_duration(),
+                    "max_repeat": p.max_repeat,
+                    "frame": shown_frame(state),
+                    "empty": empty,
+                })
+            });
             let sequence = layer
                 .as_group()
                 .and_then(|g| g.sequence)
@@ -643,6 +655,69 @@ impl Session {
             }));
         }
         Value::Array(rows)
+    }
+
+    /// The part of [`Session::timeline_rows`] that moves with the playhead, for every
+    /// layer in list order: where its time base sits on the root timeline, its own
+    /// time, and the frame a paint layer shows. Cheap enough to ask for every frame.
+    pub fn timeline_clock(&self) -> Value {
+        let frame = self.evaluate();
+        let mut origins: std::collections::HashMap<LayerId, Flicks> =
+            std::collections::HashMap::new();
+        let mut rows = Vec::with_capacity(self.doc.layer_count());
+        for id in self.doc.walk() {
+            let Some(layer) = self.doc.layer(id) else {
+                continue;
+            };
+            let state = frame.get(id);
+            let origin = self.time_origin(layer, id, state, &mut origins);
+            rows.push(json!({
+                "id": id,
+                "origin": origin,
+                "time": state.map_or(0, |s| s.timeline_time),
+                "local_time": state.map_or(0, |s| s.local_time),
+                "frame": shown_frame(state),
+            }));
+        }
+        Value::Array(rows)
+    }
+
+    /// Root time at which a layer's own time base reads zero. Remembers in `origins`
+    /// where the time base of a group's children sits, so layers must be asked for in
+    /// list order.
+    fn time_origin(
+        &self,
+        layer: &Layer,
+        id: LayerId,
+        state: Option<&crate::eval::LayerState>,
+        origins: &mut std::collections::HashMap<LayerId, Flicks>,
+    ) -> Flicks {
+        let origin = layer
+            .parent
+            .and_then(|p| origins.get(&p).copied())
+            .unwrap_or(0);
+        if let Some(group) = layer.as_group() {
+            // Children of a sequence count time from the start of its clip.
+            let inner = match (&group.sequence, layer.parent) {
+                (Some(_), Some(_)) => {
+                    let now = state.map_or(0, |s| s.timeline_time);
+                    let clips = clips_of(&layer.anim);
+                    let clip = clips.iter().find(|c| c.contains(now)).or(clips.first());
+                    origin + clip.map_or(0, |c| c.start - c.trim)
+                }
+                _ => origin,
+            };
+            origins.insert(id, inner);
+        }
+        origin
+    }
+}
+
+/// The frame of its table a paint layer shows, or zero for anything else.
+fn shown_frame(state: Option<&crate::eval::LayerState>) -> u32 {
+    match state.map(|s| s.content) {
+        Some(Content::Paint { frame, .. }) => frame,
+        _ => 0,
     }
 }
 

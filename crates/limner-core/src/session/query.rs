@@ -79,6 +79,8 @@ impl Session {
             "selection_count": self.selection.count(),
             "tool_active": self.is_tool_active(),
             "grabbing": self.grabbed().is_some(),
+            // The track the copied keys came from, when keys have been copied.
+            "copied_keys": self.copied_keys(),
         })
     }
 

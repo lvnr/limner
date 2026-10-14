@@ -1179,10 +1179,9 @@ impl Session {
                 Value::Null
             }
             Command::SelectLayers { layers: ids, mode } => {
-                let ids: Vec<LayerId> = ids
-                    .into_iter()
-                    .filter(|id| self.doc.layer(*id).is_some())
-                    .collect();
+                if let Some(missing) = ids.iter().find(|id| self.doc.layer(**id).is_none()) {
+                    return Err(crate::ops::OpError::NoSuchLayer(*missing).into());
+                }
                 match mode {
                     SelectMode::Replace => self.selected_layers = ids,
                     SelectMode::Add => {

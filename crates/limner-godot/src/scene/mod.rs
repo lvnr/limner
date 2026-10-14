@@ -228,6 +228,16 @@ impl LimnerScene {
             .unwrap_or_default()
     }
 
+    /// The part of `timeline_rows` that moves with the playhead: for every layer in
+    /// list order its `id`, `origin`, `time`, `local_time` and the `frame` a paint
+    /// layer shows. Cheap enough to ask for every frame.
+    #[func]
+    fn timeline_clock(&self) -> VarArray {
+        variant_from_json(&self.session.timeline_clock())
+            .try_to()
+            .unwrap_or_default()
+    }
+
     #[func]
     fn document_info(&self) -> VarDictionary {
         dictionary_from_json(&self.session.document_info())

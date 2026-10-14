@@ -11,7 +11,6 @@ Limner follows Quill 2.9's features and habits. It does not copy its pixels or i
 | **Ambient light** | A document setting for how bright lit paint is where no light reaches. |
 | **Mirrored working** | With a mirror on X, Y or Z through the pivot of the layer being painted, Paint and Line lay a twin of every stroke and Colorize, Eraser, Thicken, Nudge and Optimize work on both sides. Quill's way (copy, flip, merge) still works. |
 | **Text** | A line of text written in strokes, from the font's own outlines: outlined or filled. |
-| **Smooth keys** | See below. |
 | **Performance panel** | The scene held against what a standalone headset, a PC headset or a desktop draws comfortably. |
 | **Autosave and recovery** | Unsaved work is copied aside every few minutes and offered back after a crash. |
 | **A desktop mode** | The whole editor runs with a mouse or a pen: the same tools, panels and commands. A mouse cannot give depth, so the hand works on a plane in front of the camera (Ctrl + wheel moves the plane). |
@@ -20,6 +19,8 @@ Limner follows Quill 2.9's features and habits. It does not copy its pixels or i
 | **More export formats** | glTF, USD/USDZ, FBX and OBJ with hierarchy, animation, lights and cameras (`docs/export.md`). |
 | **A command line** | `limner inspect`, `convert`, `export`. |
 | **Escape** | Takes back a gesture that is half done. |
+| **Importing a project into another** | A `.limn` or `.limnz` project, or a Quill project, arrives as one folded group. |
+| **Swatches that stay** | The swatches set in the Colour panel are the ones the next new document starts with. |
 
 ## Changed on purpose
 
@@ -37,6 +38,8 @@ Limner follows Quill 2.9's features and habits. It does not copy its pixels or i
 | Models | Single-sided. | Drawn from both sides. | A cave seen from inside works without flipping faces. |
 | Sound cones | Not documented whether angles are full or half angles. | Half angles from the layer's forward (-Z) axis. | To be checked against Quill by ear. |
 | Tool gestures | | Every trigger press, grab and slider drag is exactly one undo step. | Stated as a rule so that tools added later follow it. |
+| Selecting keys in the timeline | | Keys of several layers can be selected and moved together. Pressing a key of another kind (position, opacity, chapter mark) switches the key type to it. | Fewer trips to the key-type switch. |
+| Dragging across a clip in the timeline | | Moves the clip. To select the keys under it instead, hold Shift or turn on "select a range". | Clips cover nearly every track, so a plain drag has to mean one thing. |
 
 ## Choices where Quill's behaviour is not known
 
@@ -57,6 +60,7 @@ These were chosen to feel right and are constants in the code, easy to change af
 | Sound fade with distance | Linear: even between the two radii. Logarithmic: `inner / distance`, shifted to reach silence at the outer radius | `scene/sounds.rs` |
 | Light range | The layer's range × its scale | `scene/lights.rs` |
 | Undo depth | 200 steps, not kept across save and open | `session/history.rs` |
+| Pulling the start of a clip out past the beginning of its content | The start stops there; the content never moves. Move the clip to start it earlier. | `ops/clips.rs` `trim_clip` |
 
 ## Not carried over
 
