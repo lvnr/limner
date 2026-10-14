@@ -22,7 +22,7 @@ pub mod tools;
 mod view;
 
 pub use animation::{KeyTrack, OnionSkin};
-pub use command::{Command, CommandError, OptimizeScope, SelectMode};
+pub use command::{Command, CommandError, OptimizeScope, SelectMode, StrokeSpace, StrokeSpec};
 pub use gesture::Cursor;
 pub use gimbal::{
     Gimbal, GimbalHandle, ARROW_END, ARROW_START, CENTER_RADIUS, PLANE_FAR, PLANE_NEAR,
@@ -1119,6 +1119,12 @@ impl Session {
             Command::DeleteSelection => self.delete_selection(),
             Command::SelectionToNewLayer { copy } => self.selection_to_new_layer(copy),
             Command::Optimize { scope } => self.optimize(scope),
+            Command::AddStrokes {
+                layer,
+                strokes,
+                space,
+                select,
+            } => self.add_strokes(layer, &strokes, space, select),
             Command::TransformAgain => self.transform_again(),
             other => unreachable!("{other:?} does not edit the document"),
         }

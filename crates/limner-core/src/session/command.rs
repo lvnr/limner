@@ -7,7 +7,7 @@
 //! Times are in flicks, colours are linear RGB, and layers are named by their numeric id.
 
 use super::animation::KeyTrack;
-use super::tools::ToolKind;
+use super::tools::{BrushStyle, ToolKind};
 use crate::math::{Flip, Xform};
 use crate::model::{Action, Interp, LayerId};
 use crate::ops::frames::NewFrame;
@@ -36,6 +36,44 @@ pub enum OptimizeScope {
     Layer,
     /// Every paint layer that is not locked, itself or through a group it is in.
     All,
+}
+
+/// The space a command's positions and sizes are given in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrokeSpace {
+    /// The layer's own space, as strokes are stored.
+    #[default]
+    Layer,
+    /// The room the user stands in: metres, as the hands are.
+    Viewer,
+}
+
+/// A stroke described from outside: where it runs and what with.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StrokeSpec {
+    #[serde(default = "plain_ribbon")]
+    pub brush: BrushStyle,
+    /// The path, at least one point. A single point makes a dot.
+    pub points: Vec<[f64; 3]>,
+    /// Half the width of the stroke.
+    pub width: f32,
+    /// Linear RGB; the paint colour when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<[f32; 3]>,
+    #[serde(default = "full")]
+    pub opacity: f32,
+    /// The way a flat stroke faces; toward +Z when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normal: Option<[f64; 3]>,
+}
+
+fn plain_ribbon() -> BrushStyle {
+    BrushStyle::Ribbon
+}
+
+fn full() -> f32 {
+    1.0
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -306,6 +344,19 @@ pub enum Command {
     Optimize {
         scope: OptimizeScope,
     },
+    /// Adds ready-made strokes to the frame a paint layer shows: what the Text tool
+    /// and scripts use. The paint layer is used when `layer` is left out.
+    AddStrokes {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        layer: Option<LayerId>,
+        strokes: Vec<StrokeSpec>,
+        /// The space the points and widths are given in.
+        #[serde(default)]
+        space: StrokeSpace,
+        /// Make the new strokes the selection, ready to be moved into place.
+        #[serde(default)]
+        select: bool,
+    },
     /// After moving a copy of a layer or of the selected strokes (a grab with the
     /// modifier held): makes another copy, moved as far again from the last one.
     TransformAgain,
@@ -439,6 +490,7 @@ impl Command {
             SelectionToNewLayer { copy: true } => "Copy strokes to new layer",
             SelectionToNewLayer { copy: false } => "Move strokes to new layer",
             Optimize { .. } => "Optimize strokes",
+            AddStrokes { .. } => "Add strokes",
             TransformAgain => "Transform again",
             Undo
             | Redo

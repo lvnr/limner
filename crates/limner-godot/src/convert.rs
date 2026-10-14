@@ -103,13 +103,19 @@ pub fn json_from_variant(value: &Variant) -> serde_json::Value {
                     .collect(),
             )
         }
-        VariantType::ARRAY => Value::Array(
-            value
-                .to::<VarArray>()
-                .iter_shared()
-                .map(|v| json_from_variant(&v))
-                .collect(),
-        ),
+        VariantType::ARRAY => match value.try_to::<VarArray>() {
+            Ok(array) => Value::Array(array.iter_shared().map(|v| json_from_variant(&v)).collect()),
+            // An array declared with an element type (`Array[Dictionary]`) is not the
+            // plain kind; read it through the calls every array answers.
+            Err(_) => {
+                let count = value.call("size", &[]).try_to::<i64>().unwrap_or(0);
+                Value::Array(
+                    (0..count)
+                        .map(|i| json_from_variant(&value.call("get", &[i.to_variant()])))
+                        .collect(),
+                )
+            }
+        },
         VariantType::PACKED_INT32_ARRAY => Value::Array(
             value
                 .to::<PackedInt32Array>()

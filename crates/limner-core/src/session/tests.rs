@@ -860,3 +860,91 @@ fn layers_cannot_be_nested_deeper_than_the_format_holds() {
         .is_err());
     session.doc().validate().unwrap();
 }
+
+#[test]
+fn ready_made_strokes_can_be_added_from_either_space() {
+    let mut session = Session::new(Document::new());
+    let layer = session.paint_layer().unwrap();
+    session.tools.color = [0.2, 0.4, 0.6];
+    // The viewer stands in a world ten times their size.
+    session.view.world_from_viewer = Xform::from_scale(10.0);
+    let added = session
+        .exec_json(&json!({
+            "cmd": "add_strokes",
+            "space": "viewer",
+            "select": true,
+            "strokes": [
+                {"points": [[0.0, 1.0, -1.0], [0.1, 1.0, -1.0]], "width": 0.01},
+                {"brush": "capped_cylinder", "points": [[0.0, 1.2, -1.0], [0.1, 1.2, -1.0]],
+                 "width": 0.02, "color": [1.0, 0.0, 0.0], "opacity": 0.5},
+            ],
+        }))
+        .unwrap();
+    assert_eq!(added["strokes"], 2);
+    assert_eq!(added["layer"], layer.0);
+    let paint = session.doc().layer(layer).unwrap().as_paint().unwrap();
+    let drawn: Vec<_> = session
+        .doc()
+        .drawing(paint.drawings[0])
+        .unwrap()
+        .strokes()
+        .cloned()
+        .collect();
+    assert_eq!(drawn.len(), 2);
+    let ribbon = &drawn[0];
+    assert_eq!(ribbon.len(), 2, "a plain ribbon has no caps");
+    assert_eq!(
+        ribbon.points()[1].pos,
+        [1.0, 10.0, -10.0],
+        "placed in the layer's space"
+    );
+    assert!(
+        (ribbon.points()[0].width - 0.1).abs() < 1e-7,
+        "and as wide there as it looks here"
+    );
+    assert_eq!(
+        ribbon.points()[0].color,
+        [0.2, 0.4, 0.6],
+        "the paint colour by default"
+    );
+    assert_eq!(ribbon.points()[0].normal, [0.0, 0.0, 1.0]);
+    let tube = &drawn[1];
+    assert!(tube.len() > 2, "a capped brush gets its round ends");
+    assert!(tube
+        .points()
+        .iter()
+        .all(|p| p.color == [1.0, 0.0, 0.0] && p.opacity == 0.5));
+    assert_eq!(
+        session.selection().count(),
+        2,
+        "selected, ready to be moved into place"
+    );
+    assert_eq!(session.history().undo_label(), Some("Add strokes"));
+
+    // In the layer's own space nothing is converted.
+    session
+        .exec_json(&json!({
+            "cmd": "add_strokes", "layer": layer,
+            "strokes": [{"points": [[5.0, 5.0, 5.0]], "width": 0.5, "normal": [0.0, 1.0, 0.0]}],
+        }))
+        .unwrap();
+    assert_eq!(session.doc().stroke_count(), 3);
+    assert_eq!(session.selection().count(), 2, "left alone unless asked");
+
+    for bad in [
+        json!({"points": [], "width": 0.1}),
+        json!({"points": [[0.0, 0.0, 0.0]], "width": 0.0}),
+        json!({"points": [[0.0, f64::NAN, 0.0]], "width": 0.1}),
+    ] {
+        let refused = session.exec_json(&json!({"cmd": "add_strokes", "strokes": [bad]}));
+        assert!(refused.is_err());
+    }
+    assert_eq!(
+        session.doc().stroke_count(),
+        3,
+        "a refused command adds nothing"
+    );
+    session.undo();
+    session.undo();
+    assert_eq!(session.doc().stroke_count(), 0);
+}

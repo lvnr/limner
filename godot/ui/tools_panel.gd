@@ -80,6 +80,9 @@ var _settings := {}
 ## The toggle showing each editor option, by key.
 var _options := {}
 var _mirror: ChoiceRow
+var _text: LineEdit
+var _text_height: SliderRow
+var _text_solid: CheckBox
 var _selection_status: Label
 ## The buttons that need a selection to act on.
 var _selection_buttons: Array[Button] = []
@@ -116,6 +119,23 @@ func _init(limner_editor: LimnerEditor) -> void:
 		_mirror.add_text(axis, axis.to_upper(), "Paint and edit on both sides of a mirror square to the layer's %s axis" % axis.to_upper())
 	_mirror.chosen.connect(func(key: String) -> void: editor.run({"cmd": "set_tool_settings", "values": {"symmetry": key}}))
 	add_child(_titled("Mirror", "What the tools do on one side of the mirror they also do on the other. The mirror stands at the pivot of the layer being painted on: move the pivot to move it.", _mirror))
+
+	add_child(Kit.heading("Text"))
+	_text = LineEdit.new()
+	_text.placeholder_text = "Words to write in strokes"
+	_text.custom_minimum_size = Vector2(0, Kit.ROW)
+	_text.tooltip_text = "Text is written in strokes of the paint colour on the paint layer, in front of you, and selected so that it can be moved into place"
+	_text.text_submitted.connect(func(_submitted: String) -> void: _add_text())
+	add_child(_text)
+	_text_height = SliderRow.new("Height", 0.01, 1.0, 0.001, "How tall the letters are", _millimetres, true)
+	_text_height.set_value(0.1)
+	add_child(_text_height)
+	_text_solid = Kit.toggle("Filled letters", "Fill the letters with paint; otherwise only their outlines are drawn", Callable())
+	_text_solid.button_pressed = true
+	add_child(_text_solid)
+	var add_text := Kit.button("Add text", "Write the text in strokes", _add_text, "plus")
+	add_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	add_child(add_text)
 
 
 func _ready() -> void:
@@ -312,6 +332,12 @@ func _option(key: String, text: String, tooltip: String) -> CheckBox:
 	toggle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_options[key] = toggle
 	return toggle
+
+
+func _add_text() -> void:
+	var count := editor.add_text(_text.text, _text_height.get_value(), _text_solid.button_pressed)
+	if count > 0:
+		editor.message.emit("Added the text as %d strokes; it is selected, ready to move" % count, false)
 
 
 ## A button that runs one command.

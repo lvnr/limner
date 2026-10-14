@@ -1,7 +1,12 @@
 //! Commands that act on strokes: the selection commands and Optimize.
 
-use super::command::OptimizeScope;
+use super::command::{OptimizeScope, StrokeSpace, StrokeSpec};
+use super::tools::stroke_builder::{build_points, Sample, StrokeStyle, MAX_STROKE_POINTS};
+use super::tools::Taper;
 use super::{CommandError, Session};
+
+/// The most strokes one `add_strokes` command may carry.
+const MAX_ADDED_STROKES: usize = 100_000;
 use crate::model::{Drawing, DrawingId, LayerId, LayerKind, Paint};
 use crate::ops::layers::unique_name;
 use crate::ops::simplify::simplify_stroke;
@@ -11,6 +16,103 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 impl Session {
+    /// Adds strokes described from outside to the frame a paint layer shows.
+    pub(crate) fn add_strokes(
+        &mut self,
+        layer: Option<LayerId>,
+        specs: &[StrokeSpec],
+        space: StrokeSpace,
+        select: bool,
+    ) -> Result<Value, CommandError> {
+        if specs.len() > MAX_ADDED_STROKES {
+            return Err(CommandError::invalid(format!(
+                "{} strokes at once is more than the {MAX_ADDED_STROKES} that can be added in one go",
+                specs.len()
+            )));
+        }
+        let frame = self.evaluate();
+        let layer = match layer.or(self.paint_layer) {
+            Some(layer) => layer,
+            None => self.paint_target().map_err(CommandError::Invalid)?.layer,
+        };
+        let frame = if frame.get(layer).is_some() {
+            frame
+        } else {
+            self.evaluate()
+        };
+        let target = self
+            .editable_drawing(&frame, layer)
+            .map_err(CommandError::Invalid)?;
+        // From the space the strokes are given in to the layer's own.
+        let (place, scale) = match space {
+            StrokeSpace::Layer => (glam::DAffine3::IDENTITY, 1.0),
+            StrokeSpace::Viewer => {
+                let space = self
+                    .layer_space(&frame, layer)
+                    .ok_or_else(|| CommandError::invalid("that layer cannot be drawn on here"))?;
+                (space.layer_from_viewer, space.scale)
+            }
+        };
+        let paint_color = self.tools.color;
+        let mut built = Vec::with_capacity(specs.len());
+        for spec in specs {
+            let usable = !spec.points.is_empty()
+                && spec.points.len() <= MAX_STROKE_POINTS
+                && spec.points.iter().flatten().all(|v| v.is_finite())
+                && spec.width.is_finite()
+                && spec.width > 0.0;
+            if !usable {
+                return Err(CommandError::invalid(
+                    "a stroke needs between one and 8,192 points and a width above zero",
+                ));
+            }
+            let normal = spec
+                .normal
+                .map(glam::DVec3::from_array)
+                .and_then(|n| place.transform_vector3(n).try_normalize())
+                .unwrap_or(glam::DVec3::Z);
+            let up = normal.any_orthonormal_vector();
+            let samples: Vec<Sample> = spec
+                .points
+                .iter()
+                .map(|p| Sample {
+                    pos: place.transform_point3(glam::DVec3::from_array(*p)),
+                    normal,
+                    up,
+                    view_dir: -normal,
+                    pressure: 1.0,
+                    size: (spec.width as f64 * scale) as f32,
+                    color: spec.color.unwrap_or(paint_color),
+                    opacity: spec.opacity.clamp(0.0, 1.0),
+                })
+                .collect();
+            let style = StrokeStyle {
+                brush: spec.brush.brush(),
+                cap: spec.brush.cap(),
+                width_taper: Taper::None,
+                opacity_taper: Taper::None,
+                cap_gap: (1e-4 * scale) as f32,
+            };
+            built.push((spec.brush.brush(), build_points(&samples, &style)));
+        }
+        let drawing = self
+            .doc_mut()
+            .drawing_mut(target.drawing)
+            .ok_or_else(|| CommandError::invalid("that frame no longer exists"))?;
+        let mut ids = BTreeSet::new();
+        for (brush, points) in built {
+            let id = drawing.next_stroke_id();
+            drawing.push_stroke(crate::model::Stroke::new(id, brush, false, points));
+            ids.insert(id);
+        }
+        let added = ids.len();
+        if select {
+            self.selection.clear();
+            self.selection.set_drawing(target.drawing, ids);
+        }
+        Ok(json!({ "strokes": added, "layer": layer }))
+    }
+
     /// Selects every stroke the Selection tool can reach now.
     pub(crate) fn select_all(&mut self) {
         let frame = self.evaluate();

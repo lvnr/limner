@@ -197,6 +197,43 @@ func import_file(file_path: String) -> int:
 	return int(result.layer)
 
 
+## Where something new should appear: a metre in front of whoever is looking, upright
+## and facing them. In viewer space.
+func work_frame() -> Transform3D:
+	var viewport := get_viewport()
+	var camera := viewport.get_camera_3d() if viewport != null else null
+	if camera == null:
+		return Transform3D(Basis.IDENTITY, Vector3(0.0, 1.4, -1.0))
+	var ahead := -camera.global_basis.z
+	var level := Vector3(ahead.x, 0.0, ahead.z)
+	if level.length() < 0.05:
+		level = -camera.global_basis.y
+		level.y = 0.0
+	level = level.normalized()
+	var toward_viewer := -level
+	var basis := Basis(Vector3.UP.cross(toward_viewer).normalized(), Vector3.UP, toward_viewer)
+	return Transform3D(basis, camera.global_position + ahead * 1.0)
+
+
+## Writes `text` in strokes of the paint colour on the paint layer, `height` metres
+## tall, in front of the viewer, and selects it so that it can be moved into place.
+## Returns how many strokes it took, or 0 after reporting why it failed.
+func add_text(text: String, height: float, solid := true, font: Font = null) -> int:
+	if text.strip_edges().is_empty():
+		message.emit("There is no text to add", true)
+		return 0
+	var strokes := TextStrokes.build(text, font if font != null else ThemeDB.fallback_font, height, work_frame(), solid)
+	if strokes.is_empty():
+		message.emit("The font has no outlines for that text", true)
+		return 0
+	var result: Variant = run({"cmd": "add_strokes", "space": "viewer", "select": true, "strokes": strokes})
+	if result == null:
+		return 0
+	# With the Selection tool in hand the new text can be grabbed and moved at once.
+	run({"cmd": "set_tool", "tool": "select"})
+	return int((result as Dictionary).strokes)
+
+
 func title() -> String:
 	var name: String = get_info().get("title", "")
 	if name == "":

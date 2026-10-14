@@ -105,6 +105,9 @@ func _apply_arguments() -> void:
 				editor.save_document(args[i])
 			"--demo":
 				LimnerDemo.run(editor)
+			"--text":
+				i += 1
+				editor.add_text(args[i], 0.25)
 			"--no-panels":
 				if shell != null:
 					shell.set_panels_visible(false)
