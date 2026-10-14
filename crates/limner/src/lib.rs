@@ -4,6 +4,8 @@
 pub mod files;
 
 pub use limner_core as core;
+pub use limner_format as format;
 pub use limner_quill as quill;
 
-pub use files::{open, OpenError, Opened, SourceKind};
+pub use files::{open, save, OpenError, Opened, SaveError, SourceKind};
+pub use limner_format::SaveReport;

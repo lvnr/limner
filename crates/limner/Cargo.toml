@@ -8,5 +8,11 @@ publish = false
 
 [dependencies]
 limner-core = { version = "0.1.0", path = "../limner-core" }
+limner-format = { version = "0.1.0", path = "../limner-format" }
 limner-quill = { version = "0.1.0", path = "../limner-quill" }
 thiserror = "2.0.21"
+
+[dev-dependencies]
+limner-format = { path = "../limner-format", features = ["testing"] }
+limner-quill = { path = "../limner-quill", features = ["testing"] }
+tempfile = "3.27.0"
