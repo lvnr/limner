@@ -683,8 +683,12 @@ impl Session {
                     .filter(|s| ids.contains(&s.id))
                     .map(|s| (**s).clone())
                     .collect();
+                // Ids are found once and counted up: looking each one up again would
+                // scan the whole drawing for every copy.
+                let mut next = drawing.next_stroke_id();
                 for mut copy in originals {
-                    copy.id = drawing.next_stroke_id();
+                    copy.id = next;
+                    next = next.wrapping_add(1);
                     copies.insert(copy.id);
                     drawing.push_stroke(copy);
                 }
@@ -1018,8 +1022,10 @@ impl Session {
                     };
                     let mut ids = BTreeSet::new();
                     if let Some(drawing) = self.doc_mut().drawing_mut(destination) {
+                        let mut next = drawing.next_stroke_id();
                         for mut copy in copies {
-                            copy.id = drawing.next_stroke_id();
+                            copy.id = next;
+                            next = next.wrapping_add(1);
                             ids.insert(copy.id);
                             drawing.push_stroke(copy);
                         }
