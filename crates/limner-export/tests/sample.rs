@@ -14,13 +14,26 @@ use support::fbx::{decode_geometry, Fbx};
 use support::zip::read_usdz;
 use support::Glb;
 
-fn sample_dir() -> Option<PathBuf> {
+/// The owner's private sample: `LIMNER_SAMPLE_DIR`, or else the first Quill project
+/// folder (by name) inside `~/projects/quill-exporter`.
+fn find_sample() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("LIMNER_SAMPLE_DIR") {
+        let dir = PathBuf::from(dir);
+        return dir.join("Quill.json").is_file().then_some(dir);
+    }
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    let dir = PathBuf::from(home)
-        .join("projects")
-        .join("quill-exporter")
-        .join("sample");
-    dir.join("Quill.json").is_file().then_some(dir)
+    let mut projects: Vec<PathBuf> =
+        std::fs::read_dir(PathBuf::from(home).join("projects/quill-exporter"))
+            .ok()?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|dir| dir.join("Quill.json").is_file())
+            .collect();
+    projects.sort();
+    projects.into_iter().next()
+}
+
+fn sample_dir() -> Option<PathBuf> {
+    find_sample()
 }
 
 fn out_dir() -> PathBuf {

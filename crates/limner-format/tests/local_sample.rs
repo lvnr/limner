@@ -8,14 +8,26 @@ use limner_format::testing::assert_documents_equal;
 use limner_format::{load_project, pack, save_project, SaveOptions};
 use std::path::PathBuf;
 
+/// The owner's private sample: `LIMNER_SAMPLE_DIR`, or else the first Quill project
+/// folder (by name) inside `~/projects/quill-exporter`.
+fn find_sample() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("LIMNER_SAMPLE_DIR") {
+        let dir = PathBuf::from(dir);
+        return dir.join("Quill.json").is_file().then_some(dir);
+    }
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    let mut projects: Vec<PathBuf> =
+        std::fs::read_dir(PathBuf::from(home).join("projects/quill-exporter"))
+            .ok()?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|dir| dir.join("Quill.json").is_file())
+            .collect();
+    projects.sort();
+    projects.into_iter().next()
+}
+
 fn sample_dir() -> Option<PathBuf> {
-    std::env::var_os("LIMNER_SAMPLE_DIR")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME")
-                .map(|home| PathBuf::from(home).join("projects/quill-exporter/sample"))
-        })
-        .filter(|dir| dir.join("Quill.json").is_file())
+    find_sample()
 }
 
 #[test]

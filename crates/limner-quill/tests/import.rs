@@ -453,14 +453,7 @@ fn a_missing_qbin_is_a_warning() {
 /// Runs against the project owner's private sample when it is present on this machine.
 #[test]
 fn imports_the_local_sample_exactly() {
-    let dir = std::env::var_os("LIMNER_SAMPLE_DIR")
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| {
-                std::path::PathBuf::from(home).join("projects/quill-exporter/sample")
-            })
-        });
-    let Some(dir) = dir.filter(|d| d.join("Quill.json").is_file()) else {
+    let Some(dir) = find_sample() else {
         eprintln!("skipped: no local sample project");
         return;
     };
@@ -488,4 +481,22 @@ fn imports_the_local_sample_exactly() {
         doc.settings.default_viewpoint,
         doc.find_by_path("Root/InitialSpawnArea")
     );
+}
+
+/// The owner's private sample: `LIMNER_SAMPLE_DIR`, or else the first Quill project
+/// folder (by name) inside `~/projects/quill-exporter`.
+fn find_sample() -> Option<std::path::PathBuf> {
+    if let Some(dir) = std::env::var_os("LIMNER_SAMPLE_DIR") {
+        let dir = std::path::PathBuf::from(dir);
+        return dir.join("Quill.json").is_file().then_some(dir);
+    }
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    let mut projects: Vec<std::path::PathBuf> =
+        std::fs::read_dir(std::path::PathBuf::from(home).join("projects/quill-exporter"))
+            .ok()?
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|dir| dir.join("Quill.json").is_file())
+            .collect();
+    projects.sort();
+    projects.into_iter().next()
 }
