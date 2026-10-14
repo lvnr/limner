@@ -106,6 +106,7 @@ grab:     {size, inner, strength}
 thicken:  {size, inner, strength}
 nudge:    {size, inner, strength}
 optimize: {size, threshold}
+symmetry: "off" | "x" | "y" | "z"     mirrored working, across the pivot of the paint layer
 ```
 
 - `brush`: `"capped_cylinder"`, `"capped_ellipse"`, `"rounded_ribbon"`, `"cylinder"`, `"ellipse"`, `"ribbon"`, `"cube"` (the order of the Tools panel).
@@ -228,6 +229,9 @@ Shells feed the scene what the hands do, once per frame, and the core decides wh
 | `tool_cursor() -> Dictionary` | `{tracked, position, rotation, tool, radius, inner, color, opacity, active, alt, at_handle}` |
 | `gimbal() -> Dictionary` | Empty when there is none; else `{subject, layer, position, rotation, size, hovered, active, arrow_start, arrow_end, plane_near, plane_far, center_radius}`. `GimbalView` draws it. |
 | `is_grabbing(which) -> bool` | |
+| `mirror_plane() -> Dictionary` | Empty unless mirrored working is on; else `{position, rotation, size}` of the mirror in viewer space. `LimnerWorld` draws it. |
+
+Things that help while working and are not part of the picture (the grid, the gimbal, the mirror, the tool at the hand, gizmos, onion skins, the selection highlight) are drawn on render layers other than 1 (`LimnerWorld.HELPER_LAYERS`, and layer 20 for gizmos). Cameras that take pictures see layer 1 only; anything new of that kind should go on the helper layer too.
 
 A grip takes hold of, in this order: a handle of the gimbal the hand is at; the selected strokes, when the Selection tool is in hand and its sphere reaches them; with `auto_select` on, the layer (or its group) of the stroke at the hand; the layer chosen with `set_transform_target`; otherwise the view. A second grip adds scale, the held hand's stick zooms, and `allow_translate`, `allow_rotate`, `allow_scale` and `level_horizon` limit the motion. Holding the modifier when the grab begins moves a copy.
 
@@ -239,6 +243,11 @@ The gimbal shows when `show_gimbal` is on and either a layer is the transform ob
 |---|---|
 | `editor.new_document()`, `editor.open_document(path) -> bool`, `editor.save_document(path, thumbnail) -> bool` | A path ending in `.limnz` saves one packed file; any other path is a project folder. Opening also takes a Quill project folder. |
 | `editor.import_file(path) -> int` | Brings a picture (`.png`, `.jpg`), a sound (`.wav`, `.ogg`, `.mp3`) or a model (`.obj`, `.glb`, `.gltf`, `.fbx`) in as a new layer after the current one, as one undo step. Returns the new layer's id or -1, and tells the user what the file had that was not brought in. |
+
+| `scene.export_file(path, options) -> Dictionary` | Writes the document as `.glb`, `.usda`, `.usdz`, `.fbx` or `.obj`, chosen by the path. Returns `{ok, error, nodes, meshes, vertices, triangles, animation_frames, bytes}`. Options are described in `docs/export.md` and `docs/capture.md`; an unknown option is named in the error. |
+| `scene.save_copy(path) -> Dictionary` | Saves the document and the editor's state to another place without making that the document's home or clearing "edited": what a render in a second process is started from. |
+
+Pictures and video are taken through `LimnerCapture.of(editor)` and `RenderLauncher`; see `docs/capture.md`.
 
 Materials are made once by `LimnerWorld` and handed to the scene (`set_stroke_materials`, `set_lit_stroke_materials`, `set_layer_materials`, `set_highlight_material`); nothing else should call those.
 
