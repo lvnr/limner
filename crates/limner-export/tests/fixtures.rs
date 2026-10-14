@@ -13,8 +13,14 @@ use limner_core::math::{Flip, Xform};
 use limner_core::model::{
     Brush, Camera, Document, Interp, Key, LayerKind, Light, LightKind, Shading, Track,
 };
-use limner_export::{write_glb, write_obj, ExportOptions, GltfOptions};
+use limner_export::{
+    write_fbx, write_glb, write_obj, write_usda, write_usdz, ExportOptions, FbxOptions, FbxUnit,
+    GltfOptions, UsdOptions,
+};
 use std::path::PathBuf;
+use support::fbx::Fbx;
+use support::usda::Usda;
+use support::zip::read_usdz;
 use support::{frames, group, paint, sequence, straight, straight_colored, Glb, FRAME, RATE};
 
 /// Lights, a camera, a mirrored chain, a keyed layer, clips, a looping frame-by-frame
@@ -162,6 +168,19 @@ fn the_fixture_scene_passes_validation_in_every_configuration() {
             let bytes = limner_export::export_glb(&doc, &options, &extra).unwrap();
             Glb::checked(&bytes);
         }
+        // The other formats' readers check structure as they read.
+        let usd = UsdOptions::default();
+        let text = limner_export::export_usda(&doc, &options, &usd).unwrap();
+        Usda::parse(&text).all();
+        let package = limner_export::export_usdz(&doc, &options, &usd).unwrap();
+        assert_eq!(read_usdz(&package)[0].data, text.as_bytes());
+        for unit in [FbxUnit::Metres, FbxUnit::Centimetres] {
+            let extra = FbxOptions {
+                unit,
+                ..FbxOptions::default()
+            };
+            Fbx::checked(&limner_export::export_fbx(&doc, &options, &extra).unwrap());
+        }
     }
 }
 
@@ -201,4 +220,37 @@ fn write_fixture_files() {
     let path = out.join("fixture-still.obj");
     let report = write_obj(&doc, &path, 0, false).unwrap();
     println!("{}: {report:?}", path.display());
+
+    let usd = UsdOptions::default();
+    for (name, options) in [
+        ("fixture-still.usda", ExportOptions::still(0)),
+        ("fixture-animated.usda", range),
+        ("fixture-animated-baked.usda", baked),
+    ] {
+        let path = out.join(name);
+        let report = write_usda(&doc, &path, &options, &usd).unwrap();
+        println!("{}: {report:?}", path.display());
+    }
+    let path = out.join("fixture-animated.usdz");
+    let report = write_usdz(&doc, &path, &range, &usd).unwrap();
+    println!("{}: {report:?}", path.display());
+
+    let centimetres = FbxOptions {
+        unit: FbxUnit::Centimetres,
+        ..FbxOptions::default()
+    };
+    for (name, options, extra) in [
+        (
+            "fixture-still.fbx",
+            ExportOptions::still(0),
+            FbxOptions::default(),
+        ),
+        ("fixture-animated.fbx", range, FbxOptions::default()),
+        ("fixture-animated-baked.fbx", baked, FbxOptions::default()),
+        ("fixture-animated-centimetres.fbx", range, centimetres),
+    ] {
+        let path = out.join(name);
+        let report = write_fbx(&doc, &path, &options, &extra).unwrap();
+        println!("{}: {report:?}", path.display());
+    }
 }

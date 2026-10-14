@@ -2,7 +2,7 @@
 
 mod support;
 
-use limner_core::glam::{DQuat, DVec3, Vec3};
+use limner_core::glam::{DVec3, Vec3};
 use limner_core::math::{Flip, Xform};
 use limner_core::model::{
     Brush, Camera, Document, LayerId, LayerKind, Light, LightKind, Shading, Stroke,
@@ -11,6 +11,7 @@ use limner_core::tess::ring_positions;
 use limner_export::{
     export_glb, export_glb_with_report, write_glb, ExportError, ExportOptions, GltfOptions,
 };
+use support::stage::{chain, FLIP_CASES};
 use support::{group, paint, straight, straight_colored, Glb, FRAME, RATE};
 
 fn still(doc: &Document) -> Glb {
@@ -319,46 +320,6 @@ fn normals_can_be_left_out() {
     assert!(glb.primitives(glb.node_named("P"))[0].normals.is_empty());
     assert!(without.len() < with.len());
 }
-
-/// Root > A > B > P, each with its own rotation, scale, translation and flip.
-fn chain(flips: [Flip; 3]) -> (Document, LayerId, Vec<Stroke>) {
-    let mut doc = Document::empty();
-    let root = doc.root();
-    let a = group(&mut doc, root, "A");
-    let b = group(&mut doc, a, "B");
-    let strokes = vec![
-        straight(0, Brush::Cylinder, 4, [0.3, 0.2, -0.1]),
-        straight(1, Brush::Ribbon, 4, [-0.2, 0.5, 0.4]),
-    ];
-    let p = paint(&mut doc, b, "P", strokes.clone());
-    doc.layer_mut(a).unwrap().transform = Xform {
-        rotation: DQuat::from_rotation_y(0.7),
-        scale: 2.0,
-        translation: DVec3::new(1.0, 2.0, 3.0),
-        flip: flips[0],
-    };
-    doc.layer_mut(b).unwrap().transform = Xform {
-        rotation: DQuat::from_rotation_x(-0.3) * DQuat::from_rotation_z(0.4),
-        scale: 0.5,
-        translation: DVec3::new(-4.0, 0.0, 1.0),
-        flip: flips[1],
-    };
-    doc.layer_mut(p).unwrap().transform = Xform {
-        rotation: DQuat::from_axis_angle(DVec3::new(1.0, -2.0, 0.5).normalize(), 2.1),
-        scale: 1.5,
-        translation: DVec3::new(0.2, -0.1, 0.3),
-        flip: flips[2],
-    };
-    (doc, p, strokes)
-}
-
-const FLIP_CASES: [[Flip; 3]; 5] = [
-    [Flip::None, Flip::None, Flip::None],
-    [Flip::X, Flip::None, Flip::None],
-    [Flip::None, Flip::None, Flip::Y],
-    [Flip::X, Flip::Z, Flip::None],
-    [Flip::Y, Flip::Z, Flip::X],
-];
 
 #[test]
 fn the_node_chain_reproduces_world_placement() {

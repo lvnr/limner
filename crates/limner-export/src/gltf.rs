@@ -112,7 +112,7 @@ fn trs(x: &Xform, visible: bool) -> ([f32; 3], [f32; 4], [f32; 3]) {
 /// a run of equal values stay, so a hold is not interpolated across; for stepped
 /// values only changes stay. The first and last frames always stay, so every sampler
 /// spans the whole animation and viewers agree on its length.
-fn kept_frames<T: PartialEq>(values: &[T], step: bool) -> Vec<u32> {
+pub(crate) fn kept_frames<T: PartialEq>(values: &[T], step: bool) -> Vec<u32> {
     let last = values.len() - 1;
     (0..values.len())
         .filter(|&k| {

@@ -6,9 +6,12 @@
 mod support;
 
 use limner_export::{
-    export_obj_with_report, write_glb, write_obj, ExportOptions, ExportReport, GltfOptions,
+    export_obj_with_report, export_usda_with_report, write_fbx, write_glb, write_obj, write_usdz,
+    ExportOptions, ExportReport, FbxOptions, GltfOptions, UsdOptions,
 };
 use std::path::PathBuf;
+use support::fbx::{decode_geometry, Fbx};
+use support::zip::read_usdz;
 use support::Glb;
 
 fn sample_dir() -> Option<PathBuf> {
@@ -134,4 +137,75 @@ fn the_sample_project_exports_to_every_format() {
         }
     }
     assert_eq!((v, vn, f), (obj.vertices, obj.vertices, obj.triangles));
+
+    // USD: the animated range as a package. The layer inside is the text export.
+    let usd = UsdOptions::default();
+    let (text, layer) = export_usda_with_report(&doc, &animated_options, &usd).unwrap();
+    describe("animated usda (in memory)", &layer);
+    assert!(text.starts_with("#usda 1.0\n"));
+    // USD has no instancing here, so it writes what the glb shares: at least as much.
+    assert!(layer.triangles >= animated.triangles);
+    assert_eq!(layer.animation_frames, animated.animation_frames);
+    let (mut meshes, mut points, mut samples) = (0usize, 0usize, 0usize);
+    for line in text.lines() {
+        let line = line.trim_start();
+        if line.starts_with("def Mesh ") {
+            meshes += 1;
+        } else if let Some(values) = line.strip_prefix("point3f[] points = ") {
+            points += values.matches('(').count();
+        } else if line.ends_with(".timeSamples = {") {
+            samples += 1;
+        }
+    }
+    assert_eq!(
+        (meshes, points, samples),
+        (layer.meshes, layer.vertices, layer.animation_channels)
+    );
+    let path = out.join("sample-animated.usdz");
+    let package = write_usdz(&doc, &path, &animated_options, &usd).unwrap();
+    describe("animated usdz", &package);
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(bytes.len() as u64, package.bytes);
+    let entries = read_usdz(&bytes);
+    assert_eq!(entries.len(), 1);
+    assert!(
+        entries[0].data == text.as_bytes(),
+        "the package holds the layer"
+    );
+    drop((bytes, entries, text));
+
+    // FBX: the animated range. Geometries are shared, as in the glb.
+    let path = out.join("sample-animated.fbx");
+    let fbx_report = write_fbx(&doc, &path, &animated_options, &FbxOptions::default()).unwrap();
+    describe("animated fbx", &fbx_report);
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(bytes.len() as u64, fbx_report.bytes);
+    let fbx = Fbx::checked(&bytes);
+    assert_eq!(fbx_report.vertices, animated.vertices);
+    assert_eq!(fbx_report.triangles, animated.triangles);
+    assert_eq!(fbx_report.meshes, animated.meshes);
+    assert_eq!(fbx_report.animation_frames, animated.animation_frames);
+    let (mut vertices, mut triangles) = (0usize, 0usize);
+    for geometry in fbx.objects_of("Geometry") {
+        let decoded = decode_geometry(geometry.record);
+        vertices += decoded.positions.len();
+        triangles += decoded.triangles.len();
+    }
+    assert_eq!(
+        (vertices, triangles),
+        (fbx_report.vertices, fbx_report.triangles)
+    );
+    assert_eq!(fbx.objects_of("Model").len(), fbx_report.nodes);
+    assert_eq!(
+        fbx.objects_of("AnimationCurveNode").len(),
+        fbx_report.animation_channels
+    );
+    println!(
+        "fbx objects: {} models, {} geometries, {} materials, {} curve nodes, {} curves",
+        fbx.objects_of("Model").len(),
+        fbx.objects_of("Geometry").len(),
+        fbx.objects_of("Material").len(),
+        fbx.objects_of("AnimationCurveNode").len(),
+        fbx.objects_of("AnimationCurve").len(),
+    );
 }

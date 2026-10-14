@@ -2,6 +2,11 @@
 //! validator for `.glb` files that also reads them back.
 #![allow(dead_code)]
 
+pub mod fbx;
+pub mod stage;
+pub mod usda;
+pub mod zip;
+
 use limner_core::glam::{DMat4, DQuat, DVec3, Vec3};
 use limner_core::model::{
     Brush, Document, Drawing, Group, LayerId, LayerKind, Paint, Point, Sequence, Shading, Stroke,

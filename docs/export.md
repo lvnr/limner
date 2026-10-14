@@ -1,6 +1,11 @@
 # Exporting from Limner
 
-Limner writes two interchange formats so far: **glTF 2.0 binary (`.glb`)** for anything with hierarchy, animation, lights or cameras, and **Wavefront OBJ (`.obj`)** for a still mesh. USD and FBX are planned and will be written from the same intermediate scene.
+Limner writes four interchange formats, all from the same intermediate scene:
+
+- **glTF 2.0 binary (`.glb`)**: hierarchy, animation, lights and cameras in one compact file. The first choice where the receiving tool reads it.
+- **USD (`.usda` text, or a `.usdz` package)**: the same content for USD pipelines.
+- **FBX (binary 7.4, `.fbx`)**: the same content for tools that want FBX, with the limits FBX has.
+- **Wavefront OBJ (`.obj`)**: a still mesh.
 
 The code is in `crates/limner-export`. This page says what each file contains, how each Limner concept is mapped, what is lost, and how to bring the result into Blender, Unity and Unreal.
 
@@ -26,9 +31,15 @@ export_glb(&doc, &options, &GltfOptions) -> Result<Vec<u8>, ExportError>
 write_glb(&doc, path, &options, &GltfOptions) -> Result<ExportReport, ExportError>
 export_obj(&doc, time, include_hidden) -> Result<String, ExportError>
 write_obj(&doc, path, time, include_hidden) -> Result<ExportReport, ExportError>
+export_usda(&doc, &options, &UsdOptions) -> Result<String, ExportError>
+write_usda(&doc, path, &options, &UsdOptions) -> Result<ExportReport, ExportError>
+export_usdz(&doc, &options, &UsdOptions) -> Result<Vec<u8>, ExportError>
+write_usdz(&doc, path, &options, &UsdOptions) -> Result<ExportReport, ExportError>
+export_fbx(&doc, &options, &FbxOptions) -> Result<Vec<u8>, ExportError>
+write_fbx(&doc, path, &options, &FbxOptions) -> Result<ExportReport, ExportError>
 ```
 
-`export_glb_with_report` and `export_obj_with_report` return the data together with the report; `scene_to_glb` and `scene_to_obj` write a scene you built yourself. `ExportReport` counts nodes, meshes, vertices, triangles, sampled animation frames, animation channels and bytes.
+Each `export_*` has an `export_*_with_report` twin that returns the data together with the report; `scene_to_glb`, `scene_to_obj`, `scene_to_usda`, `scene_to_usdz` and `scene_to_fbx` write a scene you built yourself. `ExportReport` counts nodes, meshes, vertices, triangles, sampled animation frames, animation channels and bytes.
 
 ### Rules shared by all formats
 
@@ -40,7 +51,7 @@ write_obj(&doc, path, time, include_hidden) -> Result<ExportReport, ExportError>
 | What is exported | Only what is on screen on at least one sampled frame. A drawing nobody sees in the range, and a paint layer with no visible triangle, produce nothing. |
 | Geometry | The renderer's tessellation: one cross-section ring per stored point (2 vertices for ribbons and legacy lines, 7 for cylinders and ellipses, 4 for cubes), no resampling, no caps, no welding between strokes. Triangles are counter-clockwise seen from outside. |
 | Normals | Always available. Outward for tubes; for ribbons, the side the stored normal points to. |
-| Colour | The scene holds linear RGB and opacity per vertex as floats. Each format encodes them as its readers expect (below). |
+| Colour | The scene holds linear RGB and opacity per vertex as floats. Each format encodes them as its readers expect (below): linear in glTF and USD, sRGB-encoded in OBJ and, by default, in FBX. |
 | Meshes per drawing | Up to four: single- or double-sided (tubes or flat strokes), opaque or see-through. Keeping see-through strokes apart means only they pay for alpha blending. |
 | Opacity | The layer's opacity multiplied by that of every ancestor, because no interchange format inherits opacity. |
 | Dropped strokes | Strokes erased completely (every point at zero opacity), strokes with fewer than two points, and strokes containing a non-finite number. |
@@ -53,7 +64,7 @@ With `bake_transforms` the hierarchy is flattened: groups, sounds and spawn area
 - A paint layer whose world placement **changes** in the range cannot be turned into static vertices. Its node carries the sampled world transform instead, and its mesh stays in layer space. Nothing is lost; only the hierarchy is.
 - Lights, cameras, pictures and models keep their world transform on a root node.
 
-With the hierarchy kept, a mirrored layer keeps its flip in the node transform and the winding is **not** touched. glTF and USD both say that a node with a negative determinant reverses the facing of its triangles, so consumers handle it; pre-reversing would make them face inward.
+With the hierarchy kept, a mirrored layer keeps its flip in the node transform and the winding is **not** touched. glTF and USD both say that a node with a negative determinant reverses the facing of its triangles, and FBX importers treat a negative scale the same way, so consumers handle it; pre-reversing would make them face inward.
 
 ## glTF 2.0 binary (`.glb`)
 
@@ -196,23 +207,217 @@ Everything OBJ cannot hold: animation, hierarchy, opacity (see-through strokes c
 
 **Unity** and **Unreal** import OBJ geometry but ignore the colour columns, so use the `.glb` there.
 
+## USD (`.usda` and `.usdz`)
+
+A `.usda` file is one USD layer as text. A `.usdz` file is a package: a single file that holds that same layer. USD can be told to use exactly Limner's space (metres, +Y up, right-handed), so nothing is converted or rescaled.
+
+### What is written
+
+| Limner | USD |
+|---|---|
+| Document | Layer metadata: `upAxis = "Y"`, `metersPerUnit = 1`, `defaultPrim`, `timeCodesPerSecond` and `framesPerSecond` (the sampling rate), `doc` (the generator), and `customLayerData.limner` with the title, frame rate, start time in seconds, frame count, whether transforms were baked, and the background colour. |
+| Default prim | One `Xform` that holds everything, named after the document title ("Limner_scene" if untitled). It lets another USD file reference the export as one thing. |
+| Layer | One prim under the default prim, in the layer tree's shape. `Xform` for groups, sequences, paint layers, pictures, models, sounds and spawn areas; a light or camera prim for those layers. |
+| Layer name | USD prim names may hold only ASCII letters, digits and `_`, and may not start with a digit. Other characters become `_` ("Left arm" is `Left_arm`); a name that clashes with a sibling gets the layer id appended. The real name is kept in `customData.limner.name`, beside `layerId` and `kind`. |
+| Layer transform | `xformOp:translate` (`double3`), `xformOp:orient` (`quatf`, real part first as USD writes quaternions) and `xformOp:scale` (`float3`), listed in `xformOpOrder`. An op that would do nothing is left out, so a layer that only moves has only a translate op. |
+| Mirrored layer | A negative scale on the flip axis, for example `(-2, 2, 2)`. |
+| Paint layer showing one drawing | `Mesh` prims directly under the layer's prim, one per kind of surface: `Tubes`, `Flat`, `TubesSeeThrough`, `FlatSeeThrough`. |
+| Frame-by-frame paint layer | One child `Xform` per distinct drawing, named `Layer_000`, `Layer_001`, ... by the drawing's position in the layer, with `drawing`, `drawingId` and `layerId` in `customData.limner`. Its `Mesh` prims are inside. Each child is switched on and off by `visibility` (below). |
+| Mesh | `points`, `faceVertexCounts` (all 3), `faceVertexIndices`, `normals` (interpolation `vertex`), `extent` (the exact bounding box), `subdivisionScheme = "none"` so nothing smooths the surface, `doubleSided`, `orientation`. |
+| Winding | `orientation = "rightHanded"`. That is USD's name for "the front is the side from which the corners run counter-clockwise", which is how Limner's triangles are ordered. It stays `rightHanded` under a mirrored layer: USD itself turns the facing round under a transform that mirrors. A baked export arrives at the writer with its winding already reversed where needed. |
+| Colour | `primvars:displayColor`, interpolation `vertex`, **linear** floats as painted. USD defines `displayColor` as linear, so nothing is encoded and colours above 1.0 are kept. |
+| Opacity | `primvars:displayOpacity`, interpolation `vertex`: each vertex's own opacity multiplied by the layer's effective opacity on the first frame. USD has no other place for a layer's opacity that viewers agree on. |
+| Flat strokes (ribbons, lines) | `doubleSided = 1`. Tubes have `doubleSided = 0`. |
+| Materials | A `Scope` named `Materials` beside the layers, holding up to four `Material` prims: `unlit`, `unlit_see_through`, `lit`, `lit_see_through`. Each mesh is bound to one (`material:binding`, with `MaterialBindingAPI` applied). |
+| Light layer | UsdLux. Point: `SphereLight` with `treatAsPoint = 1`. Spot: the same with `ShapingAPI`, `inputs:shaping:cone:angle` (degrees off the axis, as in Limner) and `inputs:shaping:cone:softness` (the blend). Directional: `DistantLight`. All have `inputs:color`, `inputs:intensity` and `inputs:shadow:enable` (`ShadowAPI`). |
+| Camera layer | A `Camera` prim: `projection = "perspective"`, `verticalAperture = 24`, `horizontalAperture` = 24 times the aspect ratio of the document's camera resolution, `focalLength` chosen so the vertical field of view is the layer's, `clippingRange = (0.01, 1000)`. |
+| Picture, model layer | An `Xform` whose `customData.limner` carries `media` (file name), `mediaId` and `sourcePath`. The pixels or mesh are not embedded. |
+| Sound, spawn area | An `Xform` carrying its transform and kind. |
+
+Lights and cameras point along their local -Z axis with +Y up in USD, as in Limner, so their prims carry the layer's rotation unchanged.
+
+### The materials
+
+Many viewers show `displayColor` only on meshes that have no material; others show nothing sensible without one. So every mesh is bound to a small `UsdPreviewSurface` material that reads the vertex colours through a `UsdPrimvarReader_float3` named `Color`:
+
+- **Unlit layers** (the default, and every imported Quill piece): the colour goes to `emissiveColor`, and `diffuseColor` is black, with the specular colour black as well (`useSpecularWorkflow = 1`). A preview surface has no "unlit" switch. Emitting the paint and leaving nothing for lights to act on is the closest it gets: the stroke shows the colour that was painted whatever lights are in the scene, and is not brightened a second time by them.
+- **Lit layers**: the colour goes to `diffuseColor`, with `roughness = 1` and `metallic = 0`: a matte surface that scene lights shade.
+- **See-through** variants also connect `opacity` to a `UsdPrimvarReader_float` that reads `displayOpacity`. Opaque paint uses the variants without it, so it is never blended.
+
+`UsdOptions { materials: false, .. }` leaves the materials and bindings out, for pipelines that want bare `displayColor`.
+
+### Animation
+
+When `animation` is on and the range holds more than one frame, changing values are written as time samples. Time code `k` is sampled frame `k`, so codes start at 0 at `start`; `startTimeCode = 0` and `endTimeCode` is the last frame. A still has no time samples and no start or end code.
+
+| Limner | USD |
+|---|---|
+| Transform keys, easing, pivots, sequence loops | Time samples on `xformOp:translate`, `xformOp:orient` and `xformOp:scale`: the evaluated transform of each frame. |
+| Clips (visibility keys) | Time samples on `visibility`: `inherited` while the layer is in a clip, `invisible` outside. USD has real visibility, and a hidden prim hides everything below it, so nothing is scaled to zero here and a group's clip needs samples on the group only. |
+| Frame-by-frame drawings | `visibility` time samples on each per-drawing child. |
+| First frame | Every sampled property also has a plain value, the state at `start`, so a reader that ignores time samples shows the first frame. |
+
+As in the glTF writer, constant properties get no samples, runs where nothing changes are merged (both ends of a hold are kept for transforms, which USD interpolates linearly; one sample per change for `visibility`, which USD holds), the last frame is always sampled, and consecutive quaternions stay on one hemisphere.
+
+### The `.usdz` package
+
+The package follows the USDZ rules exactly: a zip archive, every file stored without compression, no encryption, and every file's data starting on a multiple of 64 bytes from the start of the archive. The padding that achieves the alignment is an extra field in the file's local header (record id `0x1986`, as OpenUSD's own writer does it). The first and only file is the root layer, named after the default prim, for example `Lantern.usda`. The zip is written by hand, CRC-32 included; dates in it are fixed, so the same document always gives the same bytes.
+
+**The root layer is text (`usda`).** The USDZ specification allows that, but some consumers accept only binary `usdc` layers; older versions of Apple's AR Quick Look are the known case. A binary `usdc` writer is future work. Until then, on a Mac the layer can be converted with Apple's own tools: `usdcat scene.usda -o scene.usdc`, then `usdzip scene.usdz scene.usdc`.
+
+`usdz_package(&[(name, bytes), ...])` is public and packs any list of files by the same rules.
+
+### Options (`UsdOptions`)
+
+```rust
+pub struct UsdOptions {
+    pub normals: bool,     // default true
+    pub materials: bool,   // default true
+}
+```
+
+### What is lost in USD
+
+Everything in the glTF list that concerns the scene itself applies here too: dithered see-through strokes become alpha blending, the directional fade is dropped, step keys are sampled once per frame, keyed light and camera properties export their static values, pictures, models and sounds are references, and stops, chapters and editor state are not exported. In addition, or differently:
+
+| Limner feature | What happens |
+|---|---|
+| Opacity keys | Not exported. Opacity is in the vertices, at its value on the first frame. |
+| A drawing shown by two layers | Written twice, once under each layer. (USD could share it with a reference; plain copies are read by every consumer, including simple ones.) |
+| Light range | UsdLux lights have no cut-off distance. `range` and the range in world metres are kept in `customData.limner`. |
+| Light energy | Written unchanged as `inputs:intensity`, with `inputs:normalize = 1` so it does not depend on the light's radius. Limner's energy is not a physical unit, so renderers that use physical units show lights dimmer or brighter. |
+| Layer names | Cleaned to USD identifiers; the real name is in `customData`. |
+| File size | Text is large: the owner's sample is 75 MiB as `.usda` or `.usdz` against 23 MiB as `.glb`. |
+
+Colours above 1.0, which glTF clamps, are kept.
+
+### Importing the `.usda` or `.usdz`
+
+**Blender (4.2 or later).** File > Import > Universal Scene Description. Blender composes the file with the OpenUSD library, so the hierarchy, transforms, time samples, visibility, lights and cameras come in as USD defines them. `displayColor` arrives as a colour attribute. Whether the imported material shows it depends on the version's support for `UsdPrimvarReader_float3`; if strokes come in black or white, connect a Color Attribute node named `displayColor` to the material's emission.
+
+**Unity.** Use the USD Importer package (`com.unity.importer.usd`); Unity has no built-in USD support. For artwork, the `.glb` is the better-travelled route into Unity.
+
+**Unreal Engine (5.x).** Enable the USD Importer plugin and open the file through a USD Stage actor (Window > Virtual Production > USD Stage) or File > Import Into Level. Unreal converts to centimetres and Z-up from the layer's `metersPerUnit` and `upAxis`.
+
+**macOS.** `usdchecker`, `usdcat`, `usdtree` and `usdrecord` in `/usr/bin` read both files; `usdrecord --camera Shot scene.usda out.png` renders a frame through an exported camera.
+
+## FBX (`.fbx`)
+
+Binary FBX 7.4 (version 7400). FBX has no public specification, so the writer keeps to the subset that every importer is known to read, and follows the layout of Blender's exporter where a choice had to be made. The binary form is not optional: Blender does not read ASCII FBX. Arrays are stored raw (uncompressed), which every reader accepts and which needs no compression code. Version 7.4 is the newest with 32-bit offsets, so a file must stay below 4 GiB.
+
+The file's creation date and id are fixed values, so the same document always gives the same bytes.
+
+### Units and axes
+
+**Axes.** `GlobalSettings` declares +Y up, +Z to the front, +X to the right: a right-handed space, the same as Limner's (and Maya's default). Coordinates are written as they are. Importers for Z-up or left-handed tools (Blender, Unreal, Unity) convert from the declaration.
+
+**Units.** FBX's native unit is the centimetre, and a file says how many centimetres one of its units is (`UnitScaleFactor`). By default Limner writes its coordinates unchanged, in metres, and declares `UnitScaleFactor = 100`: "one unit in this file is 100 cm". What each importer does with that (only the Godot row has been run; the others are those tools' documented behaviour):
+
+| Importer | With the default (`FbxUnit::Metres`) |
+|---|---|
+| Blender | Honours the declared unit ("Apply Unit" is on by default): one Limner metre is one Blender metre, with object scales of 1. |
+| Unity | Honours it ("Convert Units" is on by default): file scale 1, one metre is one Unity unit. |
+| Godot (ufbx) | Honours it: one metre is one unit. |
+| Unreal, Interchange FBX importer | Converts to centimetres from the declared unit: one metre becomes 100 Unreal units, which is one metre. |
+| Unreal, classic FBX importer | Reads the numbers as centimetres unless "Convert Scene Unit" is ticked in the import dialog, where it is off by default. Tick it, or the artwork arrives 100 times too small. |
+
+For pipelines that cannot tick that box, `FbxUnit::Centimetres` multiplies every length by 100 (vertices, translations, light reach, camera clip planes) and declares `UnitScaleFactor = 1`, FBX's own unit. Every importer then gets the right size without settings, at the price that Blender scales the top-level objects by 0.01 instead of leaving them at 1.
+
+This is the reverse of Quill's own FBX, which holds metres but declares centimetres, so every importer reads it 100 times too small.
+
+### What is written
+
+| Limner | FBX |
+|---|---|
+| Document | `FBXHeaderExtension` (creator, title), `GlobalSettings` (axes, unit, frame rate, time span), `Documents`, `Definitions` (object counts), `Objects`, `Connections`, `Takes`. |
+| Layer | One `Model`, connected to its parent's model (or to the scene root). Sub-type `Null` for groups, sequences, pictures, models, sounds, spawn areas and frame-by-frame paint layers; `Mesh` for a paint layer showing one drawing; `Light`; `Camera`. |
+| Layer transform | `Lcl Translation`, `Lcl Rotation` (Euler angles in degrees, order XYZ), `Lcl Scaling`. `InheritType` is 1 on every model, which makes a parent apply to its child as a plain matrix product; FBX's default differs under a mirrored parent. |
+| Mirrored layer | A negative `Lcl Scaling` on the flip axis. The winding is not touched. |
+| Layer identity | User properties on the model: `limnerKind`, `limnerLayerId`; on pictures and models also `limnerMedia`, `limnerSourcePath`, `limnerMediaId`. Blender shows these as custom properties. |
+| Drawing | One `Geometry`: all the drawing's surfaces joined into one vertex list. `Vertices` (doubles), `PolygonVertexIndex` (triangles; the last corner of each is stored as its bitwise complement, FBX's end-of-polygon mark). Two layers that show the same drawing share one geometry. |
+| Normals | `LayerElementNormal`, mapped `ByVertice`, `Direct`: one normal per vertex, which is what Limner has. |
+| Colour | `LayerElementColor` named `Color`, RGBA doubles, mapped `ByPolygonVertex` with `IndexToDirect`: every polygon corner points into a colour list through `ColorIndex`. This is the layout Blender's own exporter writes, so it is the one every importer (Blender's, Unity's, Unreal's) has met most often; the per-vertex layout (`ByVertice`) is rarer for colours. The index is the vertex index, so each vertex's colour is still stored once. |
+| Colour encoding | **sRGB-encoded** RGB by default, as in the OBJ writer. FBX does not say what colour numbers mean; Blender's importer assumes sRGB by default, and Unity and Unreal keep vertex colours in 8 bits per channel, where linear values band in the darks. `FbxColorSpace::Linear` writes Limner's linear values unchanged (and unclamped) instead. Alpha is never encoded. |
+| Opacity | The alpha of the vertex colour: each vertex's own opacity multiplied by the layer's effective opacity on the first frame. |
+| Kinds of surface | One material slot per kind in the drawing (`LayerElementMaterial`, `ByPolygon`, or `AllSame` when there is one), and one `Material` connected to the model per slot. |
+| Materials | Named `unlit` or `lit`, then `double-sided`, then `see-through`: for example `unlit double-sided see-through`. Shared by every layer with the same look, so a file has at most eight. An FBX material cannot say "unlit", "two-sided", "blend" or "use the vertex colours", so each is a plain white Lambert whose **name** says what to set up after import; the same facts are in the user properties `limnerShading`, `limnerDoubleSided` and `limnerSeeThrough`. |
+| Frame-by-frame paint layer | A `Null` model for the layer and one child `Mesh` model per distinct drawing, named `Layer.000`, `Layer.001`, ... as in the `.glb`, with `limnerDrawing`, `limnerDrawingId` and `limnerLayerId`. Each child is switched on and off (below). |
+| Light layer | A `NodeAttribute` of type `Light`: `LightType` (point, directional, spot), `Color`, `Intensity` (a percentage: energy times 100), `DecayType` 2 (inverse square), `CastShadows`, for point and spot lights `FarAttenuationEnd` (the range in world units), for spots `OuterAngle` (the whole cone, twice Limner's angle) and `InnerAngle` (`outer * (1 - blend)`). The original `limnerEnergy` and `limnerRange` are user properties on the model. |
+| Camera layer | A `NodeAttribute` of type `Camera`: the lens as `FocalLength` in millimetres over a 24 mm high film back (`FilmHeight` and `FilmWidth` in inches, `ApertureMode` 3), `FieldOfView`, `FieldOfViewX` and `FieldOfViewY` repeating it as angles, `AspectWidth` and `AspectHeight` from the document's camera resolution, `NearPlane` 0.01 m, `FarPlane` 1000 m. |
+| Picture, model, sound, spawn area | A `Null` model with the user properties above. Nothing is embedded. |
+
+**Lights and cameras are turned.** An FBX light shines along its local -Y and an FBX camera looks along its local +X, where Limner (and glTF and USD) use -Z for both. The writer adds a quarter turn to the rotation of those models (about X for lights, about Y for cameras), so they point the right way in every importer; importers that use -Z themselves, such as Blender and Godot, take the quarter turn out again.
+
+### Animation
+
+When `animation` is on and the range holds more than one frame, and anything changes, the file has one `AnimationStack` with one `AnimationLayer`, both named after the document. Time zero is `start`. FBX counts time in units of 1/46,186,158,000 of a second; frame times of all common rates are whole numbers of them.
+
+| Limner | FBX |
+|---|---|
+| Transform keys, easing, pivots, sequence loops | An `AnimationCurveNode` each for `Lcl Translation`, `Lcl Rotation` and `Lcl Scaling`, with one `AnimationCurve` per axis: the evaluated transform of each frame, with linear keys. |
+| Rotation | Euler angles in degrees. Of the many angle triples that mean the same rotation, each frame uses the one nearest the frame before, so a curve never jumps by 180 or 360 degrees; a layer that turns twice ends at 720 degrees. |
+| Clips (visibility keys) | Written **twice**. First as a `Visibility` curve (1 or 0, constant keys), which is FBX's own way and hides children too (`Visibility Inheritance`). Second as the `Lcl Scaling` curve going to `(0, 0, 0)` while hidden, the same trick the `.glb` uses, because many importers ignore `Visibility`: Godot's does, and in others it depends on an import setting. |
+| Frame-by-frame drawings | A `Visibility` curve and a `Lcl Scaling` curve (1 or 0) on each per-drawing child. |
+| First frame | Each model's properties hold the state at `start`, including a `Visibility` of 0 and a scale of zero for what is hidden then. |
+
+Constant properties get no curves, and runs where nothing changes are merged. Unlike in the `.glb`, **both ends of every hold are kept as keys even on stepped curves**. Stepped keys are marked constant, but an importer may ignore that mark and interpolate linearly between whatever keys it finds. With a key on the last frame before a change and one on the frame of the change, such an importer still shows the right value on every frame; it only ramps within the one frame in between.
+
+### Options (`FbxOptions`)
+
+```rust
+pub struct FbxOptions {
+    pub unit: FbxUnit,               // Metres (default) or Centimetres
+    pub color_space: FbxColorSpace,  // Srgb (default) or Linear
+    pub normals: bool,               // default true
+}
+```
+
+### What is lost in FBX
+
+The glTF list applies here as well (blending instead of dithering, no directional fade, sampled step keys, static light and camera properties, media by reference, no stops or chapters). In addition, or differently:
+
+| Limner feature | What happens |
+|---|---|
+| Unlit shading, sidedness, blending | Not expressible in an FBX material. They are in the material's name and user properties, to be set up once per material after import. |
+| Vertex colour in the material | Not expressible either: after import, the material has to be told to use the vertex colour (below). |
+| Opacity keys | Not exported. Opacity is in the vertex alpha, at its value on the first frame. |
+| Colours above 1.0 | Clamped with the default sRGB encoding; kept with `FbxColorSpace::Linear`. |
+| Light colour space | Written as Limner's linear numbers. FBX does not say whether light colours are linear, and importers differ (Godot shows them unconverted). |
+| Light range | `FarAttenuationEnd` is written, but most importers ignore it. |
+| Camera and light under a mirrored layer | The flip is carried through the quarter turn correctly, but importers differ on mirrored cameras; avoid mirroring a camera. |
+| Quaternion rotation | Euler angles, interpolated per axis between keys. With a key on every frame that changes, the difference from Limner's own interpolation is nil on frames and tiny between them. |
+| File size | Doubles and no compression: the owner's sample is 59 MiB against 23 MiB as `.glb`. |
+
+### Importing the `.fbx`
+
+**Blender.** File > Import > FBX. Leave "Apply Unit" on. Vertex colours arrive as the colour attribute `Color`; the importer's "Vertex Colors" setting should stay on sRGB (the default) unless the file was written with `FbxColorSpace::Linear`. Connect a Color Attribute node to an Emission shader for the materials named `unlit`, and to Base Color for `lit`; turn backface culling off for `double-sided` and blending on for `see-through`. Frame-by-frame layers play through the scale curves. Set the scene frame rate to the export rate. Blender 4.5 and later read FBX through the ufbx library, the same one Godot uses.
+
+**Unity.** Drop the file into `Assets`. Leave "Convert Units" on. Vertex colours import as mesh colours; assign an unlit shader that shows them (in a project set to linear colour space the shader has to convert them from sRGB, which is how they are written by default). Use a two-sided variant for the `double-sided` materials. The scale curves play frame-by-frame layers; the model importer's "Import Visibility" setting decides whether the `Visibility` curves are used as well.
+
+**Unreal Engine (5.x).** With the classic FBX importer, tick "Convert Scene Unit" (or export with `FbxUnit::Centimetres`) and set "Vertex Color Import Option" to Replace. File > Import Into Level keeps the hierarchy; importing as static meshes keeps the geometry and colours only, and the animation of plain nodes comes in through Sequencer's FBX import rather than with the meshes. Make one material that feeds the Vertex Color node into Emissive Color (for `unlit`) or Base Color (for `lit`), and set Two Sided where the name says `double-sided`.
+
+**Godot 4.** Drag the file into the project. Meshes, vertex colours, material slots by name, lights, cameras and the animation arrive; the `Visibility` curves are ignored and the scale curves do the switching. For every node that is hidden on the first frame the importer logs "Basis ... must be normalized in order to be casted to a Quaternion", as it does for the `.glb`; it is harmless.
+
 ## Compared with Quill's exporters
 
 Measured on the owner's own exports (see `reports/Quill feature map and tech stack.md`, "What Quill exports, and what the files really contain").
 
 | | Quill 2.9 | Limner |
 |---|---|---|
-| Normals | None in any format | Always written; can be left out of glTF on request |
-| Units | FBX holds metres but declares centimetres | Metres, declared by the format itself (glTF is defined in metres) |
+| Normals | None in any format | Always written; can be left out of glTF, USD and FBX on request |
+| Units | FBX holds metres but declares centimetres | Metres, and every file says so: glTF is defined in metres, USD has `metersPerUnit = 1`, FBX has `UnitScaleFactor = 100` (or real centimetres on request) |
 | Transform keys | Not exported in FBX or Alembic; USD has no `xformOp`s even when layers are keyed | Sampled per frame, with easing, pivots and sequence loops |
-| Clips and sequence looping | Not exported | Exported as stepped visibility |
+| Clips and sequence looping | Not exported | Exported as stepped visibility: a zero scale in glTF, `visibility` in USD, both in FBX |
 | Frame-by-frame animation | Per-frame meshes | One mesh per distinct drawing, switched by a stepped channel; frames that show the same drawing share it |
-| Opacity keys | Not exported | Optional, through `KHR_animation_pointer` |
+| Opacity keys | Not exported | Optional in glTF, through `KHR_animation_pointer`; not in USD or FBX |
 | Mirrored layers | USD keeps the winding wrong under flipped transforms | Negative scale with the hierarchy kept; reversed winding when baked |
-| See-through strokes | Mixed into the same mesh as opaque ones | Separate primitives, so opaque paint is never blended |
+| See-through strokes | Mixed into the same mesh as opaque ones | Separate primitives, meshes or material slots, so opaque paint is never blended |
+| Materials | None in USD; optional single- and double-sided Lambert pairs per layer in FBX | Shared by look: unlit or lit, single- or double-sided, opaque or see-through. In USD they read the vertex colours |
 | Cameras and spawn areas | Produce nothing | Cameras are exported; spawn areas keep a node |
-| Lights | Do not exist in Quill | `KHR_lights_punctual` |
-| File references | USD uses backslashes, which fail outside Windows | A single self-contained file |
+| Lights | Do not exist in Quill | `KHR_lights_punctual`, UsdLux, FBX light attributes |
+| File references | USD uses backslashes, which fail outside Windows | A single self-contained file in every format; the `.usdz` holds one layer and references nothing |
+| USD layout | A text root layer plus one binary layer per paint layer | One text layer; no binary (`usdc`) writer yet |
+| FBX version | Binary 7500, written with the FBX SDK | Binary 7400, written by hand; arrays uncompressed |
 | Faces | Quads | Triangles (what glTF requires; the same surface) |
 
 Quill still exports things Limner does not yet: stroke centre lines as curves, UV sets along and around each stroke, and Alembic's per-stroke attributes.
@@ -221,13 +426,23 @@ Quill still exports things Limner does not yet: stroke centre lines as curves, U
 
 Verified:
 
-- **Structure.** Every export in the test suite goes through the validator in `crates/limner-export/tests/support/mod.rs`: container layout and alignment, every accessor inside its view and every view inside the buffer, type and count consistency, exact `POSITION` bounds, unit normals, indices below the vertex count, an acyclic node tree with every node reachable, strictly increasing animation times with matching output counts, pointer targets that resolve, and `extensionsUsed` listing exactly what is used. `tests/validator.rs` damages good files and checks that the validator objects.
-- **Geometry and animation values.** Positions against the renderer's `ring_positions`, world placement against `Document::world_from_layer`, animation samples against `evaluate` frame by frame.
-- **Against Quill's own exporter.** The owner's sample project exports 52 paint meshes, 485,292 vertices and 948,032 triangles. Quill's own USDZ export of the same project holds 52 meshes, 485,292 points and 474,016 quads, which is the same surface.
-- **An independent reader.** The pinned Godot build (4.8 dev 7) loads the sample and fixture files through `GLTFDocument`, with the expected mesh, light, camera and animation track counts, and plays the animation with the expected node transforms.
+- **glTF structure.** Every `.glb` in the test suite goes through the validator in `crates/limner-export/tests/support/mod.rs`: container layout and alignment, every accessor inside its view and every view inside the buffer, type and count consistency, exact `POSITION` bounds, unit normals, indices below the vertex count, an acyclic node tree with every node reachable, strictly increasing animation times with matching output counts, pointer targets that resolve, and `extensionsUsed` listing exactly what is used. `tests/validator.rs` damages good files and checks that the validator objects.
+- **USD structure.** `tests/support/usda.rs` reads the layer back by its layout (it is not a general USD parser) and `tests/usd.rs` checks the metadata, every prim type and path, mesh attributes and their interpolation, exact extents, material networks and bindings, ops and their order, time samples, lights and cameras.
+- **USDZ structure.** `tests/support/zip.rs` is a zip reader that shares no code with the writer, down to its own CRC-32. It checks both headers of every file against each other, the CRCs, that files are stored, unencrypted and packed back to back, the central directory and end record, and the 64-byte alignment; `tests/usdz.rs` runs it over name lengths that need every padding size from 0 to 63 bytes, and damages good packages to check that it objects.
+- **FBX structure.** `tests/support/fbx.rs` is a binary FBX reader that shares no code with the writer. It walks every record checking end offsets, value counts and byte lengths, sentinels, array headers and the footer, then checks that definitions count the objects, that every connection has both ends, that the model tree is a tree, that every geometry's arrays agree with each other and with the material slots of the models that use it, and that every curve is wired to a curve node, a property and the layer, with increasing key times. `tests/fbx.rs` damages good files and checks that the reader objects.
+- **Geometry and animation values, in every format.** Positions against the renderer's `ring_positions`, triangles against the scene, world placement against `Document::world_from_layer` (including five combinations of mirrored layers), animation samples against `evaluate` frame by frame, clip and frame-by-frame schedules against `evaluate`. For FBX also: Euler angles that rebuild the rotation and never jump, the quarter turns of lights and cameras, and exact key times.
+- **Against Quill's own exporter.** The owner's sample project exports 52 paint meshes, 485,292 vertices and 948,032 triangles. Quill's own USDZ export of the same project holds 52 meshes, 485,292 points and 474,016 quads, which is the same surface. Limner's `.usdz` and `.fbx` of that project hold the same 485,292 vertices and 948,032 triangles as its `.glb`.
+- **glTF in an independent reader.** The pinned Godot build (4.8 dev 7) loads the sample and fixture files through `GLTFDocument`, with the expected mesh, light, camera and animation track counts, and plays the animation with the expected node transforms.
+- **USD in Apple's tools** (Apple USD Tools 0.25.2 on macOS 26.5, in `/usr/bin`). `usdchecker` reports "Success!" for the fixture `.usda` files (still, animated, baked), the fixture `.usdz` and the sample `.usdz`, also with `--arkit`. `usdcat` loads all of them and prints the same number of prims as were written; `usdtree` shows the expected tree; `usdzip --dump` lists the package's file at offset 64 with equal stored and real sizes, the same as for a package `usdzip` made itself. `usdrecord` renders the animated fixture through its exported camera with the Metal renderer: vertex colours show through the materials, the keyed layer moves, the clip appears on the right frames and the frame-by-frame layer changes drawing. `usdcat scene.usda -o scene.usdc` followed by `usdzip` gives a binary package that `usdchecker --arkit` also accepts. (These tools print "Coding Error ... RegisterBehaviorForPrimTypeId" lines for every file, including an empty one; that is the tools, not the export.) Two ignored tests rerun `usdchecker` and `usdcat`: `cargo test -p limner-export --test usd --test usdz -- --ignored`.
+- **USDZ in other zip readers.** Info-ZIP `unzip -t` (6.00) and Python 3.14's `zipfile.testzip()` accept the packages and agree on the CRC.
+- **FBX in an independent reader.** The pinned Godot build reads FBX through the ufbx library (`FBXDocument`). The fixture files (still, animated, baked, centimetres) and the sample load without errors. For the animated fixture it reports the same 6 mesh instances, 225 vertices, 334 triangles, 3 lights and 1 camera as for the `.glb` of the same scene; material slots arrive with the right names per surface; vertex colours arrive sRGB-encoded with their alpha; every triangle's winding agrees with its normals; the mirrored group has a negative determinant; lights and the camera point the same way as in the `.glb`, with the same field of view and clip planes; the centimetre variant arrives at the same size as the metre one. The keyed layer's translation, rotation and scale match the exporter's own samples on all 25 frames to four decimals, and the scale tracks switch the clip and the three frame-by-frame drawings on exactly the expected frames. The sample arrives with 948,032 triangles (Godot's importer merges identical vertices, so it counts 478,549 of the 485,292).
 
 Not verified:
 
-- The Khronos glTF validator has not been run on these files. The `gltf-validator` npm package is a library without a command-line entry, so it needs a three-line Node script around `validateBytes`; `cargo test -p limner-export --test fixtures -- --ignored` writes artwork-free files to `local/out/export/` to feed it.
-- The import steps above for Blender, Unity and Unreal are written from those tools' documented behaviour and have not been run against these files.
-- Light and camera layers point along their local -Z axis with +Y up, which is glTF's convention and Godot's. Whether Quill's camera layers use the same axis has not been checked against a real Quill render.
+- The Khronos glTF validator has not been run on these files. The `gltf-validator` npm package is a library without a command-line entry, so it needs a three-line Node script around `validateBytes`; `cargo test -p limner-export --test fixtures -- --ignored` writes artwork-free files in every format to `local/out/export/` to feed it and the tools below.
+- **Blender, Unity and Unreal have not been run on any of these files** (Blender is not installed on the development Mac). The import steps for all formats, and the table of what each FBX importer does with units, are written from those tools' documented behaviour. The FBX files in particular have been read by one parser family only (ufbx, which recent Blender versions also use); Autodesk's FBX SDK, which Unity and Unreal use, has not read them. The writer omits two things the SDK itself writes and Blender's exporter copies, property templates in `Definitions` and `NodeAttribute` objects for empty nodes; readers are expected to fall back to defaults, and ufbx does.
+- **USD `orientation`.** That `rightHanded` is the correct value follows from USD's definition and is checked against the normals in the tests, but no renderer has confirmed it: `usdrecord` draws both sides of every face, so a wrong value would look the same there.
+- **USD in AR Quick Look and RealityKit.** `usdchecker --arkit` accepts the text-layer package, but nothing has been opened in Quick Look on a device. Whether it accepts a text root layer, and whether it shows vertex colours through a primvar reader, is not known.
+- **USD materials in Blender, Unity and Unreal**: whether their importers follow the `UsdPrimvarReader_float3` connection to the vertex colours.
+- **FBX `Visibility` curves** have been read back only by the test reader; Godot ignores them, and no tool that uses them has been tried.
+- Light and camera layers point along their local -Z axis with +Y up, which is glTF's convention, USD's and Godot's. Whether Quill's camera layers use the same axis has not been checked against a real Quill render.

@@ -7,13 +7,22 @@
 //! * [`export_glb`] / [`write_glb`]: glTF 2.0 binary, with hierarchy, animation,
 //!   lights and cameras.
 //! * [`export_obj`] / [`write_obj`]: Wavefront OBJ, a still in world space.
+//! * [`export_usda`] / [`write_usda`]: a USD text layer, with hierarchy, animation,
+//!   lights, cameras and preview materials.
+//! * [`export_usdz`] / [`write_usdz`]: the same layer in a USDZ package.
+//! * [`export_fbx`] / [`write_fbx`]: binary FBX 7.4, with hierarchy, animation,
+//!   lights and cameras.
 //!
 //! `docs/export.md` describes how each Limner concept maps to each format.
 
+mod common;
+pub mod fbx;
 pub mod gltf;
 pub mod obj;
 pub mod scene;
+pub mod usd;
 
+pub use fbx::{scene_to_fbx, FbxColorSpace, FbxOptions, FbxUnit};
 pub use gltf::{scene_to_glb, GlbOutput, GltfOptions};
 pub use obj::scene_to_obj;
 pub use scene::{
@@ -21,6 +30,7 @@ pub use scene::{
     ExportMesh, ExportNode, ExportOptions, ExportPaint, ExportScene, NodeContent, NodeKind,
     Sampled,
 };
+pub use usd::{scene_to_usda, scene_to_usdz, usdz_package, UsdOptions};
 
 use limner_core::model::Document;
 use limner_core::time::Flicks;
@@ -34,6 +44,10 @@ pub enum ExportError {
     InvalidRate { num: u32, den: u32 },
     #[error("the export would be {bytes} bytes, more than the 4 GiB a .glb can hold")]
     TooLarge { bytes: usize },
+    #[error(
+        "the {format} export would be {bytes} bytes, more than the 4 GiB the format can address"
+    )]
+    FileTooLarge { format: &'static str, bytes: usize },
     #[error("could not encode the glTF description: {0}")]
     Json(#[source] serde_json::Error),
     #[error("could not write {}: {source}", path.display())]
@@ -47,16 +61,19 @@ pub enum ExportError {
 /// What an export contains.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ExportReport {
-    /// Nodes (glTF) or objects (OBJ) written.
+    /// Nodes (glTF), prims that stand for a layer or a drawing (USD), models (FBX)
+    /// or objects (OBJ) written.
     pub nodes: usize,
     /// Distinct meshes written. A drawing has up to four: single- or double-sided,
-    /// opaque or see-through.
+    /// opaque or see-through. (FBX joins a drawing's meshes into one geometry with a
+    /// material slot each; they are still counted one by one.)
     pub meshes: usize,
     pub vertices: usize,
     pub triangles: usize,
     /// Frames the animation was sampled on; zero for a still.
     pub animation_frames: usize,
-    /// Animation channels left after constant ones were dropped.
+    /// Animation channels left after constant ones were dropped: glTF channels,
+    /// USD properties with time samples, FBX curve nodes.
     pub animation_channels: usize,
     /// Size of the file.
     pub bytes: u64,
@@ -151,5 +168,98 @@ pub fn write_obj(
 ) -> Result<ExportReport, ExportError> {
     let (text, report) = export_obj_with_report(doc, time, include_hidden)?;
     write(path, text.as_bytes())?;
+    Ok(report)
+}
+
+/// Exports the document as a USD text layer and says what went into it.
+pub fn export_usda_with_report(
+    doc: &Document,
+    options: &ExportOptions,
+    extra: &UsdOptions,
+) -> Result<(String, ExportReport), ExportError> {
+    check(options)?;
+    scene_to_usda(&build_scene(doc, options), extra)
+}
+
+/// Exports the document as a USD text layer (`.usda`), in memory.
+pub fn export_usda(
+    doc: &Document,
+    options: &ExportOptions,
+    extra: &UsdOptions,
+) -> Result<String, ExportError> {
+    export_usda_with_report(doc, options, extra).map(|(text, _)| text)
+}
+
+/// Exports the document as a `.usda` file.
+pub fn write_usda(
+    doc: &Document,
+    path: &Path,
+    options: &ExportOptions,
+    extra: &UsdOptions,
+) -> Result<ExportReport, ExportError> {
+    let (text, report) = export_usda_with_report(doc, options, extra)?;
+    write(path, text.as_bytes())?;
+    Ok(report)
+}
+
+/// Exports the document as a USDZ package and says what went into it.
+pub fn export_usdz_with_report(
+    doc: &Document,
+    options: &ExportOptions,
+    extra: &UsdOptions,
+) -> Result<(Vec<u8>, ExportReport), ExportError> {
+    check(options)?;
+    scene_to_usdz(&build_scene(doc, options), extra)
+}
+
+/// Exports the document as a USDZ package (`.usdz`), in memory.
+pub fn export_usdz(
+    doc: &Document,
+    options: &ExportOptions,
+    extra: &UsdOptions,
+) -> Result<Vec<u8>, ExportError> {
+    export_usdz_with_report(doc, options, extra).map(|(bytes, _)| bytes)
+}
+
+/// Exports the document as a `.usdz` file.
+pub fn write_usdz(
+    doc: &Document,
+    path: &Path,
+    options: &ExportOptions,
+    extra: &UsdOptions,
+) -> Result<ExportReport, ExportError> {
+    let (bytes, report) = export_usdz_with_report(doc, options, extra)?;
+    write(path, &bytes)?;
+    Ok(report)
+}
+
+/// Exports the document as binary FBX and says what went into it.
+pub fn export_fbx_with_report(
+    doc: &Document,
+    options: &ExportOptions,
+    extra: &FbxOptions,
+) -> Result<(Vec<u8>, ExportReport), ExportError> {
+    check(options)?;
+    scene_to_fbx(&build_scene(doc, options), extra)
+}
+
+/// Exports the document as binary FBX 7.4 (`.fbx`), in memory.
+pub fn export_fbx(
+    doc: &Document,
+    options: &ExportOptions,
+    extra: &FbxOptions,
+) -> Result<Vec<u8>, ExportError> {
+    export_fbx_with_report(doc, options, extra).map(|(bytes, _)| bytes)
+}
+
+/// Exports the document as an `.fbx` file.
+pub fn write_fbx(
+    doc: &Document,
+    path: &Path,
+    options: &ExportOptions,
+    extra: &FbxOptions,
+) -> Result<ExportReport, ExportError> {
+    let (bytes, report) = export_fbx_with_report(doc, options, extra)?;
+    write(path, &bytes)?;
     Ok(report)
 }
