@@ -3,15 +3,19 @@ extends Node3D
 ## How the drawing hand works the panels.
 ##
 ## Up close the tip of the hand is a finger: a few centimetres in front of a panel it
-## hovers, pushed through the surface it presses, pulled back it lets go. No trigger
-## is needed. From farther off, a hand that points at a panel shows a thin ray with a
-## dot where it lands, and the trigger is the button.
+## hovers; pushed into a key (a button standing off the panel) the key goes down with
+## it and presses 3 mm down; on the flat of the panel it presses 3 mm through the
+## surface; pulled back it lets go. No trigger is needed. From farther off, a hand
+## that points at a panel shows a thin ray with a dot where it lands, and the trigger
+## is the button.
 ##
-## Either way, holding the grip while over a panel picks the panel up; it follows the
-## hand until the grip is let go and stays where it was left. The stick scrolls what
-## is under the pointer, or resizes a panel that is being held. The hand's lower
-## face button is the other mouse button: it opens the menu of what is under the
-## pointer, where there is one.
+## Up close, holding the grip picks the panel up; it follows the hand until the grip
+## is let go and stays where it was left. Pointing from afar takes only the trigger
+## and the stick's up and down: the grip and the rest go on working the artwork. The
+## stick scrolls what is under the pointer, or resizes a panel that is being held.
+## The hand's lower face button is the other mouse button: it opens the menu of what
+## is under the pointer, where there is one. While the modifier (the other hand's
+## trigger) is held, presses come with Ctrl, as a tap with Ctrl adds to a selection.
 
 ## A press landed on a panel.
 signal clicked(surface: XRPanelSurface)
@@ -24,7 +28,7 @@ enum Mode { NONE, POKE, RAY, GRAB }
 
 ## How far in front of a panel the tip starts to hover, in metres.
 const HOVER_DISTANCE := 0.06
-## How far through a panel the tip must go to press, in metres.
+## How far through a panel, or down into a key, the tip must go to press, in metres.
 const PRESS_DEPTH := 0.003
 ## How far back in front of the panel the tip must come to let go, in metres.
 ## Larger than the press depth so that a trembling hand does not press twice.
@@ -97,14 +101,18 @@ func _ready() -> void:
 
 ## Works out what the hand is doing to the panels this frame and tells them.
 ## `tip` is the tip of the drawing hand in the room, `state` what that hand presses,
-## and `surfaces` every panel that can be touched now. Returns true while the hand
-## belongs to the panels, when it must not paint or grab the artwork.
-func update(tip: Transform3D, state: XRHandState, delta: float, surfaces: Array[XRPanelSurface]) -> bool:
+## `surfaces` every panel that can be touched now, and `modifier` whether the other
+## hand holds the modifier. Returns true while the hand belongs to the panels, when
+## it must not paint or grab the artwork; with the ray (`mode` RAY) only its trigger
+## and the stick's up and down are the panel's.
+func update(tip: Transform3D, state: XRHandState, delta: float, surfaces: Array[XRPanelSurface], modifier := false) -> bool:
 	if not enabled or not state.tracked or (surface != null and not surfaces.has(surface)):
 		_let_go()
 	if not enabled or not state.tracked:
 		_show_marks(tip)
 		return false
+	for each in surfaces:
+		each.modifier = modifier
 	if mode == Mode.GRAB:
 		_hold_panel(tip, state, delta)
 	elif _pressed:
@@ -133,8 +141,9 @@ func _seek(tip: Transform3D, surfaces: Array[XRPanelSurface]) -> void:
 		var deepest := -MAX_DEPTH if candidate == surface and mode == Mode.POKE else 0.0
 		if at.z > HOVER_DISTANCE or at.z < deepest or not candidate.contains(Vector2(at.x, at.y), EDGE_MARGIN):
 			continue
-		if absf(at.z) < nearest:
-			nearest = absf(at.z)
+		var above := at.z - candidate.rest_at(Vector2(at.x, at.y))
+		if absf(above) < nearest:
+			nearest = absf(above)
 			found = candidate
 			found_mode = Mode.POKE
 			found_pixel = Vector2(at.x, at.y)
@@ -161,16 +170,22 @@ func _seek(tip: Transform3D, surfaces: Array[XRPanelSurface]) -> void:
 ## Hovering: moves the panel's mouse, and starts a press, a grab or a scroll.
 func _hover(tip: Transform3D, state: XRHandState, delta: float) -> void:
 	surface.pointer_move(pixel, delta)
-	if surface.movable and state.grip > GRAB_PRESS:
+	# Only a hand up close takes a panel: pointing at one from afar leaves the grip
+	# to the artwork, so that a panel in view never stops the view being grabbed.
+	if mode == Mode.POKE and surface.movable and state.grip > GRAB_PRESS:
 		_start_grab(tip)
 		return
 	if mode == Mode.POKE:
-		var depth := surface.locate(tip.origin).z
+		var height := surface.locate(tip.origin).z
+		surface.pointer_tip(height)
+		# Depth below the top of what is under the tip: a key, or the sheet itself.
+		var depth := height - surface.rest_at(pixel)
 		if depth > RELEASE_DISTANCE:
 			_armed = true
 		elif _armed and depth < -PRESS_DEPTH:
 			_press()
 	else:
+		surface.pointer_tip(INF)
 		if state.trigger < RAY_RELEASE:
 			_ray_ready = true
 		elif _ray_ready and state.trigger > RAY_PRESS:
@@ -197,8 +212,10 @@ func _drag(tip: Transform3D, state: XRHandState) -> void:
 	var release := false
 	if mode == Mode.POKE:
 		var at := surface.locate(tip.origin)
+		var rest := surface.rest_at(pixel)
 		pixel = Vector2(at.x, at.y)
-		release = at.z > RELEASE_DISTANCE or at.z < -MAX_DEPTH
+		surface.pointer_tip(at.z)
+		release = at.z > rest + RELEASE_DISTANCE or at.z < -MAX_DEPTH
 		if at.z < -MAX_DEPTH:
 			_armed = false
 	else:
@@ -258,7 +275,7 @@ func _show_marks(tip: Transform3D) -> void:
 	_ray.visible = pointing and mode == Mode.RAY
 	if not pointing:
 		return
-	var spot := surface.world_point(pixel, DOT_LIFT)
+	var spot := surface.world_point(pixel, DOT_LIFT + surface.rest_at(pixel))
 	_dot.global_position = spot
 	_dot.scale = Vector3.ONE * (1.6 if _pressed else 1.0)
 	_dot_material.albedo_color = Color.WHITE if _pressed else Kit.ACCENT

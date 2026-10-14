@@ -70,6 +70,9 @@ const BODIES := {
 	"gimbal": '<circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="8" ry="3"/><ellipse cx="12" cy="12" rx="3" ry="8"/>',
 	"flip": '<path d="M12 3v18" stroke-dasharray="2.500 2.500"/><path d="M9 7L4 17h5z"/><path d="M15 7l5 10h-5z" fill="{c}"/>',
 	"home": '<path d="M4 11l8-7 8 7"/><path d="M6 10v9h12v-9"/>',
+	# where the work is shown: in a headset, or on the desktop's screen
+	"headset": '<path d="M5 8h14a2 2 0 0 1 2 2v4.500a2 2 0 0 1-2 2h-3.500l-1.500-2.500h-4L8.500 16.500H5a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z"/><path d="M7 8V6.500h10V8"/>',
+	"desktop": '<rect x="3" y="4.500" width="18" height="12" rx="1.500"/><path d="M12 16.500V20M8 20h8"/>',
 	"close": '<path d="M6 6l12 12M18 6L6 18"/>',
 	"check": '<path d="M5 12.500l4.500 4.500L19 7.500"/>',
 	"menu": '<path d="M4 7h16M4 12h16M4 17h16"/>',
@@ -97,6 +100,7 @@ const BODIES := {
 	"stack": '<path d="M3 8l9-5 9 5-9 5z"/><path d="M3 12l9 5 9-5M3 16l9 5 9-5"/>',
 	"timeline": '<path d="M4 7h10M4 12h16M4 17h7"/><path d="M15 4v16"/>',
 	"dock": '<rect x="4" y="13" width="16" height="7" rx="1.500"/><path d="M12 3v7M9 7.500l3 3 3-3"/>',
+	"pin": '<path d="M9 3.500h6M10 3.500v5l-3 3.500h10l-3-3.500v-5"/><path d="M12 12v8.500"/>',
 	"backspace": '<path d="M9 6h11v12H9l-5-6z"/><path d="M12 9.500l5 5M17 9.500l-5 5"/>',
 	"shift": '<path d="M12 4l7 8h-4v7H9v-7H5z"/>',
 	"enter": '<path d="M19 5v8H6"/><path d="M10 9l-4 4 4 4"/>',

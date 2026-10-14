@@ -700,9 +700,10 @@ fn with_gimbal() -> (Session, LayerId, Gimbal) {
         &mut session,
         json!({"cmd": "set_options", "values": {"show_gimbal": true}}),
     );
-    assert!(
-        session.gimbal().is_none(),
-        "and until something is the transform object"
+    assert_eq!(
+        session.gimbal().map(|g| g.subject),
+        Some(Subject::Layer(layer)),
+        "with the view as the transform object, the gimbal is the current layer's"
     );
     run(
         &mut session,
@@ -785,6 +786,168 @@ fn the_gimbal_sits_at_the_pivot_and_knows_which_handle_a_hand_is_at() {
             .rotation
             .angle_between(DQuat::from_rotation_y(FRAC_PI_2))
             < 1e-9
+    );
+}
+
+/// Close enough for points stored in single precision.
+fn near(a: DVec3, b: DVec3) -> bool {
+    (a - b).length() < 1e-6
+}
+
+/// Strokes from (0.1, 1.0, -0.5) to (0.3, 1.2, -0.5) in `layer`: content whose middle
+/// is (0.2, 1.1, -0.5).
+fn some_content(session: &mut Session, layer: LayerId) {
+    run(
+        session,
+        json!({"cmd": "add_strokes", "layer": layer, "strokes": [
+            {"points": [[0.1, 1.0, -0.5], [0.3, 1.2, -0.5]], "width": 0.01},
+        ]}),
+    );
+}
+
+#[test]
+fn a_layer_whose_pivot_was_never_set_has_its_gimbal_at_the_middle_of_its_content() {
+    let (mut session, layer) = session();
+    some_content(&mut session, layer);
+    let middle = DVec3::new(0.2, 1.1, -0.5);
+    run(
+        &mut session,
+        json!({"cmd": "set_options", "values": {"show_gimbal": true}}),
+    );
+    let gimbal = session.gimbal().expect("the current layer's gimbal");
+    assert_eq!(gimbal.subject, Subject::Layer(layer));
+    assert!(near(gimbal.position, middle), "{:?}", gimbal.position);
+    assert!(session.doc().layer(layer).unwrap().pivot.is_identity());
+
+    // A grip on a ring turns the layer about the middle of what is drawn, and from
+    // then on the pivot is there, for the layer's animation too.
+    let steps = session.history().undo_depth();
+    session.update(&main_only(at(on_ring(&gimbal, 0.0))));
+    session.update(&main_only(gripping(on_ring(&gimbal, 0.0))));
+    for i in 1..=9 {
+        session.update(&main_only(gripping(on_ring(
+            &gimbal,
+            i as f64 * 0.1 * FRAC_PI_2 / 0.9,
+        ))));
+    }
+    session.update(&main_only(at(REST_MAIN)));
+    assert_eq!(session.history().undo_depth(), steps + 1, "one undo step");
+    let turned = local(&session, layer);
+    assert!(
+        turned
+            .rotation
+            .angle_between(DQuat::from_rotation_y(FRAC_PI_2))
+            < 1e-9
+    );
+    assert!(
+        near(turned.transform_point(middle), middle),
+        "the middle stays where it was"
+    );
+    let pivot = session.doc().layer(layer).unwrap().pivot;
+    assert!(near(pivot.translation, middle), "{pivot:?}");
+    assert!(near(session.gimbal().unwrap().position, middle));
+
+    // More paint does not move a pivot that has been set.
+    run(
+        &mut session,
+        json!({"cmd": "add_strokes", "layer": layer, "strokes": [
+            {"points": [[2.0, 2.0, 2.0], [2.1, 2.0, 2.0]], "width": 0.01},
+        ]}),
+    );
+    assert!(near(
+        session.doc().layer(layer).unwrap().pivot.translation,
+        middle
+    ));
+
+    // Undo takes the turn and the pivot back together.
+    run(&mut session, json!({"cmd": "undo"}));
+    run(&mut session, json!({"cmd": "undo"}));
+    assert!(session.doc().layer(layer).unwrap().pivot.is_identity());
+    assert!(local(&session, layer).is_identity());
+
+    // A pivot moved by the user is where the gimbal goes, even off the content.
+    let elsewhere = Xform::from_translation(DVec3::new(0.0, 0.5, 0.0));
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": layer, "pivot": elsewhere}),
+    );
+    assert!(near(
+        session.gimbal().unwrap().position,
+        DVec3::new(0.0, 0.5, 0.0)
+    ));
+
+    // A layer with nothing in it keeps its gimbal at its origin.
+    let empty = new_layer(&mut session, json!({"cmd": "add_layer", "kind": "paint"}));
+    assert_eq!(session.gimbal().unwrap().subject, Subject::Layer(empty));
+    assert!(near(session.gimbal().unwrap().position, DVec3::ZERO));
+}
+
+#[test]
+fn the_stick_click_shows_the_gimbal_of_the_current_layer_or_says_why_there_is_none() {
+    let (mut session, layer) = session();
+    some_content(&mut session, layer);
+    let click = |session: &mut Session| {
+        let pressed = HandInput {
+            stick_click: true,
+            ..at(REST_MAIN)
+        };
+        let mut feedback = session.update(&main_only(pressed));
+        feedback.extend(session.update(&main_only(at(REST_MAIN))));
+        feedback
+    };
+    let said = |feedback: &[Feedback]| {
+        feedback.iter().find_map(|f| match f {
+            Feedback::Message(m) => Some(m.clone()),
+            _ => None,
+        })
+    };
+    assert_eq!(said(&click(&mut session)), None);
+    assert!(session.options.show_gimbal);
+    assert_eq!(
+        session.gimbal().map(|g| g.subject),
+        Some(Subject::Layer(layer))
+    );
+    assert!(near(
+        session.gimbal().unwrap().position,
+        DVec3::new(0.2, 1.1, -0.5)
+    ));
+    assert_eq!(said(&click(&mut session)), None, "hiding it says nothing");
+    assert!(!session.options.show_gimbal && session.gimbal().is_none());
+
+    // The root layer and a locked layer cannot be moved: the gimbal has nothing to show.
+    let root = session.doc().root();
+    run(
+        &mut session,
+        json!({"cmd": "select_layers", "layers": [root]}),
+    );
+    assert_eq!(
+        said(&click(&mut session)).as_deref(),
+        Some(super::grab::NOTHING_TO_TRANSFORM)
+    );
+    assert!(session.options.show_gimbal, "it is on all the same");
+    assert!(session.gimbal().is_none());
+    click(&mut session);
+    run(
+        &mut session,
+        json!({"cmd": "set_layer", "layer": layer, "locked": true}),
+    );
+    run(
+        &mut session,
+        json!({"cmd": "select_layers", "layers": [layer]}),
+    );
+    assert!(said(&click(&mut session)).is_some());
+    assert!(session.gimbal().is_none());
+
+    // Selected strokes with the Selection tool in hand, or a transform object, are
+    // something to move.
+    run(
+        &mut session,
+        json!({"cmd": "set_transform_target", "layer": layer}),
+    );
+    assert_eq!(
+        session.gimbal().map(|g| g.subject),
+        Some(Subject::Layer(layer)),
+        "a layer chosen as the transform object has its gimbal even when locked"
     );
 }
 

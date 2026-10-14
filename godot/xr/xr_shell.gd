@@ -16,6 +16,9 @@ extends Node
 
 ## Starting in a headset did not work; the app should fall back to the desktop.
 signal start_failed(reason: String)
+## The user asked to carry on in the other interface: "desktop". The app makes the
+## change (`main.gd`, `switch_to`), after this signal's emitter has finished.
+signal switch_requested(to: String)
 
 ## The trigger and grip levels at which the core takes hold of a hand and lets it go
 ## again, from 0 to 1. They match the core's own (`PRESS` and `RELEASE` in
@@ -24,8 +27,6 @@ const TRIGGER_PRESS := 0.06
 const TRIGGER_RELEASE := 0.02
 const GRIP_PRESS := 0.35
 const GRIP_RELEASE := 0.2
-## How long the menu button is held before the button map shows or hides, in seconds.
-const MENU_HOLD_SECONDS := 1.0
 ## The buzz for a press on a panel: its strength from 0 to 1 and its length in
 ## seconds. Tune on real hardware; it should be felt, not heard.
 const PRESS_PULSE_STRENGTH := 0.25
@@ -57,6 +58,11 @@ var editor: LimnerEditor
 ## Which rig to use: "auto" (a headset if one is there or was asked for, else the
 ## simulated one), "headset" or "sim". Set it before the shell enters the tree.
 var mode := "auto"
+## True when the shell takes over from the desktop in a running app, rather than at
+## start: the work in hand is not mistaken for work to recover, the start-up
+## preferences are not applied again and the button map stays away. Set it before
+## the shell enters the tree.
+var switched := false
 ## True once the shell is running. False after `_ready` means starting failed.
 var started := false
 ## Why starting failed, in words for the user.
@@ -64,6 +70,8 @@ var failure := ""
 var rig: XRRig
 var palette: XRPalette
 var pointer: XRPointer
+## The signs on the hand that holds the palette: the frame, the layer, the stick.
+var dial: XRHandDial
 var sounds: Sounds
 var autosave: Autosave
 ## The sheet that lists what every control does.
@@ -83,7 +91,10 @@ var _grip_withheld := false
 ## True while the core has the trigger or the grip, when the panels must wait.
 var _core_has_trigger := false
 var _core_has_grip := false
-var _menu_time := 0.0
+var _menu_was_down := false
+## What the dial last showed was worked out from: the current layer, the time, the
+## document's revision and whether the piece plays.
+var _dial_key: Array = []
 
 
 ## True when a headset runtime is there and running, so that the shell could start in
@@ -95,7 +106,9 @@ static func is_available() -> bool:
 
 func _ready() -> void:
 	_preferences = Preferences.shared()
-	# The panels' colour scheme follows the preference; each panel re-themes itself.
+	# The panels take the headset's look, and its own colour scheme preference; each
+	# panel re-themes itself when that changes.
+	Kit.set_headset(true)
 	Kit.follow_preferences()
 	var arguments := OS.get_cmdline_user_args()
 	var note := ""
@@ -147,18 +160,22 @@ func _ready() -> void:
 	)
 	# Unsaved work is copied aside every few minutes. In a headset there is no good
 	# moment for a question at start-up, so work left from a session that ended badly
-	# is simply opened again.
-	autosave = Autosave.new()
-	autosave.name = "Autosave"
-	autosave.editor = editor
-	add_child(autosave)
-	if not Autosave.pending().is_empty() and not OS.get_cmdline_user_args().has("--no-recovery"):
+	# is simply opened again. The app hands over its own autosave, which lasts the
+	# whole run; a shell started alone (a test) makes one.
+	if autosave == null:
+		autosave = Autosave.new()
+		autosave.name = "Autosave"
+		autosave.editor = editor
+		add_child(autosave)
+	if not switched and not Autosave.pending().is_empty() and not OS.get_cmdline_user_args().has("--no-recovery"):
 		_recover.call_deferred()
 	palette = XRPalette.new()
 	palette.name = "Palette"
 	palette.editor = editor
 	rig.add_child(palette)
 	palette.button_map_requested.connect(toggle_button_map)
+	dial = XRHandDial.new()
+	rig.add_child(dial)
 	var document_panel := palette.surfaces.get("Document") as XRPanelSurface
 	if document_panel != null and document_panel.content.has_signal("document_opened"):
 		# A Quill project opened from the panel has no view of its own: it is framed.
@@ -166,6 +183,9 @@ func _ready() -> void:
 			if not native:
 				frame_all()
 		)
+	var settings_panel := palette.surfaces.get("Settings") as XRPanelSurface
+	if settings_panel != null and settings_panel.content.has_signal("switch_requested"):
+		settings_panel.content.connect("switch_requested", func(to: String) -> void: switch_requested.emit(to))
 	pointer = XRPointer.new()
 	pointer.name = "Pointer"
 	rig.add_child(pointer)
@@ -191,11 +211,12 @@ func _ready() -> void:
 	editor.document_changed.connect(_follow_document)
 	editor.document_replaced.connect(_follow_document)
 	_preferences.changed.connect(_on_preference_changed)
-	_preferences.apply_at_start(editor)
+	if not switched:
+		_preferences.apply_at_start(editor)
 	_follow_document()
 	_mark_hands()
 	started = true
-	if _preferences.flag("show_button_map_at_start"):
+	if not switched and _preferences.flag("show_button_map_at_start"):
 		set_button_map_shown(true)
 	if note != "":
 		show_message(note)
@@ -217,21 +238,29 @@ func _process(delta: float) -> void:
 
 	# A hand that is painting or holding the artwork keeps at it; the panels wait.
 	pointer.enabled = rig.has_attention and not (_core_has_trigger or _core_has_grip)
-	over_panel = pointer.update(main_tip, main, step, touchable())
+	# The modifier is the other hand's trigger: on a panel it is Ctrl.
+	over_panel = pointer.update(main_tip, main, step, touchable(), off.trigger > 0.5)
+	# Up close a panel has the whole hand. Pointed at from afar it has only the
+	# trigger, the stick's up and down and the lower button (its menu); the grip, the
+	# stick's left and right (undo, redo) and the other buttons still work the artwork.
+	var pointing := over_panel and pointer.mode == XRPointer.Mode.RAY
+	var touching := over_panel and not pointing
 	_trigger_withheld = main.trigger > TRIGGER_RELEASE and (over_panel or _trigger_withheld)
-	_grip_withheld = main.grip > GRIP_RELEASE and (over_panel or _grip_withheld)
+	_grip_withheld = main.grip > GRIP_RELEASE and (touching or _grip_withheld)
 
 	var scene := world.scene
 	var trigger := 0.0 if over_panel or _trigger_withheld else main.trigger
-	var grip := 0.0 if over_panel or _grip_withheld else main.grip
+	var grip := 0.0 if touching or _grip_withheld else main.grip
 	if not main.tracked:
 		scene.input_hand_absent(0)
 		trigger = 0.0
 		grip = 0.0
-	elif over_panel:
-		# Over a panel the hand is there but does nothing: its trigger, grip, stick and
+	elif touching:
+		# Up close the hand is there but does nothing: its trigger, grip, stick and
 		# buttons belong to the panel.
 		scene.input_hand(0, main_tip.origin, main_tip.basis.get_rotation_quaternion(), 0.0, 0.0, Vector2.ZERO, 0)
+	elif pointing:
+		scene.input_hand(0, main_tip.origin, main_tip.basis.get_rotation_quaternion(), 0.0, grip, Vector2(main.stick.x, 0.0), main.buttons() & ~1)
 	else:
 		scene.input_hand(0, main_tip.origin, main_tip.basis.get_rotation_quaternion(), trigger, grip, main.stick, main.buttons())
 	_core_has_trigger = trigger > TRIGGER_PRESS or (_core_has_trigger and trigger > TRIGGER_RELEASE)
@@ -245,7 +274,36 @@ func _process(delta: float) -> void:
 		_react(feedback, main_side, off_side)
 	sounds.follow_tool(scene)
 	_cursor_holder.visible = not over_panel
-	_watch_menu_button(main.menu or off.menu, step)
+	_follow_dial(off_side, off)
+	_watch_menu_button(main.menu or off.menu)
+
+
+## Keeps the signs on the palette hand in step: where the hand is, what its stick
+## does, and the current layer's name and frame.
+func _follow_dial(off_side: int, off: XRHandState) -> void:
+	dial.follow(rig.aims[off_side].global_transform, rig.head.global_position, off.tracked)
+	# Painting mode gives the frames' stick to painting during playback.
+	dial.show_stick(off.stick, off.stick_touch, off.trigger > 0.5, not editor.get_options().get("painting_mode", false))
+	var status := editor.status
+	var current: Variant = status.get("current_layer")
+	var key := [current, status.get("time"), status.get("doc_revision"), status.get("playing")]
+	if key == _dial_key:
+		return
+	_dial_key = key
+	var name := ""
+	var is_paint := false
+	for row: Dictionary in editor.get_rows():
+		if row.id == current:
+			name = row.name
+			is_paint = row.kind == "paint"
+			break
+	var frame := 0
+	if is_paint:
+		for entry: Dictionary in world.scene.timeline_clock():
+			if entry.id == current:
+				frame = int(entry.frame) + 1
+				break
+	dial.show_layer(name, frame, status.get("playing", false))
 
 
 ## The side of the hand that draws: `XRRig.LEFT` or `XRRig.RIGHT`.
@@ -317,15 +375,11 @@ func _on_panel_dropped(_surface: XRPanelSurface) -> void:
 	_pulse(drawing_side(), GRAB_PULSE_STRENGTH, GRAB_PULSE_SECONDS)
 
 
-## Holding the menu button for a moment shows or hides the button map, once per hold.
-func _watch_menu_button(down: bool, step: float) -> void:
-	if not down:
-		_menu_time = 0.0
-		return
-	var before := _menu_time
-	_menu_time += step
-	if before < MENU_HOLD_SECONDS and _menu_time >= MENU_HOLD_SECONDS:
+## A press of the menu button shows or hides the button map, as in Quill.
+func _watch_menu_button(down: bool) -> void:
+	if down and not _menu_was_down:
 		toggle_button_map()
+	_menu_was_down = down
 
 
 func _on_button_map_resized() -> void:
@@ -383,6 +437,23 @@ func _fail(reason: String) -> void:
 	set_process(false)
 	editor.message.emit(reason, true)
 	start_failed.emit(reason)
+
+
+## Takes down what this shell put outside itself, for the desktop to take over: the
+## rig, and with it the palette, the pointer, the tool cursor and the button map, and
+## the headset's hold on the main window (see `OpenXRRig.stop`). The shell is freed
+## straight after; whatever it connected to the editor goes with it.
+func stop() -> void:
+	started = false
+	set_process(false)
+	if rig == null:
+		return
+	if rig is OpenXRRig:
+		(rig as OpenXRRig).stop(get_viewport())
+	if rig.get_parent() != null:
+		rig.get_parent().remove_child(rig)
+	rig.free()
+	rig = null
 
 
 ## Puts one line of text at the bottom of the desktop window, for whoever looks on.

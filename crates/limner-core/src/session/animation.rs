@@ -139,9 +139,9 @@ impl Session {
         if self.selection.is_empty() {
             return Err(CommandError::invalid("Nothing is selected"));
         }
-        let layer = self
-            .paint_layer
-            .ok_or_else(|| CommandError::invalid("There is no paint layer to copy into"))?;
+        let layer = self.paint_layer().ok_or_else(|| {
+            CommandError::invalid(self.not_a_paint_layer("Choose a paint layer to copy into."))
+        })?;
         self.require_unlocked(layer)?;
         let (index, _, paint) = self.frame_shown(layer)?;
         let mut targets: Vec<DrawingId> = if all {
@@ -560,7 +560,7 @@ impl Session {
         if !self.options.onion_skin || self.playback.playing {
             return Vec::new();
         }
-        let Some(layer) = self.paint_layer else {
+        let Some(layer) = self.paint_layer() else {
             return Vec::new();
         };
         let Ok((index, _, paint)) = self.frame_shown(layer) else {

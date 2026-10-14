@@ -274,6 +274,48 @@ func test_light_settings() -> void:
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
+func test_a_light_says_whether_the_paint_takes_light_and_can_light_it() -> void:
+	var panel := await _panel()
+	var paint := int(row_named("Paint").id)
+	var notes: Array[String] = []
+	editor.message.connect(func(text: String, _is_error: bool) -> void: notes.append(text))
+	# Adding the first light lights the paint, and says so.
+	var result: Variant = editor.run({"cmd": "add_layer", "kind": "light", "parent": int(editor.get_info().root)})
+	await frames(2)
+	var light := int((result as Dictionary).layer)
+	check_eq(world.scene.layer_details(paint).props.shading, "lit", "the paint takes light")
+	check(notes.has("Paint layers now take light. A layer set to Unlit in its properties stays flat."), "the user is told: %s" % [notes])
+	var note: Label = panel._controls["light.lit_note"]
+	var light_all: Button = panel._controls["light.light_all"]
+	check(note.is_visible_in_tree(), "the note is shown with the light")
+	check_eq(note.text, "Every paint layer takes light.", "note when all paint is lit")
+	check(light_all.disabled, "nothing left to light")
+
+	# With the paint set back to unlit, the light says it changes nothing, and the
+	# button lights everything again in one step.
+	run({"cmd": "set_layer_kind", "layer": paint, "values": {"shading": "unlit"}})
+	run({"cmd": "select_layers", "layers": [light]})
+	await frames(2)
+	check_eq(note.text, "No paint layer takes light, so lights change nothing yet. Lights shade only paint layers set to Lit.", "note when no paint is lit")
+	check(not light_all.disabled, "the button is there to press")
+	var second := int(run({"cmd": "add_layer", "kind": "paint", "parent": int(editor.get_info().root)}).layer)
+	run({"cmd": "select_layers", "layers": [light]})
+	await frames(2)
+	check_eq(world.scene.layer_details(second).props.shading, "unlit", "a new layer follows the paint, which is unlit")
+	light_all.pressed.emit()
+	await frames(2)
+	check_eq(world.scene.layer_details(paint).props.shading, "lit", "the first paint layer is lit")
+	check_eq(world.scene.layer_details(second).props.shading, "lit", "the second too")
+	check_eq(note.text, "Every paint layer takes light.", "the note follows")
+	check_eq(editor.status.undo_label, "Change shading", "one undo step")
+	editor.undo()
+	await frames(2)
+	check_eq(note.text, "No paint layer takes light, so lights change nothing yet. Lights shade only paint layers set to Lit.", "undone in one step")
+	run({"cmd": "set_layer_kind", "layer": second, "values": {"shading": "lit"}})
+	await frames(2)
+	check_eq(note.text, "1 of 2 paint layers take light; the others stay flat as painted.", "note when some paint is lit")
+
+
 func test_camera_settings() -> void:
 	var panel := await _panel()
 	var camera := await _add("camera")

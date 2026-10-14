@@ -33,6 +33,8 @@ extends XRRig
 ##   --sim-look yaw,pitch    which way it looks, in degrees (default 0,-10)
 ##   --sim-left x,y,z        where the tip of the left hand is
 ##   --sim-right x,y,z       where the tip of the right hand is
+##   --sim-left-stick x,y    rest the thumb on the left stick, pushed this far (0,0: just resting)
+##   --sim-left-trigger v    hold the left trigger this far, 0 to 1
 ##   --sim-panel <title>     take the palette out, showing that panel (Tools, Color, Layers, …)
 ##   --sim-pin <title>       pin that panel in the room, to the right of the view
 ##   --sim-touch <text>      rest the drawing hand's tip on the control with that caption or tooltip
@@ -171,7 +173,7 @@ func pulse(side: int, strength: float, seconds: float) -> void:
 ##   trigger      0 to 1
 ##   grip         0 to 1
 ##   stick        Vector2
-##   lower, upper, stick_click, menu   true or false
+##   lower, upper, stick_click, stick_touch, menu   true or false
 ##   tracked      false to take the controller away, true to bring it back
 ##
 ## Whatever an entry does not mention stays as it was. An entry with only a `time`
@@ -262,6 +264,7 @@ func _apply_step(side: int, hand: Dictionary, time: float) -> void:
 	state.lower = hand.get("lower", state.lower)
 	state.upper = hand.get("upper", state.upper)
 	state.stick_click = hand.get("stick_click", state.stick_click)
+	state.stick_touch = hand.get("stick_touch", state.stick_touch)
 	state.menu = hand.get("menu", state.menu)
 
 
@@ -290,6 +293,8 @@ func _read_devices() -> void:
 		float(Input.is_key_pressed(KEY_RIGHT)) - float(Input.is_key_pressed(KEY_LEFT)),
 		float(Input.is_key_pressed(KEY_UP)) - float(Input.is_key_pressed(KEY_DOWN))
 	)
+	# A thumb on the stick: T, or any arrow, or the stick pushed in.
+	hand.stick_touch = Input.is_key_pressed(KEY_T) or hand.stick != Vector2.ZERO or hand.stick_click
 	if Input.is_key_pressed(KEY_M):
 		var drawing := active if not Input.is_key_pressed(KEY_TAB) else opposite(active)
 		states[opposite(drawing)].upper = true

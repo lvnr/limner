@@ -98,7 +98,7 @@ pub(crate) struct Controls {
 }
 
 /// What to draw at the drawing hand: a preview of the tool.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Cursor {
     /// False when the drawing hand is not tracked; nothing should be drawn.
     pub tracked: bool,
@@ -114,8 +114,17 @@ pub struct Cursor {
     pub color: [f32; 3],
     /// Opacity of the brush preview: the tool's opacity or strength.
     pub opacity: f32,
-    /// True while the tool is being applied.
+    /// True while the tool, or a handle of the gimbal, is being worked by the trigger.
     pub active: bool,
+    /// True while Paint or Line is laying down a stroke (a line drawn with the
+    /// brush and the modifier included): what the hiss of paint follows.
+    pub painting: bool,
+    /// Why pressing the trigger now would do nothing, as the message it would give:
+    /// the current layer is not one the tool can work on. `None` when it would work.
+    pub blocked: Option<String>,
+    /// The Line tool is in hand with the modifier held: the ends of the line snap to
+    /// the brush grid.
+    pub grid_snap: bool,
     /// How far the modifier is pressed.
     pub alt: f32,
     /// The hand is at a handle of the gimbal: the trigger would move that, not apply the tool.
@@ -147,8 +156,32 @@ impl Session {
             color: tools.color,
             opacity,
             active: self.gesture.is_some(),
+            painting: self.is_painting(),
+            blocked: self.tool_blocked(),
+            grid_snap: tools.tool == ToolKind::Line && self.last_input.alt() > 0.5,
             alt: self.last_input.alt(),
             at_handle: self.hover[0].is_some() || matches!(self.gesture, Some(Gesture::Handle(_))),
+        }
+    }
+
+    /// True while Paint or Line is laying down a stroke.
+    pub fn is_painting(&self) -> bool {
+        matches!(self.gesture, Some(Gesture::Paint(_) | Gesture::Line(_)))
+    }
+
+    /// Why the trigger would do nothing with the tool in hand, judged from the
+    /// current layer and the selection; `None` when it would work, or when it is at
+    /// work already or at a handle of the gimbal.
+    fn tool_blocked(&self) -> Option<String> {
+        if self.gesture.is_some() || self.hover[0].is_some() {
+            return None;
+        }
+        match self.tools.tool {
+            ToolKind::Paint | ToolKind::Line => self.paint_home().err(),
+            // A press with the Selection tool deselects, whatever is current.
+            ToolKind::Select => None,
+            _ if !self.selection.is_empty() => None,
+            _ => self.tool_layer().err(),
         }
     }
 
@@ -203,8 +236,9 @@ impl Session {
             .update_bool(main.tracked && main.stick_click)
             == Edge::Pressed
         {
-            self.options.show_gimbal = !self.options.show_gimbal;
-            self.touch_state();
+            if let Some(message) = self.toggle_gimbal() {
+                feedback.push(Feedback::Message(message));
+            }
         }
         if controls
             .off_lower
@@ -312,8 +346,10 @@ impl Session {
         // modifier, up makes a copy of the frame and down deletes it. Holding the stick
         // repeats, which is how a long run of frames is made.
         let pushed = controls.off_upward.update(upward, input.dt);
+        // Said once when the stick is pushed, not again on every repeat while it is held.
+        let first_push = pushed != 0 && controls.off_upward.held == 0.0;
         if pushed != 0 {
-            if let Some(layer) = self.paint_layer {
+            if let Some(layer) = self.paint_layer() {
                 let command = match (pushed > 0, alt) {
                     (true, false) => Command::AddFrame {
                         layer,
@@ -333,6 +369,10 @@ impl Session {
                         seconds: 0.03,
                     });
                 }
+            } else if first_push {
+                feedback.push(Feedback::Message(
+                    self.not_a_paint_layer(super::CHOOSE_FOR_FRAMES),
+                ));
             }
         }
         self.controls = controls;
@@ -364,7 +404,7 @@ impl Session {
         {
             return;
         }
-        let Some(layer) = self.paint_layer else {
+        let Some(layer) = self.paint_layer() else {
             return;
         };
         let frame = self.evaluate();
@@ -394,7 +434,7 @@ impl Session {
             return;
         }
         let frame = self.evaluate();
-        let Some(layer) = self.paint_layer else {
+        let Some(layer) = self.paint_layer() else {
             return;
         };
         if let Err(message) = self.editable_drawing(&frame, layer) {
@@ -451,6 +491,10 @@ impl Session {
         let edge = latch.update(trigger, PRESS, RELEASE);
         self.trigger = latch;
         match edge {
+            // A finger resting on the trigger while the same hand's grip holds
+            // something (the view, a layer, a handle) is not a press of the tool. A
+            // gesture already under way carries on whatever the grip does.
+            Edge::Pressed if self.is_grabbing(0) => {}
             Edge::Pressed => self.begin_gesture(input, feedback),
             Edge::Held => self.continue_gesture(input),
             Edge::Released => self.end_gesture(),
@@ -477,7 +521,9 @@ impl Session {
             }
             return;
         }
-        let tool = if self.tools.tool == ToolKind::Paint && input.alt() > 0.5 {
+        // The modifier held as the brush goes down draws a straight line with the brush.
+        let from_brush = self.tools.tool == ToolKind::Paint && input.alt() > 0.5;
+        let tool = if from_brush {
             ToolKind::Line
         } else {
             self.tools.tool
@@ -497,7 +543,7 @@ impl Session {
         self.begin_transaction(label);
         let gesture = match tool {
             ToolKind::Paint => PaintGesture::begin(self, input).map(Gesture::Paint),
-            ToolKind::Line => LineGesture::begin(self, input).map(Gesture::Line),
+            ToolKind::Line => LineGesture::begin(self, input, from_brush).map(Gesture::Line),
             ToolKind::Select => Ok(Gesture::Select(SelectGesture::begin(self, input))),
             ToolKind::Grab => GrabGesture::begin(self, input).map(Gesture::Grab),
             ToolKind::Colorize

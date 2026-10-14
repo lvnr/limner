@@ -7,6 +7,28 @@
 use crate::math::Xform;
 use glam::{DAffine3, DQuat, DVec3};
 
+/// How large a cell of the brush grid should look, in viewer-space metres.
+pub const BRUSH_GRID_SEEN: f64 = 0.05;
+
+/// The size of a cell of the brush grid, in world units, for a view where one
+/// viewer-space metre covers `world_per_metre` world units: 1, 2 or 5 times a power
+/// of ten, whichever looks nearest to [`BRUSH_GRID_SEEN`]. Every such grid shares
+/// lines with the floor grid, and the Line tool snaps to it.
+pub fn brush_grid_spacing(world_per_metre: f64) -> f64 {
+    let wanted = BRUSH_GRID_SEEN * world_per_metre;
+    if !(wanted.is_finite() && wanted > 0.0) {
+        return BRUSH_GRID_SEEN;
+    }
+    let decade = 10f64.powf(wanted.log10().floor());
+    let mut best = decade;
+    for step in [2.0, 5.0, 10.0] {
+        if (decade * step / wanted).ln().abs() < (best / wanted).ln().abs() {
+            best = decade * step;
+        }
+    }
+    best
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct View {
     /// Maps viewer space to world space. Its scale is the size of the viewer in the world.
@@ -33,6 +55,12 @@ impl View {
     /// How many world units one viewer-space metre covers.
     pub fn scale(&self) -> f64 {
         self.world_from_viewer.scale
+    }
+
+    /// The size of a cell of the brush grid at this zoom, in world units: see
+    /// [`brush_grid_spacing`].
+    pub fn brush_grid_spacing(&self) -> f64 {
+        brush_grid_spacing(self.scale())
     }
 
     /// Moves the world as seen by the viewer: `motion` maps where things were in
@@ -105,6 +133,17 @@ mod tests {
 
     fn close(a: DVec3, b: DVec3) -> bool {
         (a - b).length() < 1e-9 * (1.0 + a.length().max(b.length()))
+    }
+
+    #[test]
+    fn brush_grid_cells_are_one_two_or_five_times_a_power_of_ten_near_five_centimetres() {
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-12 * b;
+        assert!(near(brush_grid_spacing(1.0), 0.05), "a new document");
+        assert!(near(brush_grid_spacing(10.0), 0.5), "zoomed out ten times");
+        assert!(near(brush_grid_spacing(3.0), 0.2), "zoomed out three times");
+        assert!(near(brush_grid_spacing(0.02), 0.001), "zoomed far in");
+        assert!(near(View::default().brush_grid_spacing(), 0.05));
+        assert_eq!(brush_grid_spacing(f64::NAN), BRUSH_GRID_SEEN);
     }
 
     #[test]

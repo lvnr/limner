@@ -39,12 +39,10 @@ impl EditTarget {
 
 impl Session {
     /// What a modifying tool works on: the selected strokes if there are any,
-    /// otherwise the frame the paint layer shows.
+    /// otherwise the frame the current paint layer shows.
     pub(crate) fn edit_targets(&self, frame: &RenderFrame) -> Result<Vec<EditTarget>, String> {
         if self.selection.is_empty() {
-            let layer = self
-                .paint_layer
-                .ok_or("There is no paint layer to work on")?;
+            let layer = self.tool_layer()?;
             return Ok(vec![EditTarget {
                 target: self.editable_drawing(frame, layer)?,
                 only: None,

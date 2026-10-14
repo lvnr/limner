@@ -13,6 +13,7 @@ godot/xr/
   openxr_rig.gd       OpenXRRig: a real headset through OpenXR
   sim_rig.gd          SimRig: mouse and keyboard, or a script, standing in for a headset
   sim_director.gd     places the simulated rig for screenshots (the --sim-… options)
+  holding_view.gd     XRHoldingView: what the headset shows while the desktop is in use
   hand_state.gd       what one controller is pressing at one moment
   action_map.tres     the OpenXR actions and their bindings for each kind of controller
   palette.gd          XRPalette: the panels in the other hand, pinning, the keyboard's place
@@ -25,7 +26,9 @@ godot/xr/
   controller.gdshader
 godot/editor/preferences.gd   app-wide settings in user://settings.json (shared with the desktop)
 godot/editor/sounds.gd        interface sounds made in code (shared with the desktop)
+godot/editor/mode_switch.gd   ModeSwitch: whether a headset can be changed to, and the buttons' words
 godot/ui/settings_panel.gd    the Settings panel
+godot/main.gd                 LimnerApp: builds one shell or the other, and changes between them
 ```
 
 **Viewer space.** Everything Godot draws is in viewer space: the room the user stands in, in metres, Y up. The XR origin sits at the room's origin and never moves, and the world scale stays 1. Navigation is done by the core, which changes where the artwork is in the room. So controller poses go to the core exactly as OpenXR reports them.
@@ -48,6 +51,19 @@ godot/ui/settings_panel.gd    the Settings panel
 **Quitting and unsaved work.** When the headset's system ends the session (`XRRig.closed`, for instance when the user quits from the system menu) there is no moment left to ask anything, and closing the desktop mirror window quits at once too. In both cases `XRShell.keep_unsaved_work` first copies unsaved work to the recovery file (`Autosave.keep_for_next_time`), and the next start in the headset opens it again, still unsaved; a desktop start offers it. Nothing is asked in the world before quitting, because neither way of quitting leaves time for an answer.
 
 **The mirror.** The desktop window shows one eye, which is what Godot does by itself. The shell sizes the window to 1280 x 720, names it "… — Limner (headset)" and puts one line of text at the bottom saying that the session is in the headset.
+
+**Changing to the desktop and back.** The work can move between the two interfaces while the app runs: "Continue in the headset" is a button in the desktop's top bar (the headset icon), an entry at the bottom of its View menu and a row at the end of the Settings panel; in the headset the same Settings row says "Continue on the desktop". A shell asks with its `switch_requested` signal and `main.gd` (`LimnerApp.switch_to`) makes the change a frame later:
+
+- A stroke or grab in progress is finished or taken back (`input_cancel`).
+- The shell in use is taken down with everything it put in the world (`stop()`): the desktop's camera and tool cursor, or the headset's rig with the palette, pointer, cursor and button map under it. Freeing them also drops their connections to the editor and to `Kit`.
+- The other shell is built around the same world and editor, so the document, its undo history, the selection, the current layer and the view carry over. It is built as a switch (`switched`): no recovery question or automatic recovery, no start-up preferences applied again (they would reset the gimbal), no button map. One `Autosave` lasts the whole run (`LimnerApp.autosave`), so the recovery copy written during ordinary work is never mistaken for work left by a bad ending.
+- If the headset does not start, the desktop is built again and says why, as at start-up.
+
+The headset is offered (`ModeSwitch.headset_target()`) when OpenXR is running or has found a headset system; on a Mac, or with `--sim`, the simulated rig is offered instead. Otherwise the buttons are greyed out and say why: "Start Limner without --xr-mode off, with the headset's software running, to use a headset." OpenXR cannot be started once the app runs without it, and in this build of Godot it cannot be stopped and started again either, so the session stays alive for the rest of the run once it has begun:
+
+- Going to the desktop, `OpenXRRig.stop()` gives the main viewport back (XR off, its drawing size set again, V-Sync and the frame-rate cap from the project settings) and the window takes back the size, place and mode it had before the headset. The headset then shows `XRHoldingView`: a viewport of its own marked for XR, with an empty dim room and a sheet saying "Limner is on the desktop. Pull a trigger to carry on here." Without it the headset would go blank and Godot would complain every frame that no viewport is marked for XR. The trigger only counts once it has been let go since the view appeared, so the press that left the headset does not bring it straight back.
+- Coming back, the rig is built again on the live session. The runtime does not announce focus a second time, so `OpenXRRig.start` reads the session's state and starts with the hands working when it is already focused.
+- If the headset's own menu ends the session while the desktop is in use, the app does not quit: the holding view goes, the desktop says so, and the headset is no longer offered (`ModeSwitch.headset_ended`).
 
 ### Project settings the headset needs
 
@@ -75,26 +91,50 @@ The core decides what the controls do (`crates/limner-core/src/session/gesture.r
 
 | Control | Drawing hand | Other hand |
 |---|---|---|
-| Trigger | Use the tool, with pressure. On a gimbal handle: move the handle | The modifier: Paint draws a line, Thicken thins, Selection adds on a half pull and removes on a full one |
-| Grip | Take hold of the view, or of the layer or selection being transformed. Modifier held when it takes hold: move a copy | The same; both grips together also scale |
+| Trigger | Use the tool, with pressure | The modifier (see below) |
+| Grip | Take hold of the view, or of what is being transformed (the transform object, or the selection with the Selection tool in hand). While drawing a line: move where it starts | The same; both grips together also scale |
 | Grip and stick up / down | Zoom or scale quickly about the hand | The same |
-| Stick up / down | Tool size (modifier: the inner sphere) | New frame / hold frame (modifier: copy frame / delete frame) |
-| Stick left / right | Undo / redo, repeating while held | Previous / next frame (modifier: rewind / fast forward) |
-| Stick click | Show or hide the gimbal | Play or pause |
+| Stick up / down | Tool size, larger / smaller | New frame / hold frame |
+| Stick left / right | Undo / redo, repeating while held. Redo after moving a copy moves another copy as far again (`transform_again`) | Previous / next frame |
+| Stick click | Show or hide the gimbal: the transform object's, the current layer's while the view is the transform object, or the selection's. Turned on with nothing to move, it says "Nothing to transform: choose a layer, or select strokes" | Play or pause |
 | Lower button (A / X) | Delete the selection or the nearest stroke | Switch between the Selection tool and the last tool |
 | Upper button (B / Y) | Pick the colour of the nearest stroke | Show or hide the palette |
-| Menu button, held 1 s | Show or hide the button map (either hand's, where it has one) | |
+| Menu button (a press) | Show or hide the button map (either hand's, where it has one) | |
+
+In painting mode the other hand's stick and its click do nothing.
+
+With the modifier (the other hand's trigger) held:
+
+| Doing | Does |
+|---|---|
+| Paint | Draws a straight line in the brush's style, at any angle (no snapping) |
+| Line | Snaps the ends of the line to the brush grid |
+| Selection | A half pull adds to the selection, a full pull takes away |
+| Thicken | Thins |
+| Drawing hand's stick up / down | The inner sphere, for tools that have one |
+| A grip taking hold | Moves a copy: of the selection, or of the layer being transformed |
+| Other hand's stick | Left / right: rewind / fast forward. Up / down: copy the frame / delete it |
+
+On the gimbal, with the drawing hand:
+
+| Handle | Trigger | Grip |
+|---|---|---|
+| Arrow | Move the gimbal (the pivot) along it | Move along that axis |
+| Square | Move the gimbal (the pivot) in that plane | Move in that plane |
+| Ring | Turn in snapped steps (`rotation_snap_steps`) | Turn about that axis |
+| Centre | Move the gimbal (the pivot) freely | Move freely |
 
 Over a panel the drawing hand's controls mean something else, and the core sees none of them:
 
 | Control | Over a panel |
 |---|---|
 | Tip within 6 cm in front | Hover |
-| Tip pushed 3 mm through | Press; pulled back 6 mm in front: release. A short buzz on the press |
-| Pointing from farther off, up to 2 m | A ray and a dot; the trigger is the button |
+| Tip pushed 3 mm into a key, or 3 mm through the flat of the sheet | Press; pulled back 6 mm in front of the key's top: release. A short buzz on the press. The key goes down with the tip |
+| Pointing from farther off, up to 2 m | A ray and a dot; the trigger is the button. The grip, the stick's left and right and the upper button still work the artwork |
+| Modifier (the other hand's trigger) held | Presses come with Ctrl: a tap adds a key or a row to the selection, as a Ctrl click does |
 | Stick up / down | Scroll (or resize a panel that is being held) |
 | Lower button | The other mouse button: opens a context menu where there is one |
-| Grip | Pick the panel up; it stays where it is let go |
+| Grip, with the tip close | Pick the panel up; it stays where it is let go |
 
 ### Bindings
 
@@ -118,12 +158,16 @@ The action map was written by a script through Godot's own classes and read back
 
 ## The palette
 
-- **Sheets.** Every panel is the same `Control` the desktop docks, placed in a `SubViewport` of its own (`XRPanelSurface`) under a title bar and above a line for tooltips. A sheet is 352 pixels wide (a few panels ask for more) at 1.4 pixels per millimetre, a quarter of a metre, and as tall as its panel needs, up to 560 pixels of panel, beyond which it scrolls.
+The palette follows Quill's: raised buttons that go down when pushed, one panel at a time, round buttons to change panels, signs on the hand. The reasons and what was measured from a recording of Quill are in `docs/superpowers/specs/2026-10-14-headset-palette-design.md`.
+
+- **Sheets.** Every panel is the same `Control` the desktop docks, placed in a `SubViewport` of its own (`XRPanelSurface`) under a grey title bar and above a line for tooltips, on a sheet 8 mm thick. A sheet is 384 pixels wide (a few panels ask for more) at 1.1 pixels per millimetre, 35 cm, and as tall as its panel needs, up to 560 pixels of panel, beyond which it scrolls. In the headset the panels take a look of their own (`Kit.headset`): buttons with a dark outline, a larger text, and a colour scheme of their own, light unless changed (`headset_theme`).
+- **Keys.** Every button of a sheet stands 5 mm off it as a key (`XRPanelKeys`): the top shows the button as the panel draws it, the sides take its outline's colour. The tip pushes a key down with it; 3 mm down it presses, and it bottoms out 1 mm above the sheet. A button that is on (the chosen tool) sits half down; a disabled one is flush. Check boxes, sliders, lists and text boxes stay flat, as Quill's do. Keys under an open pop-up stay down. `key.gdshader` draws them with the same three sharpness levels as the sheet.
 - **Sharpness.** A viewport's picture has no mip-maps, so each sheet keeps two smaller copies of itself in two more viewports, and `panel.gdshader` blends between the three by how far away the sheet is. Text is sharp at arm's length and does not shimmer on a pinned panel across the room.
 - **Drawing only when needed.** A sheet is redrawn while the pointer is on it, for 0.4 s after the document or the editor state changed, while a pop-up is open in it, while the piece is playing, and otherwise twice a second. Hidden sheets are never drawn, and the panel on a hidden sheet is hidden as well (`XRPanelSurface` follows its own visibility), so that a panel that works only while it is seen, such as the Monitor's live picture, stops when its sheet is put away or another panel is brought to the front. In its own viewport a panel would otherwise count as shown for ever.
-- **Tabs.** The strip along the top is built from `XRPalette.PANELS`. A panel whose script is missing or does not load is left out, so the palette works while panels are being written.
-- **Where it is.** Held by its edge, like a clipboard: 5 cm to the inside of the other hand, its top 20 cm above the hand, leaning back 25 degrees.
-- **Pinning.** Grip while over a panel picks it up. It follows the hand, the stick resizes it (0.5 to 3 times), and it stays where it is let go. Its title bar then has a button that sends it back; pressing its tab on the palette does the same. Any number can be pinned. Pinned panels stay when the palette is put away.
+- **Round buttons.** Under the panel, a round key for each panel of `XRPalette.PANELS` (40 mm across, 9 mm tall), in two staggered rows: below, the panels used while painting (Tools, Color, Layers, Timeline, Transform, Layer); above, the rest (Document, Export, Monitor, Performance, Settings). The panel in front has its button down; a panel left in the room has its icon in the accent colour. The name of the button under the tip shows in a tag over them. A panel whose script is missing or does not load is left out, so the palette works while panels are being written.
+- **Where it is.** Above the hand that holds it, as in Quill: the round buttons centred 10.5 cm above the hand, the panel above them, 3 cm toward the middle of the body, leaning back 20 degrees and turned 18 degrees in toward the eyes (`palette.gd`).
+- **Pinning.** The pin at the right of a panel's title bar leaves the panel where it is in the room; on a panel left in the room the same key sends it back, as does its round button. The grip, with the tip close to a panel, picks it up: it follows the hand, the stick resizes it (0.5 to 3 times), and it stays where it is let go. Pointing at a panel from afar never takes the grip. Any number can be pinned. Pinned panels stay when the palette is put away.
+- **The hand's signs** (`XRHandDial`). On the hand that holds the palette a see-through disc faces the eyes, with a dark ring and the frame number of the current layer in it (none unless it is a paint layer), and a tag over it with the layer's name. While the thumb rests on that hand's stick (`thumbstick/touch` on Touch and Index controllers) or pushes it, icons around the ring show what the stick does, and what it does with the modifier held; the direction pushed lights up. Painting mode, which takes that stick away, hides them.
 - **Pop-ups** (drop-downs, the colour picker, context menus) open inside the panel's own viewport. A sheet grows while a pop-up larger than it is open. A press beside a pop-up closes it. A drop-down that opens under a press does not take the release as a choice.
 - **Typing.** When a `LineEdit` or `TextEdit` on any panel (or in a pop-up of it) is being typed into, a keyboard sheet appears beside that panel, level with the box, on the drawing hand's side. Its keys send ordinary key events to the box. It goes when typing ends, or with its own key.
 - **Tooltips.** The tooltip of the control under the pointer appears on the line under the panel after half a second.
@@ -216,6 +260,7 @@ Everything in this layer has been exercised only through the simulated rig, on a
 - **Every distance, angle and strength**, which were chosen at a desk: the tip offset, the poke depths, the palette's place in the hand, panel size, haptic strengths, the button map's distance.
 - **Performance** in a headset, on a PC or on a Quest. Each visible panel costs three small viewports when it redraws.
 - **The Android export**, the Android build of the Rust extension, and the vendors plugin: none was installed or run.
+- **Changing between the desktop and the headset with a real one** (only the simulated rig has done it): `OpenXRRig.stop()`, the holding view and its trigger, re-entry with the session already focused, the window coming back to its old size, and the session ended from the headset's menu while on the desktop. Two things to watch: while the holding view runs, the headset still paces the frames, so the desktop may run at the headset's rate rather than the monitor's; and whether a `SubViewport` marked for XR takes the headset's frames as the main viewport does.
 - **Hand dominance on real controllers.** Left-handed use is mirrored by logic; a left-handed Touch user has the menu button on the drawing hand and none on the other.
 
 ### The first session, in order
@@ -238,3 +283,4 @@ Start with `-- --xr --no-sim` so that a failure is reported instead of hidden. K
 14. **Left hand.** Settings > Drawing hand > Left: the palette moves to the right hand and the left trigger paints.
 15. **Frame rate.** Open the Performance panel. Note the frame time with the palette out and put away, and with three panels pinned.
 16. **Files.** In the Document panel: Save, type a name on the keyboard, Enter. Paint a stroke, press New and answer the question in the panel; then Open, and pick the project from the list. Quit from the headset's system menu with a stroke unsaved and start again: the stroke should be back, unsaved.
+17. **Desktop and back.** Paint a stroke, then Settings > "Continue on the desktop". The window should go back to its old size and show the desktop with the stroke, undoable; the headset should show the dim room with the sheet. Pull a trigger: the headset interface comes back with the hands working at once (not waiting for the headset to be taken off and put on). Change to the desktop again and quit from the headset's system menu: the app should stay on the desktop, say the session ended, and grey out "Continue in the headset". Note the desktop's frame rate while the headset shows the sheet.

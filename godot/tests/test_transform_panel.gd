@@ -229,6 +229,23 @@ func test_option_controls_set_editor_options() -> void:
 	check_eq(editor.status.can_undo, false, "options are not undo steps")
 
 
+func test_show_gimbal_shows_it_on_the_current_layer_while_the_view_is_the_transform_object() -> void:
+	var panel := await _panel()
+	var toggle: BaseButton = panel._option_toggles["show_gimbal"]
+	check(toggle.tooltip_text.contains("the current layer while the view is the transform object"), "the tooltip says what it shows: %s" % toggle.tooltip_text)
+	LimnerDemo.stroke(world.scene, [Vector3(0.0, 1.0, -1.0), Vector3(0.4, 1.2, -1.0)])
+	await frames(2)
+	check(world.scene.gimbal().is_empty(), "no gimbal until asked for")
+	toggle.button_pressed = true
+	await frames(2)
+	var gimbal := world.scene.gimbal()
+	check_eq(gimbal.get("subject"), "layer", "a layer's gimbal")
+	check_eq(int(gimbal.get("layer", -1)), int(row_named("Paint").id), "the current layer's, with the view as the transform object")
+	var at: Vector3 = gimbal.get("position", Vector3.ZERO)
+	check(at.is_equal_approx(Vector3(0.2, 1.1, -1.0)), "in the middle of what is painted: %s" % at)
+	check_eq(panel._target_name.text, "View", "the transform object is still the view")
+
+
 func test_rotation_snap_steps_show_their_angle() -> void:
 	var panel := await _panel()
 	check_eq(panel._steps_note.text, "12 steps = 30°", "the angle of the usual steps")
@@ -292,6 +309,7 @@ func test_follows_the_transform_object_and_the_current_layer() -> void:
 	check_eq(panel._caption.text, "Numbers for the current layer, Light", "the numbers follow the current layer")
 	await _type(panel._position[0], "2")
 	check_eq(_details("Light").transform.translation[0], 2.0, "typing moves the current layer")
+	var placed: Array = _details("Light").transform.translation
 
 	run({"cmd": "set_transform_target", "layer": paint})
 	await frames(2)
@@ -300,7 +318,7 @@ func test_follows_the_transform_object_and_the_current_layer() -> void:
 	check_eq(panel._position[0].text, "0", "the transform object's position is shown")
 	await _type(panel._position[1], "9")
 	check_eq(_details("Paint").transform.translation[1], 9.0, "typing moves the transform object")
-	check_eq(_details("Light").transform.translation, [2.0, 0.0, 0.0], "and not the current layer")
+	check_eq(_details("Light").transform.translation, placed, "and not the current layer")
 
 	await _press(panel, "Use current layer")
 	check_eq(editor.status.transform_target, int(light.layer), "Use current layer")

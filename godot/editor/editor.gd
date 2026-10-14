@@ -45,12 +45,15 @@ func _process(_delta: float) -> void:
 
 
 ## Runs a command. Returns its result (`true` when it has none), or `null` after
-## reporting the failure through `message`.
+## reporting the failure through `message`. A result with a `message` (adding the
+## first light says the paint now takes light) is passed on through `message` too.
 func run(command: Dictionary) -> Variant:
 	var reply := scene.exec(command)
 	if not reply.ok:
 		message.emit(reply.error, true)
 		return null
+	if reply.result is Dictionary and (reply.result as Dictionary).get("message") is String:
+		message.emit(reply.result.message, false)
 	return true if reply.result == null else reply.result
 
 

@@ -142,6 +142,34 @@ func test_a_lit_paint_layer_takes_the_lit_materials() -> void:
 	check(material.shader.resource_path.ends_with("stroke_tube_opaque.gdshader"), "undo makes it unlit again: %s" % material.shader.resource_path)
 
 
+func test_adding_a_light_puts_it_in_sight_and_makes_the_paint_take_it() -> void:
+	LimnerDemo.stroke(world.scene, [Vector3(0, 1, -1), Vector3(0.2, 1, -1)])
+	await frames(2)
+	var chunk: MeshInstance3D = null
+	for child in world.scene.get_node("Strokes").get_children():
+		if child is MeshInstance3D:
+			chunk = child
+	var material: ShaderMaterial = chunk.get_surface_override_material(0)
+	check(material.shader.resource_path.ends_with("stroke_tube_opaque.gdshader"), "paint starts unlit: %s" % material.shader.resource_path)
+	var id := _add("light")
+	await frames(3)
+	material = chunk.get_surface_override_material(0)
+	check(material.shader.resource_path.ends_with("stroke_tube_opaque_lit.gdshader"), "the first light makes the paint lit: %s" % material.shader.resource_path)
+	var light: Light3D = LayerTestKit.node(world.scene, "Light", id)
+	# Ahead of the eyes (1.6 m up when nothing says otherwise), toward the hand that
+	# drew, and above them: not on the floor.
+	var at := light.global_position
+	check_near(at.y, 1.9, "above the eyes")
+	check_near(Vector2(at.x, at.z).length(), 0.8, "0.8 m ahead")
+	check(at.z < -0.7 and at.x > 0.0, "toward the hand: %s" % at)
+	check_near((light as OmniLight3D).omni_range, 3.0, "a reach that suits the room")
+	editor.undo()
+	await frames(3)
+	material = chunk.get_surface_override_material(0)
+	check(material.shader.resource_path.ends_with("stroke_tube_opaque.gdshader"), "one undo takes the light and the shading back: %s" % material.shader.resource_path)
+	check_eq(LayerTestKit.count(world.scene, "Light3D"), 0, "no light left")
+
+
 func test_gizmos_mark_spawn_areas_cameras_lights_and_sounds() -> void:
 	await frames(2)
 	var spawn := int(row_named("Spawn Area").id)
@@ -172,9 +200,14 @@ func test_gizmos_mark_spawn_areas_cameras_lights_and_sounds() -> void:
 	check_near(size.x / size.y, 16.0 / 9.0, "the camera's picture shape", 1e-3)
 	check_near(maxf(size.x, maxf(size.y, size.z)), 0.08, "gizmo size", 1e-4)
 	var sun := LayerTestKit.gizmo(world.scene, light)
-	check_eq(sun.size(), 1, "a light")
+	check_eq(sun.size(), 3, "a light: its mark, an outline, and a solid heart")
 	color = sun[0].get_instance_shader_parameter("line_color")
 	check(color.is_equal_approx(Color.GREEN), "in the light's colour: %s" % color)
+	var outline: Color = sun[1].get_instance_shader_parameter("line_color")
+	check(outline.get_luminance() < 0.1, "a bright light is outlined in black: %s" % outline)
+	color = sun[2].get_instance_shader_parameter("line_color")
+	check(color.is_equal_approx(Color.GREEN), "its heart in its colour: %s" % color)
+	check_near(sun[0].global_transform.basis.get_scale().x, 0.08, "as large as other gizmos", 1e-4)
 
 	# Gizmos keep their size however far the view is zoomed.
 	world.scene.view_zoom(Vector3.ZERO, 50.0)

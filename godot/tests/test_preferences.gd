@@ -163,6 +163,27 @@ func test_sounds_are_made_in_code_and_follow_the_volume() -> void:
 	world.scene.input_commit(0.011)
 	sounds.follow_tool(world.scene)
 	check_eq(sounds.is_painting(), false, "letting go stops it")
+	# A trigger on a handle of the gimbal moves the layer: that is not paint going down.
+	var paint: int = editor.status.paint_layer
+	run({"cmd": "set_layer", "layer": paint, "transform": {"rotation": [0.0, 0.0, 0.0, 1.0], "scale": 1.0, "translation": [0.0, 1.2, -0.6]}})
+	run({"cmd": "set_options", "values": {"show_gimbal": true}})
+	run({"cmd": "set_transform_target", "layer": paint})
+	run({"cmd": "set_tool", "tool": "paint"})
+	var gimbal: Dictionary = world.scene.gimbal()
+	check(not gimbal.is_empty(), "a gimbal to try")
+	var on_arrow: Vector3 = (gimbal.position as Vector3) + Vector3.RIGHT * 0.6 * float(gimbal.size)
+	world.scene.input_hand(0, on_arrow, Quaternion.IDENTITY, 0.0, 0.0, Vector2.ZERO, 0)
+	world.scene.input_commit(0.011)
+	check(world.scene.tool_cursor().at_handle, "the hand is at an arrow of the gimbal")
+	for step in 4:
+		world.scene.input_hand(0, on_arrow + Vector3.RIGHT * 0.01 * step, Quaternion.IDENTITY, 1.0, 0.0, Vector2.ZERO, 0)
+		world.scene.input_commit(0.011)
+		sounds.follow_tool(world.scene)
+	check(world.scene.tool_cursor().active, "the trigger works the handle")
+	check_eq(sounds.is_painting(), false, "and the hiss stays off with Paint in hand")
+	world.scene.input_hand(0, on_arrow, Quaternion.IDENTITY, 0.0, 0.0, Vector2.ZERO, 0)
+	world.scene.input_commit(0.011)
+	sounds.follow_tool(world.scene)
 
 
 func test_swatches_set_in_the_colour_panel_come_back_in_new_documents() -> void:

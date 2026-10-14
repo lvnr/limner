@@ -64,7 +64,7 @@ impl Session {
     /// the turn that takes the Z axis onto the direction the plane is square to.
     pub fn mirror_plane(&self) -> Option<(DVec3, glam::DQuat)> {
         let flip = self.tools.symmetry.flip()?;
-        let layer = self.paint_layer?;
+        let layer = self.paint_layer()?;
         let pivot = self.doc.layer(layer)?.pivot;
         let frame = self.evaluate();
         frame.get(layer)?;

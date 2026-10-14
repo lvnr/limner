@@ -104,9 +104,14 @@ func test_the_palette_shows_and_hides_on_the_menu_feedback() -> void:
 		check_eq(shell.palette.surfaces.has(entry.title), loads, "the %s panel is on the palette exactly when it loads" % entry.title)
 	for title: String in ["Tools", "Color", "Layers", "Transform", "Layer", "Document", "Settings"]:
 		check(shell.palette.surfaces.has(title), "there is a %s panel" % title)
-	# The palette is held beside the left hand, toward the right, and above it.
-	var hand := sim.aims[LEFT].global_position
-	check(tools.global_position.x > hand.x + XRPalette.SIDE_GAP, "the palette lies to the right of the left hand: %s vs %s" % [tools.global_position, hand])
+	# As in Quill, the palette rides above the hand that holds it: the round buttons
+	# just above the hand, the panel above them, a little toward the middle.
+	var tabs := shell.palette.tabs
+	check_near(tabs.position.y, XRPalette.COINS_ABOVE_HAND, "the round buttons are just above the hand")
+	check(tools.position.y - tools.metres().y * 0.5 > tabs.position.y, "the panel is above them: %s vs %s" % [tools.position, tabs.position])
+	check(tools.position.x > 0.0, "a little toward the middle of the body, right of the left hand")
+	check_eq(shell.palette.coins.size(), shell.palette.surfaces.size(), "a round button for every panel")
+	check_eq((shell.palette.coins["Tools"] as Button).button_pressed, true, "the one of the panel in front is down")
 	await sim.play(press)
 	check_eq(shell.palette.shown, false, "hidden after pressing it again")
 	check_eq(tools.is_visible_in_tree(), false, "the panel goes with it")
@@ -181,7 +186,11 @@ func test_dragging_the_tip_along_the_size_slider_changes_the_size() -> void:
 	])
 	var after: float = world.scene.tool_settings()["paint"]["size"]
 	check(after > before * 2.0, "the size grew: %s to %s" % [before, after])
-	check_near(slider.get_as_ratio(), 0.8, "the knob is where the tip let go", 0.04)
+	# The value beside the slider grows wider as the size does, so the slider itself
+	# may end a little narrower: the knob is measured against where it is now.
+	var now := slider.get_global_rect()
+	var let_go_at := surface.locate(to).x
+	check_near(slider.get_as_ratio(), clampf((let_go_at - now.position.x) / now.size.x, 0.0, 1.0), "the knob is where the tip let go", 0.04)
 	check_near(after, slider.value, "and the tool has the slider's size", 1e-5)
 	check_eq(_strokes(), 0, "nothing was painted on the way")
 	check(messages.is_empty(), "no errors: %s" % [messages])
@@ -211,6 +220,7 @@ func test_a_pinned_panel_stays_put_and_returns_with_its_button() -> void:
 	var held_point := surface.world_point(Vector2(120, 16))
 	check_near((held_point - (grip_point + carried)).length(), 0.02, "the spot that was held is still at the hand where it let go", 0.004)
 	check_eq(surface._corner.visible, true, "it has a button to send it back")
+	check_eq(surface._corner.tooltip_text, "Send this panel back to the palette", "which says so")
 	# The hand that holds the palette goes elsewhere and the palette is put away.
 	await sim.play([
 		{"time": 0.0, "left": {"tip": sim.tip_position(LEFT)}},
@@ -233,11 +243,11 @@ func test_a_pinned_panel_stays_put_and_returns_with_its_button() -> void:
 	check_eq(shell.palette.is_pinned("Tools"), false, "the corner button sends it back")
 	check_eq(shell.palette.is_pinned("Layers"), true, "the other one stays pinned")
 	check_eq(shell.palette.current, "Tools", "it is in front on the palette again")
-	check_eq(surface._corner.visible, false, "and has no return button there")
+	check_eq(surface._corner.tooltip_text, "Leave this panel here in the room", "and its corner key is a pin again")
 	shell.palette.set_shown(true)
 	await frames(3)
 	check_eq(surface.top_level, false, "it moves with the palette again")
-	check_near(surface.position.x, shell.palette.tabs.position.x, "and sits under the tabs")
+	check_near(surface.position.x, shell.palette.tabs.position.x, "and sits over the round buttons")
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
@@ -321,7 +331,8 @@ func test_pointing_from_afar_uses_a_ray_and_the_trigger() -> void:
 	check_eq(shell.pointer.mode, XRPointer.Mode.RAY, "a hand pointing at a panel from afar shows the ray")
 	check_eq(shell.pointer._ray.visible, true, "the ray is drawn")
 	check_eq(shell.pointer._dot.visible, true, "with its dot")
-	check((shell.pointer._dot.global_position - target).length() < 0.004, "the dot is on the button")
+	var key_top := target + _normal(surface) * surface.rest_at(surface.pixel_of(eraser))
+	check((shell.pointer._dot.global_position - key_top).length() < 0.004, "the dot is on the button's key")
 	check_eq(surface.viewport.gui_get_hovered_control(), eraser, "which is hovered")
 	check_eq(_tool(), "paint", "nothing is pressed yet")
 	await sim.play([{"time": 0.0, "right": {"trigger": 1.0}}, {"time": 0.1, "right": {"trigger": 0.0}}, {"time": 0.2}])
@@ -362,7 +373,7 @@ func test_the_dominant_hand_preference_swaps_the_drawing_hand() -> void:
 	check_eq(_strokes(), 1, "the left trigger painted")
 	check_eq(shell.palette.shown, true, "the right hand's upper button brought the palette out")
 	var tools: XRPanelSurface = shell.palette.surfaces["Tools"]
-	check(tools.global_position.x < sim.aims[RIGHT].global_position.x - XRPalette.SIDE_GAP, "which now lies to the left of the right hand")
+	check(tools.position.x < 0.0, "which now rides toward the middle, left of the right hand")
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
@@ -474,7 +485,7 @@ func test_a_pop_up_opens_inside_its_panel() -> void:
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
-func test_the_button_map_shows_at_start_and_on_a_long_press() -> void:
+func test_the_button_map_shows_at_start_and_on_the_menu_button() -> void:
 	if not await _start(true):
 		return
 	check_eq(shell.button_map.visible, true, "the sheet is shown at start when the preference says so")
@@ -491,13 +502,12 @@ func test_the_button_map_shows_at_start_and_on_a_long_press() -> void:
 	# The close button in its corner puts it away.
 	await _poke(shell.button_map, shell.button_map._corner)
 	check_eq(shell.button_map.visible, false, "its corner button puts it away")
-	# A short press of the menu button does nothing; holding it for a second does.
-	await sim.play([{"time": 0.0, "left": {"menu": true}}, {"time": 0.5, "left": {"menu": false}}, {"time": 0.6}])
-	check_eq(shell.button_map.visible, false, "a short press of the menu button is not enough")
+	# A press of the menu button shows it, as in Quill, and the next hides it; holding
+	# the button does not toggle it again.
+	await sim.play([{"time": 0.0, "left": {"menu": true}}, {"time": 0.1, "left": {"menu": false}}, {"time": 0.2}])
+	check_eq(shell.button_map.visible, true, "a press of the menu button shows the sheet")
 	await sim.play([{"time": 0.0, "left": {"menu": true}}, {"time": 1.2, "left": {"menu": false}}, {"time": 1.3}])
-	check_eq(shell.button_map.visible, true, "holding it for a second shows the sheet")
-	await sim.play([{"time": 0.0, "left": {"menu": true}}, {"time": 1.2, "left": {"menu": false}}, {"time": 1.3}])
-	check_eq(shell.button_map.visible, false, "and again hides it")
+	check_eq(shell.button_map.visible, false, "the next press hides it, however long it is held")
 	# Settings asks for it too, and it follows the drawing hand.
 	var settings := await _open("Settings")
 	var button: Button = null
@@ -652,3 +662,157 @@ func test_asking_for_a_headset_leaves_nothing_half_started() -> void:
 		check_eq(messages.size(), 1, "the reason goes to the user through the editor's messages")
 		check_eq(get_viewport().use_xr, false, "the window is still an ordinary one")
 		messages.clear()
+
+
+func test_buttons_stand_off_the_sheet_as_keys() -> void:
+	if not await _start():
+		return
+	var surface := await _open("Tools")
+	var panel: ToolsPanel = surface.content
+	await frames(4)
+	var eraser: Button = panel._strip.buttons["eraser"]
+	var paint: Button = panel._strip.buttons["paint"]
+	check(surface.keys.count > 10, "the panel's buttons stand up as keys: %d" % surface.keys.count)
+	check_near(surface.rest_at(surface.pixel_of(eraser)), XRPanelKeys.HEIGHT, "a button stands its full height", 1e-5)
+	check_near(surface.rest_at(surface.pixel_of(paint)), XRPanelKeys.HEIGHT * XRPanelKeys.LATCHED, "the chosen tool is latched half down", 1e-5)
+	var flat: CheckBox = null
+	for node: Node in panel.find_children("*", "CheckBox", true, false):
+		if (node as CheckBox).is_visible_in_tree():
+			flat = node
+			break
+	check(flat != null, "the Tools panel has a check box")
+	if flat != null:
+		check_eq(surface.rest_at(surface.pixel_of(flat)), 0.0, "a check box stays flat, as Quill's do")
+	eraser.disabled = true
+	surface.wake()
+	await frames(4)
+	check_eq(surface.rest_at(surface.pixel_of(eraser)), 0.0, "a disabled button is flush with the sheet")
+	eraser.disabled = false
+	surface.wake()
+	await frames(4)
+	# The round buttons under the panel are keys too.
+	var coin: Button = shell.palette.coins["Color"]
+	check_near(shell.palette.tabs.rest_at(shell.palette.tabs.pixel_of(coin)), XRPanelKeys.ROUND_HEIGHT, "a round button stands taller", 1e-5)
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_a_key_goes_down_with_the_tip_and_presses_at_its_top() -> void:
+	if not await _start():
+		return
+	var surface := await _open("Tools")
+	var panel: ToolsPanel = surface.content
+	await frames(4)
+	var eraser: Button = panel._strip.buttons["eraser"]
+	var pixel := surface.pixel_of(eraser)
+	var normal := _normal(surface)
+	var face := surface.world_point(pixel)
+	# The tip resting 1 mm into the key: the key goes down to meet it, nothing presses.
+	var touching := XRPanelKeys.HEIGHT - 0.001
+	await sim.play([{"time": 0.0, "right": {"tip": face + normal * 0.03}}, {"time": 0.2, "right": {"tip": face + normal * touching}}, {"time": 0.3}])
+	await frames(2)
+	check_near(surface.keys.top_at(pixel), touching, "the key went down with the tip", 2e-4)
+	check_eq(_tool(), "paint", "a key pushed 1 mm does not press")
+	# 3.5 mm down presses, though the tip is still above the sheet.
+	var pushed := XRPanelKeys.HEIGHT - 0.0035
+	await sim.play([{"time": 0.0, "right": {"tip": face + normal * pushed}}, {"time": 0.1}])
+	await frames(2)
+	check(pushed > 0.0, "still in front of the sheet")
+	check_eq(surface._pressed, true, "pushed 3.5 mm down, the key presses")
+	await sim.play([{"time": 0.0, "right": {"tip": face + normal * 0.03}}, {"time": 0.1}])
+	check_eq(_tool(), "eraser", "and the button acts when the tip comes back")
+	# On the flat of the sheet the same height presses nothing.
+	var label_pixel := Vector2(surface.pixel_size.x * 0.5, surface.pixel_of(eraser).y + 60.0)
+	var flat_rest := surface.rest_at(label_pixel)
+	if flat_rest == 0.0:
+		var plain := surface.world_point(label_pixel)
+		await sim.play([{"time": 0.0, "right": {"tip": plain + normal * 0.03}}, {"time": 0.2, "right": {"tip": plain + normal * pushed}}, {"time": 0.3}])
+		check_eq(surface._pressed, false, "over the flat sheet, 1.5 mm in front of it is not a press")
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_the_round_buttons_choose_the_panel_and_the_pin_leaves_it_in_the_room() -> void:
+	if not await _start():
+		return
+	var surface := await _open("Tools")
+	var tabs := shell.palette.tabs
+	await _poke(tabs, shell.palette.coins["Color"])
+	check_eq(shell.palette.current, "Color", "the Color button brings its panel to the front")
+	check_eq((shell.palette.coins["Color"] as Button).button_pressed, true, "and stays down")
+	check_eq((shell.palette.coins["Tools"] as Button).button_pressed, false, "the Tools button comes up")
+	var color: XRPanelSurface = shell.palette.surfaces["Color"]
+	await frames(3)
+	var where := color.global_transform
+	check_eq(color._corner.visible, true, "a panel on the palette has a pin")
+	await _poke(color, color._corner)
+	check_eq(shell.palette.is_pinned("Color"), true, "the pin leaves it in the room")
+	check(color.global_position.distance_to(where.origin) < 0.002, "where it was")
+	check(not surface.is_visible_in_tree() or shell.palette.current != "Color", "the palette moved on to another panel")
+	# The hand that holds the palette moves away; the pinned panel stays.
+	await sim.play([{"time": 0.0, "left": {"tip": sim.tip_position(LEFT) + Vector3(-0.2, -0.2, 0.1)}}, {"time": 0.2}])
+	check(color.global_position.distance_to(where.origin) < 0.002, "and stays when the hand moves")
+	await _poke(color, color._corner)
+	check_eq(shell.palette.is_pinned("Color"), false, "its key sends it back")
+	check_eq(shell.palette.current, "Color", "to the front of the palette")
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_pointing_at_a_panel_from_afar_leaves_the_grip_to_the_artwork() -> void:
+	if not await _start():
+		return
+	var surface := await _open("Tools")
+	var target := surface.world_point(surface.pixel_size * 0.5)
+	var from := target + _normal(surface) * 0.4 + Vector3(0.15, -0.05, 0.0)
+	await sim.play([{"time": 0.0, "right": {"tip": from, "toward": target}}, {"time": 0.1}])
+	check_eq(shell.pointer.mode, XRPointer.Mode.RAY, "the hand points at the panel from afar")
+	var before := world.scene.viewer_from_world()
+	var panel_before := surface.global_transform
+	await sim.play([
+		{"time": 0.0, "right": {"grip": 1.0}},
+		{"time": 0.1, "right": {"tip": from}},
+		{"time": 0.4, "right": {"tip": from + Vector3(0.0, 0.2, 0.0)}},
+		{"time": 0.5, "right": {"grip": 0.0}},
+		{"time": 0.6},
+	])
+	check(not world.scene.viewer_from_world().is_equal_approx(before), "the grip took hold of the view and moved it")
+	check_eq(shell.palette.is_pinned("Tools"), false, "the panel was not picked up")
+	check(surface.global_transform.origin.distance_to(panel_before.origin) < 0.05, "and did not go with the hand")
+	# With the modifier held, presses on a panel come with Ctrl.
+	await sim.play([{"time": 0.0, "left": {"trigger": 1.0}, "right": {"tip": from, "toward": target}}, {"time": 0.1}])
+	check_eq(surface.modifier, true, "the other hand's trigger is Ctrl on the panel")
+	await sim.play([{"time": 0.0, "left": {"trigger": 0.0}}, {"time": 0.1}])
+	check_eq(surface.modifier, false, "and lets go of it")
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_the_palette_hand_shows_the_layer_the_frame_and_the_stick() -> void:
+	if not await _start():
+		return
+	await frames(2)
+	var dial := shell.dial
+	check_eq(dial.visible, true, "the disc rides on the hand that holds the palette")
+	check_eq(dial.layer_name, "Paint", "its tag names the current layer")
+	check_eq(dial.frame_text, "1", "and the ring shows the frame it is on")
+	check_eq(dial.stick_shown, false, "the stick's icons wait for the thumb")
+	var eyes := sim.head.global_position
+	check(dial.global_basis.z.dot((eyes - dial.global_position).normalized()) > 0.99, "the disc faces the eyes")
+	# The thumb on the stick shows what it does; pushing lights one direction.
+	await sim.play([{"time": 0.0, "left": {"stick_touch": true}}, {"time": 0.1}])
+	check_eq(dial.stick_shown, true, "a thumb on the stick shows its icons")
+	check_eq(dial.meaning("up"), "New frame", "up makes a new frame")
+	check_eq(dial.meaning("left"), "Frame before", "left goes to the frame before")
+	await sim.play([{"time": 0.0, "left": {"trigger": 1.0}}, {"time": 0.1}])
+	check_eq(dial.meaning("up"), "Copy frame", "with the modifier, up copies the frame")
+	check_eq(dial.meaning("down"), "Delete frame", "and down deletes it")
+	await sim.play([{"time": 0.0, "left": {"trigger": 0.0, "stick": Vector2(0.9, 0.0)}}, {"time": 0.05, "left": {"stick": Vector2.ZERO}}, {"time": 0.3}])
+	check_eq(dial.meaning("right"), "Frame after", "back to the plain meanings")
+	await sim.play([{"time": 0.0, "left": {"stick": Vector2(0.0, 0.9)}}, {"time": 0.05}])
+	check_eq(dial.lit, "up", "the direction pushed lights up")
+	await sim.play([{"time": 0.0, "left": {"stick": Vector2.ZERO, "stick_touch": false}}, {"time": 0.3}])
+	check_eq(dial.stick_shown, false, "lifting the thumb puts the icons away")
+	check_eq(dial.frame_text, "2", "the new frame the stick made is the one shown")
+	# Choosing another layer names it.
+	run({"cmd": "add_layer", "kind": "group"})
+	await frames(3)
+	check_eq(dial.layer_name, row_named("Group").get("name", "?"), "the tag follows the current layer")
+	check_eq(dial.frame_text, "", "a group has no frame number")
+	check(messages.is_empty(), "no errors: %s" % [messages])

@@ -256,39 +256,140 @@ fn the_line_tool_pulls_a_straight_evenly_divided_line() {
     assert_eq!(session.history().undo_label(), Some("Straight line"));
 }
 
-#[test]
-fn alt_turns_paint_into_line_and_snaps_a_line_to_the_world_axes() {
-    let (mut session, layer) = session();
-    session.tools.paint.brush = BrushStyle::Ribbon;
-    session.tools.line.brush = BrushStyle::Ribbon;
-    let with_alt = |position: DVec3, trigger: f32, alt: f32| InputFrame {
+fn with_alt(position: DVec3, trigger: f32, alt: f32) -> InputFrame {
+    InputFrame {
         off: HandInput {
             tracked: true,
             trigger: alt,
             ..HandInput::default()
         },
         ..hand(position, trigger)
-    };
-    let from = DVec3::new(0.0, 1.0, -0.5);
-    // Alt held when the trigger goes down: the Paint tool draws a line.
-    session.update(&with_alt(from, 1.0, 1.0));
-    session.update(&with_alt(from + DVec3::new(0.1, 0.02, 0.01), 1.0, 0.0));
-    session.update(&with_alt(from + DVec3::new(0.1, 0.02, 0.01), 0.0, 0.0));
-    let free = strokes(&session, layer)[0].clone();
-    assert_eq!(free.len(), 22, "a line, not a two-sample freehand stroke");
-    assert!((free.points().last().unwrap().pos[1] - 1.02).abs() < 1e-6);
+    }
+}
 
-    // With the Line tool, Alt held while pulling keeps the line on a world axis.
-    session.tools.select_tool(ToolKind::Line);
-    session.update(&with_alt(from, 1.0, 0.0));
-    session.update(&with_alt(from + DVec3::new(0.1, 0.02, 0.01), 1.0, 1.0));
-    session.update(&with_alt(from + DVec3::new(0.1, 0.02, 0.01), 0.0, 1.0));
-    let snapped = strokes(&session, layer)[1].clone();
-    let end = snapped.points().last().unwrap().pos;
-    assert!(
-        (end[0] - 0.1).abs() < 1e-6 && end[1] == 1.0 && end[2] == -0.5,
-        "{end:?}"
+#[test]
+fn the_modifier_turns_the_brush_into_a_free_line_in_the_brushs_own_style() {
+    let (mut session, layer) = session();
+    session.tools.paint.brush = BrushStyle::Ribbon;
+    session.tools.line.brush = BrushStyle::Cube;
+    session.tools.paint.size = 0.01;
+    session.tools.line.size = 0.03;
+    let from = DVec3::new(0.0, 1.0, -0.5);
+    let to = from + DVec3::new(0.1, 0.02, 0.01);
+    // The modifier held all the way through: a straight line, not snapped to anything.
+    session.update(&with_alt(from, 1.0, 1.0));
+    session.update(&with_alt(to, 1.0, 1.0));
+    assert!(session.is_painting(), "a line from the brush is painting");
+    session.update(&with_alt(to, 0.0, 1.0));
+    let line = strokes(&session, layer)[0].clone();
+    assert_eq!(line.len(), 22, "a line, not a two-sample freehand stroke");
+    assert_eq!(
+        line.brush,
+        crate::model::Brush::Ribbon,
+        "in the brush's style"
     );
+    let end = line.points().last().unwrap().pos;
+    assert!(
+        (end[0] - 0.1).abs() < 1e-6 && (end[1] - 1.02).abs() < 1e-6 && (end[2] + 0.49).abs() < 1e-6,
+        "the end is where the hand let go: {end:?}"
+    );
+    assert!(
+        (line.points()[5].width - 0.01).abs() < 1e-7,
+        "as wide as the brush, not the Line tool: {}",
+        line.points()[5].width
+    );
+    assert_eq!(session.history().undo_label(), Some("Straight line"));
+}
+
+#[test]
+fn the_stick_resizes_a_line_drawn_with_the_brush_as_the_cursor_shows() {
+    let (mut session, layer) = session();
+    session.tools.paint.brush = BrushStyle::Ribbon;
+    session.tools.paint.size = 0.01;
+    let from = DVec3::new(0.0, 1.0, -0.5);
+    let to = from + DVec3::new(0.1, 0.0, 0.0);
+    session.update(&with_alt(from, 1.0, 1.0));
+    for _ in 0..54 {
+        let mut frame = with_alt(to, 1.0, 0.0);
+        frame.main.stick = [0.0, 1.0];
+        frame.dt = 1.0 / 90.0;
+        session.update(&frame);
+    }
+    let radius = session.cursor().radius;
+    session.update(&with_alt(to, 0.0, 0.0));
+    let line = strokes(&session, layer)[0].clone();
+    let end = line.points().last().unwrap().width;
+    assert!(radius > 0.02, "the stick grew the brush: {radius}");
+    assert!(
+        (end - radius).abs() < 1e-6,
+        "the end of the line is as wide as the cursor: {end} against {radius}"
+    );
+}
+
+#[test]
+fn the_modifier_snaps_both_ends_of_a_line_to_the_brush_grid() {
+    let (mut session, layer) = session();
+    session.tools.select_tool(ToolKind::Line);
+    session.tools.line.brush = BrushStyle::Ribbon;
+    let spacing = session.brush_grid_spacing();
+    assert!(
+        (spacing - 0.05).abs() < 1e-12,
+        "five centimetres at a new document's scale"
+    );
+    assert!(!session.cursor().grid_snap);
+    let from = DVec3::new(0.012, 1.018, -0.512);
+    let to = DVec3::new(0.161, 1.07, -0.49);
+    session.update(&with_alt(from, 1.0, 1.0));
+    assert!(session.cursor().grid_snap, "the cursor says the line snaps");
+    session.update(&with_alt(to, 1.0, 1.0));
+    session.update(&with_alt(to, 0.0, 1.0));
+    let line = strokes(&session, layer)[0].clone();
+    let (first, last) = (line.points()[0].pos, line.points().last().unwrap().pos);
+    let near = |a: [f32; 3], b: [f32; 3]| (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5);
+    assert!(
+        near(first, [0.0, 1.0, -0.5]),
+        "the start on a crossing: {first:?}"
+    );
+    assert!(
+        near(last, [0.15, 1.05, -0.5]),
+        "the end on a crossing: {last:?}"
+    );
+
+    // Zoomed out ten times, the grid and the snapping are ten times coarser; the
+    // lattice is the world's, whatever the paint layer's own placement.
+    session
+        .exec_json(&json!({"cmd": "set_layer", "layer": layer, "transform": Xform::from_translation(DVec3::new(0.013, 0.0, 0.0))}))
+        .unwrap();
+    session.view.world_from_viewer.scale = 10.0;
+    assert!((session.brush_grid_spacing() - 0.5).abs() < 1e-12);
+    session.update(&with_alt(DVec3::new(0.01, 0.1, 0.02), 1.0, 1.0));
+    session.update(&with_alt(DVec3::new(0.06, 0.1, 0.02), 1.0, 1.0));
+    session.update(&with_alt(DVec3::new(0.06, 0.1, 0.02), 0.0, 1.0));
+    let line = strokes(&session, layer)[1].clone();
+    let world_from_layer = session.doc().world_from_layer(layer);
+    let world =
+        |p: [f32; 3]| world_from_layer.transform_point3(glam::Vec3::from_array(p).as_dvec3());
+    let (a, b) = (
+        world(line.points()[0].pos),
+        world(line.points().last().unwrap().pos),
+    );
+    assert!((a - DVec3::new(0.0, 1.0, 0.0)).length() < 1e-5, "{a:?}");
+    assert!((b - DVec3::new(0.5, 1.0, 0.0)).length() < 1e-5, "{b:?}");
+}
+
+#[test]
+fn without_the_modifier_the_line_tool_does_not_snap() {
+    let (mut session, layer) = session();
+    session.tools.select_tool(ToolKind::Line);
+    session.tools.line.brush = BrushStyle::Ribbon;
+    let from = DVec3::new(0.012, 1.018, -0.526);
+    let to = DVec3::new(0.161, 1.07, -0.49);
+    session.update(&with_alt(from, 1.0, 0.0));
+    session.update(&with_alt(to, 1.0, 0.0));
+    session.update(&with_alt(to, 0.0, 0.0));
+    let line = strokes(&session, layer)[0].clone();
+    let last = line.points().last().unwrap().pos;
+    assert!((last[0] - 0.161).abs() < 1e-5, "{last:?}");
 }
 
 #[test]
@@ -1320,4 +1421,474 @@ fn mirrored_grab_moves_each_point_once_and_keeps_the_mirror_seam() {
         (middle - glam::Vec3::new(0.5, 1.02, -0.5)).length() > 1e-3,
         "but moved"
     );
+}
+
+// ---- what the tools work on: the current layer ----
+
+/// A new document with one layer of every kind beside its paint layer, and the
+/// session made with it.
+fn every_kind() -> (Session, Vec<(&'static str, LayerId)>) {
+    use crate::model::{LayerKind, Model, Picture, Projection, Shading, Sound};
+    let mut doc = Document::new();
+    let root = doc.root();
+    let add = |doc: &mut Document, name: &str, kind: LayerKind| {
+        let layer = doc.new_layer(name, kind, 0);
+        doc.insert_layer(layer, root, usize::MAX).unwrap()
+    };
+    let picture = add(
+        &mut doc,
+        "Picture",
+        LayerKind::Picture(Picture {
+            media: None,
+            projection: Projection::Flat,
+            viewer_locked: false,
+            source_path: String::new(),
+        }),
+    );
+    let model = add(
+        &mut doc,
+        "Model",
+        LayerKind::Model(Model {
+            media: None,
+            shading: Shading::Unlit,
+            wireframe: false,
+            source_path: String::new(),
+        }),
+    );
+    let sound = add(
+        &mut doc,
+        "Sound",
+        LayerKind::Sound(Sound {
+            media: None,
+            kind: Default::default(),
+            gain: 1.0,
+            looped: false,
+            attenuation: Default::default(),
+            modifier: Default::default(),
+            source_path: String::new(),
+        }),
+    );
+    let mut session = Session::new(doc);
+    let mut made = |kind: &str| {
+        let made = session
+            .exec_json(&json!({"cmd": "add_layer", "kind": kind, "parent": root}))
+            .unwrap();
+        LayerId(made["layer"].as_u64().unwrap())
+    };
+    let (camera, light, group, sequence) = (
+        made("camera"),
+        made("light"),
+        made("group"),
+        made("sequence"),
+    );
+    let spawn = session.doc().find_by_path("Root/Spawn Area").unwrap();
+    let kinds = vec![
+        ("camera", camera),
+        ("light", light),
+        ("spawn area", spawn),
+        ("picture", picture),
+        ("model", model),
+        ("sound", sound),
+        ("group", group),
+        ("sequence", sequence),
+        ("root", root),
+    ];
+    (session, kinds)
+}
+
+fn paint_count(session: &Session) -> usize {
+    session
+        .doc()
+        .walk()
+        .into_iter()
+        .filter(|id| session.doc().layer(*id).unwrap().as_paint().is_some())
+        .count()
+}
+
+#[test]
+fn paint_and_line_draw_only_in_a_paint_layer_or_a_new_one_in_a_group() {
+    for tool in [ToolKind::Paint, ToolKind::Line] {
+        let (mut session, kinds) = every_kind();
+        let paint = session.doc().find_by_path("Root/Paint").unwrap();
+        session.tools.select_tool(tool);
+        let from = DVec3::new(0.0, 1.0, -0.5);
+        let to = DVec3::new(0.1, 1.0, -0.5);
+        for (kind, layer) in kinds {
+            session.set_current_layer(layer);
+            let layers = paint_count(&session);
+            let painted = strokes(&session, paint).len();
+            let depth = session.history().undo_depth();
+            let feedback = drag(&mut session, from, to, 5);
+            let container = matches!(kind, "group" | "sequence" | "root");
+            if container {
+                assert!(feedback.is_empty(), "{tool:?} in a {kind}: {feedback:?}");
+                assert_eq!(paint_count(&session), layers + 1, "{tool:?} in a {kind}");
+                let made = session.paint_layer().expect("the new layer is current");
+                assert_eq!(session.current_layer(), Some(made));
+                assert_eq!(
+                    session.doc().parent_of(made),
+                    Some(layer),
+                    "inside the {kind}"
+                );
+                assert_eq!(strokes(&session, made).len(), 1);
+                assert_eq!(session.history().undo_depth(), depth + 1);
+                session.undo();
+                assert_eq!(
+                    paint_count(&session),
+                    layers,
+                    "one undo takes back the stroke and the layer"
+                );
+            } else {
+                assert_eq!(feedback.len(), 1, "{tool:?} on a {kind}: one message");
+                let Feedback::Message(text) = &feedback[0] else {
+                    panic!("{feedback:?}");
+                };
+                assert!(
+                    text.contains(&format!("is a {kind}"))
+                        && text.contains("paint layer or a group"),
+                    "{text}"
+                );
+                assert_eq!(paint_count(&session), layers, "no layer made for a {kind}");
+                assert_eq!(
+                    strokes(&session, paint).len(),
+                    painted,
+                    "nothing painted for a {kind}"
+                );
+                assert_eq!(session.history().undo_depth(), depth);
+                assert_eq!(session.current_layer(), Some(layer), "still on the {kind}");
+            }
+        }
+        // And a paint layer takes the stroke itself.
+        session.set_current_layer(paint);
+        let layers = paint_count(&session);
+        assert!(drag(&mut session, from, to, 5).is_empty());
+        assert_eq!(
+            strokes(&session, paint).len(),
+            1,
+            "{tool:?} on the paint layer"
+        );
+        assert_eq!(paint_count(&session), layers);
+    }
+}
+
+#[test]
+fn a_light_refuses_paint_with_a_message_naming_it() {
+    let (mut session, kinds) = every_kind();
+    let light = kinds.iter().find(|(kind, _)| *kind == "light").unwrap().1;
+    session.set_current_layer(light);
+    assert_eq!(
+        session.paint_layer(),
+        None,
+        "the paint target follows the current layer"
+    );
+    let feedback = drag(
+        &mut session,
+        DVec3::new(0.0, 1.0, -0.5),
+        DVec3::new(0.1, 1.0, -0.5),
+        5,
+    );
+    assert_eq!(
+        feedback,
+        [Feedback::Message(
+            "\"Light\" is a light layer. Choose a paint layer or a group to paint in.".into()
+        )]
+    );
+    assert_eq!(session.doc().stroke_count(), 0);
+}
+
+#[test]
+fn a_locked_group_refuses_paint() {
+    let (mut session, kinds) = every_kind();
+    let group = kinds.iter().find(|(kind, _)| *kind == "group").unwrap().1;
+    session
+        .exec_json(&json!({"cmd": "set_layer", "layer": group, "locked": true}))
+        .unwrap();
+    session.set_current_layer(group);
+    let layers = paint_count(&session);
+    let feedback = drag(
+        &mut session,
+        DVec3::new(0.0, 1.0, -0.5),
+        DVec3::new(0.1, 1.0, -0.5),
+        5,
+    );
+    assert_eq!(
+        feedback,
+        [Feedback::Message("Layer \"Group\" is locked".into())]
+    );
+    assert_eq!(paint_count(&session), layers);
+    assert!(session.cursor().blocked.is_some());
+}
+
+#[test]
+fn modifying_tools_without_a_selection_work_only_on_a_current_paint_layer() {
+    let (mut session, layer) = three_ribbons();
+    let camera = LayerId(
+        session
+            .exec_json(&json!({"cmd": "add_layer", "kind": "camera"}))
+            .unwrap()["layer"]
+            .as_u64()
+            .unwrap(),
+    );
+    session.set_current_layer(camera);
+    for tool in [
+        ToolKind::Eraser,
+        ToolKind::Colorize,
+        ToolKind::Thicken,
+        ToolKind::Nudge,
+        ToolKind::Optimize,
+        ToolKind::Grab,
+    ] {
+        session.tools.select_tool(tool);
+        let before = session.doc().clone();
+        let feedback = tap(&mut session, DVec3::new(0.1, 1.0, -0.5));
+        assert!(
+            session.doc().same_as(&before),
+            "{tool:?} left the strokes alone"
+        );
+        assert_eq!(
+            feedback,
+            [Feedback::Message(
+                "\"Camera\" is a camera layer. Choose a paint layer to work on, or select strokes."
+                    .into()
+            )],
+            "{tool:?}"
+        );
+        assert_eq!(
+            session.cursor().blocked.as_deref(),
+            Some(
+                "\"Camera\" is a camera layer. Choose a paint layer to work on, or select strokes."
+            ),
+            "{tool:?}"
+        );
+    }
+
+    // With strokes selected, they are what the tools work on, whatever is current.
+    session.set_current_layer(layer);
+    session.exec_json(&json!({"cmd": "select_all"})).unwrap();
+    session.set_current_layer(camera);
+    session.tools.select_tool(ToolKind::Eraser);
+    assert_eq!(session.cursor().blocked, None);
+    let before = session.doc().clone();
+    let feedback = tap(&mut session, DVec3::new(0.1, 1.0, -0.5));
+    assert!(feedback.is_empty(), "{feedback:?}");
+    assert!(
+        !session.doc().same_as(&before),
+        "the eraser worked on the selection"
+    );
+}
+
+#[test]
+fn the_cursor_says_when_and_why_the_trigger_would_do_nothing() {
+    let (mut session, kinds) = every_kind();
+    let paint = session.doc().find_by_path("Root/Paint").unwrap();
+    let find = |name: &str| kinds.iter().find(|(kind, _)| *kind == name).unwrap().1;
+    assert_eq!(session.cursor().blocked, None, "a paint layer is current");
+    session.set_current_layer(find("camera"));
+    assert_eq!(
+        session.cursor().blocked.as_deref(),
+        Some("\"Camera\" is a camera layer. Choose a paint layer or a group to paint in.")
+    );
+    session.set_current_layer(find("group"));
+    assert_eq!(session.cursor().blocked, None, "a group takes a new layer");
+    session.tools.select_tool(ToolKind::Eraser);
+    assert!(
+        session.cursor().blocked.is_some(),
+        "but nothing to erase in it"
+    );
+    session.tools.select_tool(ToolKind::Select);
+    assert_eq!(session.cursor().blocked, None, "a press still deselects");
+    session.tools.select_tool(ToolKind::Paint);
+    session
+        .exec_json(&json!({"cmd": "set_layer", "layer": paint, "locked": true}))
+        .unwrap();
+    session.set_current_layer(paint);
+    assert_eq!(
+        session.cursor().blocked.as_deref(),
+        Some("Layer \"Paint\" is locked")
+    );
+}
+
+#[test]
+fn the_buttons_and_the_frame_stick_follow_the_current_layer() {
+    let (mut session, layer) = three_ribbons();
+    let camera = LayerId(
+        session
+            .exec_json(&json!({"cmd": "add_layer", "kind": "camera"}))
+            .unwrap()["layer"]
+            .as_u64()
+            .unwrap(),
+    );
+    session.set_current_layer(camera);
+    // The lower button has nothing to delete, and nothing blinks.
+    let at = HandInput {
+        position: DVec3::new(0.1, 1.005, -0.5),
+        ..HandInput::default()
+    };
+    session.update(&frame_with(at, HandInput::default()));
+    assert_eq!(session.stroke_at_hand(), None);
+    session.update(&frame_with(
+        HandInput {
+            lower_button: true,
+            ..at
+        },
+        HandInput::default(),
+    ));
+    session.update(&frame_with(at, HandInput::default()));
+    assert_eq!(strokes(&session, layer).len(), 3);
+
+    // The frame stick makes no frame, and says why once however long it is held.
+    let frames = |session: &Session| {
+        session
+            .doc()
+            .layer(layer)
+            .unwrap()
+            .as_paint()
+            .unwrap()
+            .frames
+            .len()
+    };
+    let mut messages = 0;
+    for _ in 0..60 {
+        let feedback = session.update(&frame_with(
+            HandInput::default(),
+            HandInput {
+                stick: [0.0, 1.0],
+                ..HandInput::default()
+            },
+        ));
+        messages += feedback
+            .iter()
+            .filter(|f| matches!(f, Feedback::Message(_)))
+            .count();
+    }
+    session.update(&frame_with(HandInput::default(), HandInput::default()));
+    assert_eq!(frames(&session), 1);
+    assert_eq!(messages, 1);
+
+    // Onion skin and the mirror plane have nothing to show.
+    session.options.onion_skin = true;
+    assert!(session.onion_skins().is_empty());
+    session.tools.symmetry = crate::session::tools::Symmetry::X;
+    assert!(session.mirror_plane().is_none());
+    session.set_current_layer(layer);
+    assert!(session.mirror_plane().is_some());
+
+    // A command that adds strokes without saying where puts them where the brush would.
+    session.set_current_layer(camera);
+    assert!(session
+        .exec_json(&json!({"cmd": "add_strokes", "strokes": [{"points": [[0.0, 1.0, 0.0], [0.1, 1.0, 0.0]]}]}))
+        .is_err());
+    assert_eq!(strokes(&session, layer).len(), 3);
+}
+
+#[test]
+fn choosing_layers_sets_the_paint_target_from_the_last_row() {
+    let (mut session, kinds) = every_kind();
+    let paint = session.doc().find_by_path("Root/Paint").unwrap();
+    let camera = kinds[0].1;
+    session
+        .exec_json(&json!({"cmd": "select_layers", "layers": [paint, camera]}))
+        .unwrap();
+    assert_eq!(session.paint_layer(), None, "the camera is the last row");
+    session
+        .exec_json(&json!({"cmd": "select_layers", "layers": [camera, paint]}))
+        .unwrap();
+    assert_eq!(session.paint_layer(), Some(paint));
+    // A change elsewhere leaves the choice alone.
+    session.set_current_layer(camera);
+    session
+        .exec_json(&json!({"cmd": "set_layer", "layer": paint, "name": "Renamed"}))
+        .unwrap();
+    assert_eq!(session.current_layer(), Some(camera));
+    assert_eq!(session.paint_layer(), None);
+}
+
+// ---- the grip and the trigger on the same hand ----
+
+#[test]
+fn no_stroke_starts_while_the_drawing_hands_grip_holds_something() {
+    let (mut session, layer) = session();
+    let at = |x: f64, trigger: f32, grip: f32| InputFrame {
+        main: HandInput {
+            tracked: true,
+            position: DVec3::new(x, 1.0, -0.5),
+            trigger,
+            grip,
+            ..HandInput::default()
+        },
+        ..InputFrame::default()
+    };
+    // A finger resting on the trigger while the grip moves the view.
+    session.update(&at(0.0, 0.0, 1.0));
+    assert!(session.is_grabbing(0));
+    for i in 0..10 {
+        session.update(&at(i as f64 * 0.01, 0.2, 1.0));
+    }
+    assert!(
+        !session.is_tool_active(),
+        "the trigger does not start the brush"
+    );
+    // Letting go of the grip with the finger still down does not start one either.
+    session.update(&at(0.1, 0.2, 0.0));
+    session.update(&at(0.11, 0.2, 0.0));
+    assert!(!session.is_tool_active());
+    session.update(&at(0.11, 0.0, 0.0));
+    assert!(strokes(&session, layer).is_empty());
+
+    // A stroke under way carries on when the grip closes during it.
+    session.update(&at(0.0, 1.0, 0.0));
+    session.update(&at(0.01, 1.0, 1.0));
+    session.update(&at(0.02, 1.0, 1.0));
+    assert!(session.is_tool_active());
+    session.update(&at(0.03, 0.0, 0.0));
+    assert_eq!(strokes(&session, layer).len(), 1);
+}
+
+// ---- painting, for the hiss ----
+
+#[test]
+fn only_paint_and_line_gestures_count_as_painting() {
+    let (mut session, _) = session();
+    let at = DVec3::new(0.0, 1.0, -0.5);
+    assert!(!session.cursor().painting);
+    session.update(&hand(at, 1.0));
+    assert!(session.cursor().painting && session.is_painting());
+    assert_eq!(session.status()["painting"], true);
+    session.update(&hand(at, 0.0));
+    assert!(!session.is_painting());
+    assert_eq!(session.status()["painting"], false);
+    session.tools.select_tool(ToolKind::Eraser);
+    session.update(&hand(at, 1.0));
+    assert!(
+        session.is_tool_active() && !session.is_painting(),
+        "the eraser is not paint"
+    );
+    session.update(&hand(at, 0.0));
+}
+
+#[test]
+fn the_trigger_on_a_gimbal_handle_is_not_painting() {
+    let (mut session, layer) = session();
+    session
+        .exec_json(&json!({"cmd": "set_layer", "layer": layer, "transform": Xform::from_translation(DVec3::new(0.0, 1.2, -0.6))}))
+        .unwrap();
+    session
+        .exec_json(&json!({"cmd": "set_options", "values": {"show_gimbal": true}}))
+        .unwrap();
+    session
+        .exec_json(&json!({"cmd": "set_transform_target", "layer": layer}))
+        .unwrap();
+    session.update(&hand(DVec3::new(0.3, 1.0, -0.3), 0.0));
+    let gimbal = session.gimbal().expect("a gimbal");
+    let on_arrow = gimbal.position + DVec3::X * (0.6 * gimbal.size);
+    session.update(&hand(on_arrow, 0.0));
+    assert!(session.cursor().at_handle);
+    assert_eq!(session.tools.tool, ToolKind::Paint);
+    session.update(&hand(on_arrow, 1.0));
+    session.update(&hand(on_arrow + DVec3::X * 0.05, 1.0));
+    assert!(session.is_tool_active(), "the handle is being worked");
+    assert!(!session.is_painting() && !session.cursor().painting);
+    assert_eq!(session.status()["painting"], false);
+    session.update(&hand(on_arrow + DVec3::X * 0.05, 0.0));
+    assert!(strokes(&session, layer).is_empty());
 }

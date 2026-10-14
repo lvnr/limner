@@ -41,7 +41,7 @@ impl Session {
         if self.options.select_in_all_layers {
             self.doc.walk().into_iter().filter(usable).collect()
         } else {
-            self.paint_layer.into_iter().filter(usable).collect()
+            self.paint_layer().into_iter().filter(usable).collect()
         }
     }
 

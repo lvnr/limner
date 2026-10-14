@@ -316,7 +316,7 @@ func _on_sequence_loop(on: bool) -> void:
 # ---- light ----
 
 func _build_light() -> void:
-	_section("light")
+	var section := _section("light")
 	_choice("light", "kind", "Type", "A point shines all round, a spot in a cone, a directional light everywhere from one side", ["point", "spot", "directional"], ["Point", "Spot", "Directional"])
 	_color("light", "color", "Colour", "The colour of the light")
 	_slider("light", "energy", SliderField.new("Energy", 0.0, 16.0, 0.01, "How bright the light is. Type a number to go beyond 16.", "", false, 1000.0))
@@ -328,6 +328,29 @@ func _build_light() -> void:
 		_controls["light.range"].visible = details.props.kind != "directional"
 		_controls["light.spot_angle"].visible = details.props.kind == "spot"
 		_controls["light.spot_blend"].visible = details.props.kind == "spot"
+	)
+	# Lights shade only paint layers set to Lit: say so, and offer to light them all.
+	section.add_child(Kit.separator())
+	var lit_note := Form.note()
+	_controls["light.lit_note"] = lit_note
+	section.add_child(lit_note)
+	var light_all := Kit.button("Light all paint layers", "Sets every paint layer that is not locked to Lit, so that lights shade it. A layer can be set back to Unlit in its own settings, to stay flat as painted.", func() -> void: editor.run({"cmd": "set_shading", "shading": "lit"}), "light")
+	light_all.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_controls["light.light_all"] = light_all
+	section.add_child(light_all)
+	_readers.light.append(func(_details: Dictionary) -> void:
+		var info := editor.get_info()
+		var total := int(info.get("paint_layers", 0))
+		var lit := int(info.get("lit_paint_layers", 0))
+		if total == 0:
+			lit_note.text = "There is no paint for lights to shade yet."
+		elif lit == 0:
+			lit_note.text = "No paint layer takes light, so lights change nothing yet. Lights shade only paint layers set to Lit."
+		elif lit < total:
+			lit_note.text = "%d of %d paint layers take light; the others stay flat as painted." % [lit, total]
+		else:
+			lit_note.text = "Every paint layer takes light."
+		light_all.disabled = lit >= total
 	)
 
 

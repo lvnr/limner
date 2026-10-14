@@ -41,6 +41,8 @@ const ZOOM_SECONDS: f64 = 0.45;
 /// A hand this close to a stroke takes hold of its layer, when grabbing strokes moves
 /// layers. Viewer-space metres.
 const TOUCH: f64 = 0.03;
+/// What the user is told when the gimbal is turned on with nothing for it to move.
+pub const NOTHING_TO_TRANSFORM: &str = "Nothing to transform: choose a layer, or select strokes";
 
 /// What a grab moves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -751,6 +753,9 @@ impl Session {
         if let Some(label) = label {
             self.begin_transaction(label);
         }
+        if handle.is_some() {
+            self.pin_gimbal_pivot(subject);
+        }
         let carried = match Carried::begin(self, subject, duplicate) {
             Ok(carried) => carried,
             Err(message) => {
@@ -1058,7 +1063,9 @@ impl Session {
     }
 
     /// What the gimbal would move: the selection while the Selection tool is in hand,
-    /// or else the layer chosen as the transform object.
+    /// or else the layer chosen as the transform object. While the view is the
+    /// transform object, the gimbal is for the current layer, when that can be moved:
+    /// the view has no gimbal, and a layer is what a user turning it on wants to move.
     pub(crate) fn gimbal_subject(&self) -> Option<Subject> {
         if !self.options.show_gimbal {
             return None;
@@ -1066,9 +1073,23 @@ impl Session {
         if self.tools.tool == ToolKind::Select && !self.selection.is_empty() {
             return Some(Subject::Selection);
         }
-        self.transform_target
-            .filter(|id| *id != self.doc.root() && self.doc.layer(*id).is_some())
-            .map(Subject::Layer)
+        let root = self.doc.root();
+        match self.transform_target {
+            Some(id) => (id != root && self.doc.layer(id).is_some()).then_some(Subject::Layer(id)),
+            None => self
+                .current_layer()
+                .filter(|id| *id != root && self.doc.layer(*id).is_some_and(|l| !l.locked))
+                .map(Subject::Layer),
+        }
+    }
+
+    /// Shows the gimbal, or hides it. Returns what to tell the user when it is shown
+    /// with nothing for it to move.
+    pub(crate) fn toggle_gimbal(&mut self) -> Option<String> {
+        self.options.show_gimbal = !self.options.show_gimbal;
+        self.touch_state();
+        (self.options.show_gimbal && self.gimbal().is_none())
+            .then(|| NOTHING_TO_TRANSFORM.to_owned())
     }
 
     /// Notes which handle of the gimbal each hand is at.

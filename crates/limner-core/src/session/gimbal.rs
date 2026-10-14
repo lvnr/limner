@@ -387,6 +387,7 @@ impl HandleGesture {
         handle: GimbalHandle,
     ) -> Result<Self, String> {
         let drag = HandleDrag::begin(gimbal, handle, &input.main, input.head);
+        session.pin_gimbal_pivot(gimbal.subject);
         if matches!(handle.part(), Part::Ring(_)) {
             let carried = Carried::begin(session, gimbal.subject, input.alt() > 0.5)?;
             return Ok(HandleGesture::Turn {
@@ -478,17 +479,55 @@ impl HandleGesture {
 }
 
 impl Session {
+    /// Where the gimbal of a layer sits, in the layer's own space: the layer's pivot,
+    /// or, while that has not been set (it is the layer's origin, unturned), the
+    /// middle of the layer's content, as "Reset pivot" would put it. A layer with no
+    /// content of its own keeps its origin.
+    pub(crate) fn gimbal_pivot(&self, id: LayerId) -> Option<Xform> {
+        let layer = self.doc.layer(id)?;
+        if !layer.pivot.is_identity() {
+            return Some(layer.pivot);
+        }
+        Some(
+            crate::ops::layers::layer_bounds(&self.doc, id).map_or(Xform::IDENTITY, |(lo, hi)| {
+                Xform::from_translation((lo + hi) * 0.5)
+            }),
+        )
+    }
+
+    /// As the gimbal starts to move, turn or re-pivot a layer whose pivot has not been
+    /// set: sets the pivot where the gimbal shows it, as part of the same edit. From
+    /// then on the pivot stays where it is put, and the layer's animation turns about
+    /// the point the gimbal turned it about.
+    pub(crate) fn pin_gimbal_pivot(&mut self, subject: Subject) {
+        let Subject::Layer(id) = subject else {
+            return;
+        };
+        if self
+            .doc
+            .layer(id)
+            .is_none_or(|l| l.locked || !l.pivot.is_identity())
+        {
+            return;
+        }
+        let Some(pivot) = self.gimbal_pivot(id).filter(|p| !p.is_identity()) else {
+            return;
+        };
+        if let Some(layer) = self.doc_mut().layer_mut(id) {
+            layer.pivot = pivot;
+        }
+    }
+
     /// The gimbal to draw and to take hold of, when there is one.
     pub fn gimbal(&self) -> Option<Gimbal> {
         let subject = self.gimbal_subject()?;
         let viewer_from_world = self.view.viewer_from_world();
         let (position, rotation) = match subject {
             Subject::Layer(id) => {
-                let layer = self.doc.layer(id)?;
                 let frame = self.evaluate();
                 let pivot = viewer_from_world
                     .mul(&frame.world_xform(&self.doc, id))
-                    .mul(&layer.pivot);
+                    .mul(&self.gimbal_pivot(id)?);
                 (pivot.translation, pivot.rotation)
             }
             // A selection's gimbal is always square to the world.

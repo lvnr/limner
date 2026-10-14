@@ -15,36 +15,58 @@ const CONTROL_WIDTH := 176
 const MEANING_WIDTH := 320
 
 ## What the drawing hand's controls do. `{lower}` and `{upper}` become the names of
-## the face buttons on that hand.
+## the face buttons on that hand. Where Limner does what Quill does, the words follow
+## Quill's own button sheet.
 const DRAWING_HAND := [
-	["Trigger", "Use the tool. How far it is pulled is the pressure. On a handle of the gimbal it moves the handle."],
-	["Grip", "Take hold of the view, or of the layer or selection being transformed. With the modifier held as it takes hold: move a copy."],
+	["Trigger", "Use the tool. How far it is pulled is the pressure."],
+	["Grip", "Take hold of the view, or of what is being transformed. While drawing a line: move where it starts."],
 	["Both grips", "Scale as well, by moving the hands apart or together."],
 	["Grip and stick up / down", "Zoom or scale quickly, about the hand."],
-	["Stick up / down", "Tool size. With the modifier: the inner sphere, for tools that have one."],
-	["Stick left / right", "Undo / redo. Hold to keep going. After moving a copy, redo makes the next copy."],
-	["Stick click", "Show or hide the gimbal."],
+	["Stick up / down", "Tool size, larger / smaller."],
+	["Stick left / right", "Undo / redo. Hold to keep going."],
+	["Stick click", "Show or hide the gimbal: for the transform object, the current layer, or the selection."],
 	["{lower} (lower button)", "Delete the selection, or else the stroke nearest the tip."],
-	["{upper} (upper button)", "Take the paint colour from the stroke nearest the tip."],
+	["{upper} (upper button)", "Pick the colour of the stroke nearest the tip."],
 ]
 ## What the other hand's controls do.
 const OTHER_HAND := [
-	["Trigger", "The modifier. Paint draws a straight line; Thicken thins; Selection adds on a half pull and removes on a full one."],
+	["Trigger", "The modifier: see below."],
 	["Grip", "Take hold, as with the drawing hand."],
-	["Stick left / right", "Previous / next frame. With the modifier: rewind / fast forward."],
-	["Stick up / down", "New frame / hold this frame longer. With the modifier: copy the frame / delete it."],
+	["Stick left / right", "Previous / next frame."],
+	["Stick up / down", "New frame / hold this frame longer."],
 	["Stick click", "Play or pause."],
+	["Stick, painting mode", "Does nothing, nor does its click: no frame is made by accident."],
 	["{lower} (lower button)", "Switch between the Selection tool and the tool used before it."],
 	["{upper} (upper button)", "Show or hide the palette."],
-	["Menu button, held", "Show or hide this sheet."],
+	["Menu button", "Show or hide this sheet."],
+]
+## What the modifier (the other hand's trigger) changes.
+const MODIFIER := [
+	["Paint", "Draws a straight line, at any angle."],
+	["Line", "Snaps the ends of the line to the brush grid."],
+	["Selection", "A half pull adds to the selection, a full pull takes away."],
+	["Thicken", "Thins."],
+	["Stick up / down", "Drawing hand: the inner sphere, for tools that have one."],
+	["Grip", "Moves a copy: of the selection, or of the layer being transformed."],
+	["Redo after a copy", "Moves another copy as far again."],
+	["Stick, other hand", "Left / right: rewind / fast forward. Up / down: copy the frame / delete it."],
+]
+## What the drawing hand does on the gimbal.
+const GIMBAL := [
+	["Trigger: arrow, centre", "Move the gimbal: the pivot moves, the thing stays. On a square, in its plane."],
+	["Trigger: ring", "Turn in snapped steps (Rotation snap steps, in Transform)."],
+	["Grip: arrow / square", "Move along that axis / in that plane."],
+	["Grip: ring", "Turn about that axis."],
+	["Grip: centre", "Move freely."],
 ]
 ## How the panels are worked. These belong to the drawing hand.
 const PANELS := [
-	["Tip near a panel", "Hover. Push through the surface to press; pull back to let go."],
-	["Pointing from afar", "A ray shows where. The trigger is the button."],
+	["Tip near a panel", "Hover. Push a key or the sheet in to press; pull back to let go."],
+	["Pointing from afar", "A ray shows where. The trigger is the button; the grip still takes hold of the artwork."],
+	["Modifier held", "A press adds a key or a row to the selection."],
 	["Stick up / down", "Scroll what is under the pointer."],
-	["{lower} (lower button)", "Open the menu of what is under the pointer, as a right click does: a layer's, in the layer list."],
-	["Grip over a panel", "Pick the panel up and leave it anywhere in the room. The stick resizes it while held; the button in its corner sends it back."],
+	["{lower} (lower button)", "Open the menu of what is under the pointer, as a right click does."],
+	["Grip, tip close", "Pick the panel up and leave it anywhere in the room. The stick resizes it while held."],
 ]
 ## Names of the lower and upper face buttons on a left and on a right Touch controller.
 const FACE_BUTTONS := {"left": ["X", "Y"], "right": ["A", "B"]}
@@ -78,6 +100,8 @@ func refresh() -> void:
 	var other := "left" if drawing == "right" else "right"
 	_section("Drawing hand (%s)" % drawing, DRAWING_HAND, drawing)
 	_section("Other hand (%s)" % other, OTHER_HAND, other)
+	_section("With the modifier held", MODIFIER, other)
+	_section("Gimbal, with the drawing hand", GIMBAL, drawing)
 	_section("Panels, with the drawing hand", PANELS, drawing)
 
 

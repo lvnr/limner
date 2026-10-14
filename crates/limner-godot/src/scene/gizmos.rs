@@ -51,9 +51,11 @@ pub(super) enum Shape {
     Sphere,
     /// The edges of a cube of side one centred on the origin.
     Box,
+    /// A solid ball of radius one: the only shape drawn in triangles, not lines.
+    Ball,
 }
 
-const SHAPE_COUNT: usize = 10;
+const SHAPE_COUNT: usize = 11;
 
 fn circle(out: &mut Vec<[f32; 3]>, center: Vec3, u: Vec3, v: Vec3, radius: f32, segments: u32) {
     let at = |i: u32| {
@@ -68,7 +70,17 @@ fn circle(out: &mut Vec<[f32; 3]>, center: Vec3, u: Vec3, v: Vec3, radius: f32, 
 type Vec3 = limner::core::glam::Vec3;
 
 impl Shape {
-    /// The shape as a list of line segments: two points each.
+    /// How the points of [`Shape::lines`] are joined: in pairs as line segments, or
+    /// for a solid shape in threes as triangles.
+    pub(super) fn primitive(self) -> PrimitiveType {
+        match self {
+            Shape::Ball => PrimitiveType::TRIANGLES,
+            _ => PrimitiveType::LINES,
+        }
+    }
+
+    /// The shape as a list of line segments, two points each; a solid shape as a
+    /// list of triangles, three points each.
     pub(super) fn lines(self) -> Vec<[f32; 3]> {
         let mut out: Vec<[f32; 3]> = Vec::new();
         let (x, y, z) = (Vec3::X, Vec3::Y, Vec3::Z);
@@ -164,6 +176,28 @@ impl Shape {
                     }
                 }
             }
+            Shape::Ball => {
+                const AROUND: u32 = 16;
+                const DOWN: u32 = 8;
+                let at = |ring: u32, step: u32| {
+                    let (polar, azimuth) = (
+                        ring as f32 / DOWN as f32 * std::f32::consts::PI,
+                        step as f32 / AROUND as f32 * TAU,
+                    );
+                    [
+                        polar.sin() * azimuth.cos(),
+                        polar.cos(),
+                        polar.sin() * azimuth.sin(),
+                    ]
+                };
+                for ring in 0..DOWN {
+                    for step in 0..AROUND {
+                        let (a, b) = (at(ring, step), at(ring, step + 1));
+                        let (c, d) = (at(ring + 1, step), at(ring + 1, step + 1));
+                        out.extend([a, c, b, b, c, d]);
+                    }
+                }
+            }
         }
         out
     }
@@ -187,7 +221,7 @@ impl Shapes {
             arrays.resize(ArrayType::MAX.ord() as usize, &Variant::nil());
             arrays.set(ArrayType::VERTEX.ord() as usize, &points.to_variant());
             let mut mesh = ArrayMesh::new_gd();
-            mesh.add_surface_from_arrays(PrimitiveType::LINES, &arrays);
+            mesh.add_surface_from_arrays(shape.primitive(), &arrays);
             mesh
         })
     }
@@ -350,19 +384,45 @@ pub(super) fn camera(out: &mut Vec<Part>, place: &Placement, camera: &Camera, as
     ));
 }
 
+/// The radius of the solid ball at the heart of a light's mark, as a share of a gizmo.
+const LIGHT_CORE: f64 = 0.22;
+/// How much larger the echo of a light's mark is, which outlines it.
+const LIGHT_ECHO: f64 = 1.06;
+
+/// What a light's mark is outlined in: black beside a bright light, white beside a
+/// dark one, so that the mark stands out from a light floor and a dark sky alike.
+pub(super) fn outline_color(light: [f32; 3]) -> Color {
+    let luminance = 0.2126 * light[0] + 0.7152 * light[1] + 0.0722 * light[2];
+    if luminance > 0.2 {
+        Color::from_rgb(0.02, 0.02, 0.02)
+    } else {
+        Color::from_rgb(0.92, 0.92, 0.92)
+    }
+}
+
 /// A light, in its own colour: a sun for a point light, a cone as wide as a spot
-/// light's, an arrow for a directional light.
+/// light's, an arrow for a directional light. Each is as large as a gizmo, has a
+/// solid ball at its heart, and an echo just outside its lines in a colour that
+/// stands out from the light's own, so that it is found at a glance on any ground.
 pub(super) fn light(out: &mut Vec<Part>, place: &Placement, light: &Light) {
     let color = color_from_linear(light.color);
     let (shape, size) = match light.kind {
-        LightKind::Point => (Shape::Sun, DVec3::splat(GIZMO_SIZE * 0.5)),
+        LightKind::Point => (Shape::Sun, DVec3::splat(GIZMO_SIZE)),
         LightKind::Spot => {
             let radius = f64::from(light.spot_angle).to_radians().tan();
             (Shape::Cone, fitted(DVec3::new(radius, radius, 1.0)))
         }
         LightKind::Directional => (Shape::Arrow, DVec3::splat(GIZMO_SIZE)),
     };
+    let outline = outline_color(light.color);
     out.push(sized(place, shape, size, color));
+    out.push(sized(place, shape, size * LIGHT_ECHO, outline));
+    out.push(sized(
+        place,
+        Shape::Ball,
+        DVec3::splat(GIZMO_SIZE * LIGHT_CORE),
+        color,
+    ));
 }
 
 /// A sound: a horn pointing the way the sound faces, and, when the sound fades with
@@ -412,6 +472,7 @@ mod tests {
         Shape::Speaker,
         Shape::Sphere,
         Shape::Box,
+        Shape::Ball,
     ];
 
     #[test]
@@ -419,7 +480,11 @@ mod tests {
         for (index, shape) in ALL.iter().enumerate() {
             assert_eq!(*shape as usize, index);
             let lines = shape.lines();
-            assert!(!lines.is_empty() && lines.len() % 2 == 0, "{shape:?}");
+            let whole = match shape.primitive() {
+                PrimitiveType::TRIANGLES => 3,
+                _ => 2,
+            };
+            assert!(!lines.is_empty() && lines.len() % whole == 0, "{shape:?}");
             assert!(lines.iter().flatten().all(|v| v.is_finite()), "{shape:?}");
         }
         assert_eq!(Shape::Box.lines().len(), 24, "a cube has twelve edges");
@@ -434,6 +499,36 @@ mod tests {
             let back = lines.iter().map(|p| p[2]).fold(f32::NEG_INFINITY, f32::max);
             assert!(-front > back, "{shape:?} reaches further along -Z");
         }
+    }
+
+    #[test]
+    fn the_ball_is_solid_and_round() {
+        let ball = Shape::Ball.lines();
+        assert_eq!(Shape::Ball.primitive(), PrimitiveType::TRIANGLES);
+        for point in &ball {
+            let length = Vec3::from_array(*point).length();
+            assert!((length - 1.0).abs() < 1e-5, "{point:?} is on the surface");
+        }
+    }
+
+    #[test]
+    fn a_light_mark_is_outlined_in_a_colour_that_stands_out_from_its_own() {
+        assert_eq!(
+            outline_color([1.0, 1.0, 1.0]),
+            Color::from_rgb(0.02, 0.02, 0.02)
+        );
+        assert_eq!(
+            outline_color([1.0, 0.9, 0.6]),
+            Color::from_rgb(0.02, 0.02, 0.02)
+        );
+        assert_eq!(
+            outline_color([0.05, 0.0, 0.3]),
+            Color::from_rgb(0.92, 0.92, 0.92)
+        );
+        assert_eq!(
+            outline_color([0.0, 0.0, 0.0]),
+            Color::from_rgb(0.92, 0.92, 0.92)
+        );
     }
 
     #[test]

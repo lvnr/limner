@@ -25,6 +25,7 @@ Small steps from what exists:
 - Baking light per ring vertex instead of per point. Baked shadows could also gain soft edges (a few rays toward a light given a size), flat ribbons as blockers, and model layers as blockers.
 - Sounds in glTF exports, once Khronos ratifies an audio extension (`KHR_audio_emitter` is still an open proposal; see "Why glTF has no sound" in `docs/export.md`). USD and USDZ carry sounds already.
 - Curved turning for smooth keys (they curve position and size now; turning takes the shortest way).
+- Quill's "modifier and grip" on the timeline: grabbing a copy of the selected frame or keys and dragging it along the track. The timeline in the headset has buttons that copy a frame and copy and paste keys, and the modifier makes a tap add to the selection, but frames cannot be dragged yet; this needs a core command that moves or copies frames, frame selection in the timeline, and a grip over the timeline that drags instead of picking the panel up.
 
 ## Larger pieces
 

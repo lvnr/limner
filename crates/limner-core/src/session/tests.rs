@@ -135,8 +135,8 @@ fn commands_are_json_and_every_edit_can_be_undone_and_redone() {
     assert_eq!(session.doc(), &original);
     assert_eq!(
         session.current_layer(),
-        None,
-        "the deleted layer is no longer selected"
+        session.doc().find_by_path("Root/Paint"),
+        "the deleted layer is no longer selected: the paint layer is current again"
     );
     assert_eq!(
         run(&mut session, json!({"cmd": "undo"}))["undone"],
@@ -1026,6 +1026,18 @@ fn a_tool_that_cannot_start_leaves_a_carried_layer_alone() {
         &mut session,
         json!({"cmd": "set_layer", "layer": paint, "locked": true}),
     );
+    session.set_current_layer(paint);
+    // The other hand carries the layer: a trigger pressed while the drawing hand's
+    // own grip holds something is not a press of the tool at all.
+    let hands = |position: DVec3, grip: f32, trigger: f32| InputFrame {
+        off: HandInput {
+            tracked: true,
+            position: position - DVec3::X * 0.4,
+            grip,
+            ..HandInput::default()
+        },
+        ..hands(position, 0.0, trigger)
+    };
     let steps = session.history().undo_depth();
     let start = session.doc().layer(light).unwrap().transform;
     let from = DVec3::new(0.2, 1.0, -0.3);

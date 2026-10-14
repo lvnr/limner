@@ -155,16 +155,29 @@ Done on the Mac after the plan was finished, before the repository went public a
 - A code review of the whole codebase in four parts, and fixes for what it found: nested edits that a failed tool start could undo, transforms that stored NaN, hostile files that could claim huge allocations, a recovery copy deleted on recovery, and a headset session with no way to save, among others.
 - Packaging scripts, the MIT licence, a logo, a README and a CI workflow (which has not run yet: GitHub refused to start it because of a billing lock on the account).
 
-## State at hand-over
+## After the first headset session
 
-Measured on the development Mac (M1 Max, Godot 4.8 dev 7) with everything above committed.
+The owner ran Limner on Windows in a Meta PC headset (the PowerShell fixes it needed are in the commit "Windows: first run on a PC"). What that session found, and what was done about it back on the Mac:
+
+- The palette felt flat and fiddly next to Quill's. It was redesigned to Quill's habits: raised keys that go down when pushed, a thicker sheet with a grey title bar and a pin, round buttons for the panels in two rows under the panel, the palette riding above the hand, a disc on that hand with the current layer's name, its frame and what the stick does, and a light scheme of the headset's own (`docs/superpowers/specs/2026-10-14-headset-palette-design.md`).
+- Grabbing seemed not to work: the grip was taken by any panel the hand pointed at, the button map included. Now only a hand close to a panel takes its grip; pointing from afar leaves the grip, undo and redo to the artwork.
+- Lights changed nothing: paint was unlit by default and a new light sat on the floor. A new light now goes in front of the eyes, aimed at the work, and lights the paint if none takes light, as one undo step.
+- The gimbal never appeared: it needed a transform object and sat at the document's origin. It now falls back to the current layer and sits at the centre of its strokes.
+- The painting hiss played while transforming: it now follows strokes being drawn.
+- Painting went on with a camera selected: the tools now work on the current layer, refuse other kinds with a message and a grey ring at the hand, and painting with a group selected makes a paint layer in it.
+- Quill's controller sheet was checked line by line: brush plus modifier draws a free line, Line plus modifier snaps to the brush grid, the menu button shows the button map on a press, the modifier makes a tap add to a selection on a panel, and the button map was rewritten to match.
+- A button switches between the desktop and the headset in both interfaces, keeping the document and its undo history.
+
+## State now
+
+Measured on the development Mac (M1 Max, Godot 4.8 dev 7) with everything above committed. The packaging and frame-time rows are from the hand-over and were not measured again.
 
 | Check | Result |
 |---|---|
-| `cargo test --workspace` | 607 passed, 0 failed, 4 ignored; 283 of them are in `limner-core` |
-| The three ignored tests | Two run Apple's USD tools on exported files and pass when asked for with `-- --ignored`; the third writes sample files for outside tools |
+| `cargo test --workspace` | 632 passed, 0 failed, 4 ignored; 306 of them are in `limner-core` |
+| The four ignored tests | Three run Apple's USD tools on exported files and pass when asked for with `-- --ignored`; the fourth writes sample files for outside tools |
 | `cargo clippy --workspace --all-targets`, `cargo fmt --all -- --check` | Clean |
-| Interface tests, headless (`scripts/test.sh`) | 221 passed, 0 failed |
+| Interface tests, headless (`scripts/test.sh`) | 233 passed, 0 failed |
 | Interface tests that need a window (`-- capture export_panel monitor`) | 30 passed, 0 failed |
 | `scripts/package.sh` | A 74 MB macOS package. The packaged app starts, loads the extension, draws, and runs the simulated headset interface |
 | Frame time on the owner's sample project (53 layers, 948,032 triangles) at 1440 x 900, V-Sync off | 3.2 ms in the packaged release build, 3.3 ms in the development build |

@@ -20,6 +20,8 @@ var lower := false
 var upper := false
 ## The stick pushed in.
 var stick_click := false
+## The thumb resting on the stick, where the controller can tell (Touch, Index).
+var stick_touch := false
 ## The small menu button, where the controller has one.
 var menu := false
 
@@ -37,4 +39,5 @@ func release_all() -> void:
 	lower = false
 	upper = false
 	stick_click = false
+	stick_touch = false
 	menu = false

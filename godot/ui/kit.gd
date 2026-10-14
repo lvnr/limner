@@ -137,12 +137,16 @@ class Events extends RefCounted:
 	signal scheme_changed
 
 	func _on_preference_changed(key: String) -> void:
-		if key == "theme":
-			Kit.use_scheme(Preferences.shared().text("theme"))
+		if key == Kit.scheme_preference():
+			Kit.use_scheme(Preferences.shared().text(key))
 
 
 ## The name of the scheme in use, a key of `SCHEMES`.
 static var scheme := "dark"
+## True while the panels are shown in a headset. Its theme gives buttons an outline
+## and a larger text, and its colours follow a preference of their own (see
+## `set_headset`).
+static var headset := false
 static var events := Events.new()
 static var _following := false
 
@@ -238,20 +242,36 @@ static func use_scheme(name: String) -> void:
 	events.scheme_changed.emit()
 
 
-## Takes the scheme from the "theme" preference now and whenever it changes. Each
-## shell calls this as it starts; calling it again does no harm. `--scheme <name>`
-## on the command line (after `--`) wins over the preference for that run, without
-## changing it, for screenshots of either scheme.
+## Takes the scheme from the preference that applies (see `scheme_preference`) now
+## and whenever it changes. Each shell calls this as it starts; calling it again does
+## no harm. `--scheme <name>` on the command line (after `--`) wins over the
+## preference for that run, without changing it, for screenshots of either scheme.
 static func follow_preferences() -> void:
 	var args := OS.get_cmdline_user_args()
 	var at := args.find("--scheme")
 	if at >= 0 and at + 1 < args.size():
 		use_scheme(args[at + 1])
 	else:
-		use_scheme(Preferences.shared().text("theme"))
+		use_scheme(Preferences.shared().text(scheme_preference()))
 	if not _following:
 		_following = true
 		Preferences.shared().changed.connect(events._on_preference_changed)
+
+
+## The preference that names the scheme: "headset_theme" while the panels are shown
+## in a headset, "theme" on the desktop.
+static func scheme_preference() -> String:
+	return "headset_theme" if headset else "theme"
+
+
+## Shows the panels the headset's way, or the desktop's. The shell that starts calls
+## it before `follow_preferences`. Reports `events.scheme_changed` when it changes
+## anything, so that every themed root takes the new theme.
+static func set_headset(on: bool) -> void:
+	if on == headset:
+		return
+	headset = on
+	events.scheme_changed.emit()
 
 
 ## `color` as the same role in the scheme in use: a colour that one of the `RECOGNISED`
@@ -371,14 +391,14 @@ static func _box(color: Color, radius := 5, border := 0, border_color := BORDER,
 ## The theme every Limner panel uses.
 static func make_theme() -> Theme:
 	var theme := Theme.new()
-	theme.default_font_size = 14
+	theme.default_font_size = 15 if headset else 14
 
 	for kind in ["Button", "MenuButton", "OptionButton"]:
-		theme.set_stylebox("normal", kind, _box(BG_RAISED))
-		theme.set_stylebox("hover", kind, _box(BG_HOVER))
-		theme.set_stylebox("pressed", kind, _box(PRESSED))
-		theme.set_stylebox("hover_pressed", kind, _box(PRESSED_HOVER))
-		theme.set_stylebox("disabled", kind, _box(BG_DISABLED))
+		theme.set_stylebox("normal", kind, _key_box(BG_RAISED))
+		theme.set_stylebox("hover", kind, _key_box(BG_HOVER))
+		theme.set_stylebox("pressed", kind, _key_box(PRESSED, true))
+		theme.set_stylebox("hover_pressed", kind, _key_box(PRESSED_HOVER, true))
+		theme.set_stylebox("disabled", kind, _key_box(BG_DISABLED, false, true))
 		theme.set_stylebox("focus", kind, StyleBoxEmpty.new())
 		theme.set_color("font_color", kind, TEXT)
 		theme.set_color("font_hover_color", kind, TEXT_STRONG)
@@ -541,6 +561,17 @@ static func make_theme() -> Theme:
 	# panel is hard to read, and in a headset it is impossible.
 	theme.set_stylebox("panel", "PopupPanel", _box(BG_POPUP, 6, 1, BORDER, 8))
 	return theme
+
+
+## The look of a button. On the desktop a plain rounded box. In a headset, where a
+## button stands off its panel as a key, a box with a dark outline like Quill's, and
+## a button that is down is filled with a stronger shade of the accent.
+static func _key_box(color: Color, down := false, disabled := false) -> StyleBoxFlat:
+	if not headset:
+		return _box(color)
+	var face := PRESSED.lerp(ACCENT, 0.35) if down else color
+	var outline := Color(TEXT, 0.35 if disabled else 0.85)
+	return _box(face, 6, 2, outline, 6)
 
 
 static func _tab(color: Color, selected: bool) -> StyleBoxFlat:
@@ -711,14 +742,14 @@ static func narrow(button: Button, margin := 3) -> void:
 		button.theme_type_variation = "NarrowButton%d" % margin
 		return
 	var looks := {
-		"normal": BG_RAISED,
-		"hover": BG_HOVER,
-		"pressed": PRESSED,
-		"hover_pressed": PRESSED_HOVER,
-		"disabled": BG_DISABLED,
+		"normal": _key_box(BG_RAISED),
+		"hover": _key_box(BG_HOVER),
+		"pressed": _key_box(PRESSED, true),
+		"hover_pressed": _key_box(PRESSED_HOVER, true),
+		"disabled": _key_box(BG_DISABLED, false, true),
 	}
 	for state: String in looks:
-		var box := _box(looks[state])
+		var box: StyleBoxFlat = looks[state]
 		box.content_margin_left = margin
 		box.content_margin_right = margin
 		button.add_theme_stylebox_override(state, box)

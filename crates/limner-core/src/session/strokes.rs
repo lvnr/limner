@@ -31,7 +31,8 @@ impl Session {
             )));
         }
         let frame = self.evaluate();
-        let layer = match layer.or(self.paint_layer) {
+        // With no layer named, the strokes go where the brush would put them.
+        let layer = match layer {
             Some(layer) => layer,
             None => self.paint_target().map_err(CommandError::Invalid)?.layer,
         };
@@ -179,7 +180,7 @@ impl Session {
         // The new layer takes after the paint layer when strokes of it are selected,
         // otherwise after the first layer in the selection.
         let source_id = self
-            .paint_layer
+            .paint_layer()
             .filter(|id| selected.iter().any(|(layer, _, _)| layer == id))
             .unwrap_or(selected[0].0);
         let frame = self.evaluate();
@@ -280,9 +281,11 @@ impl Session {
     pub(crate) fn optimize(&mut self, scope: OptimizeScope) -> Result<Value, CommandError> {
         let layers: Vec<LayerId> = match scope {
             OptimizeScope::Layer => {
-                let layer = self
-                    .paint_layer
-                    .ok_or_else(|| CommandError::invalid("There is no paint layer to optimize"))?;
+                let layer = self.paint_layer().ok_or_else(|| {
+                    CommandError::invalid(
+                        self.not_a_paint_layer("Choose a paint layer to optimize."),
+                    )
+                })?;
                 self.require_unlocked(layer)?;
                 vec![layer]
             }

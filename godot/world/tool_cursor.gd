@@ -7,10 +7,16 @@ extends Node3D
 ## sphere of full effect for the tools that have one. With mirrored working on, a
 ## fainter twin of the preview shows where the tool also acts, at the mirror image
 ## of the hand.
+##
+## When the trigger would do nothing because the current layer is not one the tool
+## can work on (a camera, a light, a locked layer…), the preview is a hollow grey
+## ring with no colour in it.
 
 const SHADER := preload("res://shaders/cursor.gdshader")
 ## How strongly the twin at the mirror image is drawn, against the preview at the hand.
 const TWIN_STRENGTH := 0.55
+## The rim of a preview whose trigger would do nothing.
+const BLOCKED_RIM := Color(0.5, 0.5, 0.5, 0.75)
 
 var scene: LimnerScene
 
@@ -60,9 +66,18 @@ class Look:
 		root.visible = true
 		var radius: float = cursor.radius
 		var paints: bool = cursor.tool in ["paint", "line"]
+		var blocked := String(cursor.get("blocked", "")) != ""
 		brush.visible = paints
 		sphere.visible = not paints
-		inner.visible = not paints and cursor.inner != null and cursor.inner > radius * 0.02
+		inner.visible = not paints and not blocked and cursor.inner != null and cursor.inner > radius * 0.02
+		if blocked:
+			# A hollow grey ring: nothing would happen here.
+			var shown := brush if paints else sphere
+			var material := brush_material if paints else sphere_material
+			shown.scale = Vector3.ONE * radius
+			material.set_shader_parameter("fill", Color(BLOCKED_RIM.r, BLOCKED_RIM.g, BLOCKED_RIM.b, 0.0))
+			material.set_shader_parameter("rim", Color(BLOCKED_RIM.r, BLOCKED_RIM.g, BLOCKED_RIM.b, BLOCKED_RIM.a * strength))
+			return
 		if paints:
 			var color: Color = cursor.color
 			brush.scale = Vector3.ONE * radius
@@ -106,6 +121,16 @@ func _process(_delta: float) -> void:
 		# The twin hangs off the preview at the hand, which has no turn or scale of its own.
 		_twin.root.position = (mirror as Vector3) - position
 		_twin.show_for(cursor, ink, TWIN_STRENGTH)
+
+
+## True when the preview shows that the trigger would do nothing.
+func is_blocked() -> bool:
+	return visible and String(scene.tool_cursor().get("blocked", "")) != ""
+
+
+## The colour the brush ball is filled with now, for tests.
+func brush_fill() -> Color:
+	return _hand.brush_material.get_shader_parameter("fill")
 
 
 ## Where the twin at the mirror image is, in viewer space, or null when there is none.

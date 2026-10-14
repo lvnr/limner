@@ -3,28 +3,33 @@ extends Node3D
 ## One panel of the interface as a sheet in the room.
 ##
 ## The panel is an ordinary `Control`, the same one the desktop docks. Here it is
-## drawn into a viewport of its own and shown on a flat sheet, with a title bar above
-## it and a line for tooltips below. A pointer (the tip of the drawing hand, or a ray
-## from it) is turned into the mouse events the panel would get on a screen, so the
-## panel needs to know nothing about headsets.
+## drawn into a viewport of its own and shown on a sheet with some thickness, with a
+## title bar above it and a line for tooltips below. Its buttons stand off the sheet
+## as keys that go down when pushed (`XRPanelKeys`). A pointer (the tip of the drawing
+## hand, or a ray from it) is turned into the mouse events the panel would get on a
+## screen, so the panel needs to know nothing about headsets.
 ##
-## The sheet's centre is this node's origin and it faces along +Z. To save the
-## graphics card work it is only redrawn while something is happening to it, plus now
-## and then to catch changes nobody announced.
+## The sheet's face is at this node's origin, centred, and faces along +Z; its body
+## lies behind. To save the graphics card work it is only redrawn while something is
+## happening to it, plus now and then to catch changes nobody announced.
 
 ## The button in the corner of the title bar was pressed.
 signal corner_pressed
 ## The sheet changed size, because its panel needs more or less room.
 signal resized
 
-## How many of the panel's pixels make one metre of sheet: 1.4 to the millimetre,
-## which suits a first-generation headset at arm's length. Tune on real hardware.
-const PIXELS_PER_METRE := 1400.0
+## How many of the panel's pixels make one metre of sheet: 1.1 to the millimetre, so
+## that a button is about 3 cm across, as Quill's are. Tune on real hardware.
+const PIXELS_PER_METRE := 1100.0
 ## How many pixels are drawn for each of the panel's own, per side. Raise it to 2 for
 ## headsets sharp enough to show the difference; it costs four times the drawing.
 const TEXELS_PER_PIXEL := 1
 ## Height of the title bar, in the panel's pixels.
-const HEADER_HEIGHT := 32
+const HEADER_HEIGHT := 34
+## Size of the title in the title bar, in pixels.
+const TITLE_FONT_SIZE := 16
+## How thick the sheet is, in metres.
+const THICKNESS := 0.008
 ## Height of the tooltip line, in the panel's pixels: room for two lines of small text.
 const FOOTER_HEIGHT := 40
 ## The least and, unless a sheet says otherwise, the most room the panel itself is
@@ -52,6 +57,7 @@ const MAX_MAGNIFICATION := 3.0
 const OFF_SHEET := Vector2(-16.0, -16.0)
 
 const SHADER := preload("res://xr/panel.gdshader")
+const BODY_SHADER := preload("res://xr/slab.gdshader")
 
 ## What the title bar says, and what the palette knows the panel by.
 var title := ""
@@ -68,20 +74,41 @@ var tooltip_delay := TOOLTIP_DELAY
 ## The most room the panel itself is given before it scrolls, in pixels. Set it
 ## before the sheet enters the tree.
 var max_body_height := MAX_BODY_HEIGHT
+## Whether presses on the panel come with Ctrl held: the modifier, which adds to a
+## selection with a tap as Ctrl does with a mouse.
+var modifier := false
 ## How much larger than normal the sheet is shown.
 var magnification := 1.0:
 	set(value):
 		magnification = clampf(value, MIN_MAGNIFICATION, MAX_MAGNIFICATION)
 		scale = Vector3.ONE * magnification
+## The buttons standing off the sheet.
+var keys: XRPanelKeys
+## Whether the sheet itself is drawn. Off for a sheet that is only keys (the round
+## buttons under the palette): its picture is still drawn, for the keys' tops.
+var show_sheet := true:
+	set(value):
+		show_sheet = value
+		if _sheet != null:
+			_sheet.visible = value
+			_body.visible = value
 
 var _width := 352
 var _body_height := 0
 var _root: PanelContainer
+var _bar: PanelContainer
 var _scroll: ScrollContainer
 var _corner: Button
 var _footer: Label
 var _quad: QuadMesh
 var _material: ShaderMaterial
+var _sheet: MeshInstance3D
+var _body: MeshInstance3D
+var _body_mesh: BoxMesh
+var _body_material: ShaderMaterial
+## How far in front of the sheet the tip is, in metres, while it is over it; INF
+## when it is not close.
+var _tip_height := INF
 ## The viewports that hold the half-size and quarter-size copies of the picture.
 var _copies: Array[SubViewport] = []
 var _awake := 0.0
@@ -117,19 +144,33 @@ func _init(surface_title: String, panel: Control, width: int, body_height := 0, 
 	# A pop-up panel (a colour picker, say) opens over the panel it belongs to, not
 	# as a window of its own; Kit's theme gives pop-ups a solid back for that.
 	_root.theme = Kit.make_theme()
-	_root.add_theme_stylebox_override("panel", Kit._box(Color(Kit.BG, 1.0), 0, 1, Kit.BORDER, MARGIN))
+	_root.add_theme_stylebox_override("panel", Kit._box(Color(Kit.BG, 1.0), 0, 1, Kit.BORDER, 0))
 	Kit.events.scheme_changed.connect(_on_scheme_changed)
 	viewport.add_child(_root)
-	var column := Kit.column()
-	_root.add_child(column)
+	var outer := Kit.column()
+	outer.add_theme_constant_override("separation", 0)
+	_root.add_child(outer)
 
 	if chrome:
-		var heading := Kit.heading(surface_title)
-		_corner = Kit.icon_button("dock", "", func() -> void: corner_pressed.emit())
+		# The title bar runs across the top, a band darker than the panel, with the
+		# name at the left and a button at the right (pin, send back or close).
+		var heading := Kit.label(surface_title)
+		heading.add_theme_font_size_override("font_size", TITLE_FONT_SIZE)
+		_corner = Kit.icon_button("pin", "", func() -> void: corner_pressed.emit())
+		_corner.custom_minimum_size = Vector2(HEADER_HEIGHT - 6, HEADER_HEIGHT - 6)
 		_corner.visible = false
-		var bar := Kit.row([heading, Kit.spacer(), _corner])
-		bar.custom_minimum_size = Vector2(0, HEADER_HEIGHT)
-		column.add_child(bar)
+		_bar = PanelContainer.new()
+		_bar.add_theme_stylebox_override("panel", _bar_box())
+		_bar.custom_minimum_size = Vector2(0, HEADER_HEIGHT)
+		_bar.add_child(Kit.row([heading, Kit.spacer(), _corner]))
+		outer.add_child(_bar)
+	var inset := MarginContainer.new()
+	for side: String in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
+		inset.add_theme_constant_override(side, MARGIN)
+	inset.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	outer.add_child(inset)
+	var column := Kit.column()
+	inset.add_child(column)
 
 	_scroll = ScrollContainer.new()
 	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -172,12 +213,25 @@ func _init(surface_title: String, panel: Control, width: int, body_height := 0, 
 	_quad = QuadMesh.new()
 	_material = ShaderMaterial.new()
 	_material.shader = SHADER
-	var sheet := MeshInstance3D.new()
-	sheet.name = "Sheet"
-	sheet.mesh = _quad
-	sheet.material_override = _material
-	sheet.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(sheet)
+	_sheet = MeshInstance3D.new()
+	_sheet.name = "Sheet"
+	_sheet.mesh = _quad
+	_sheet.material_override = _material
+	_sheet.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_sheet)
+	# The body behind the face, which gives the sheet its thickness.
+	_body_mesh = BoxMesh.new()
+	_body_material = ShaderMaterial.new()
+	_body_material.shader = BODY_SHADER
+	_body = MeshInstance3D.new()
+	_body.name = "Body"
+	_body.mesh = _body_mesh
+	_body.material_override = _body_material
+	_body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_body.position = Vector3(0.0, 0.0, -THICKNESS * 0.5 - 0.0002)
+	add_child(_body)
+	keys = XRPanelKeys.new(PIXELS_PER_METRE)
+	add_child(keys)
 	# The sheet is sized again whenever the panel needs more or less room.
 	content.minimum_size_changed.connect(_queue_fit)
 	visibility_changed.connect(_on_visibility_changed)
@@ -192,6 +246,13 @@ func _ready() -> void:
 		source = _copies[index]
 	_material.set_shader_parameter("level0", viewport.get_texture())
 	_material.set_shader_parameter("back_color", Kit.BG_SUNKEN)
+	_body_material.set_shader_parameter("color", Kit.BG_SUNKEN)
+	keys.set_pictures(viewport.get_texture(), _copies[0].get_texture(), _copies[1].get_texture(), Vector2(pixel_size))
+	_sheet.visible = show_sheet
+	_body.visible = show_sheet
+	# Buttons come and go as panels rebuild their rows; the keys follow.
+	get_tree().node_added.connect(_on_node_changed)
+	get_tree().node_removed.connect(_on_node_changed)
 	_root.visible = is_visible_in_tree()
 	_fit()
 	# Text that wraps only knows its height once it has been given its width.
@@ -230,13 +291,25 @@ func _process(delta: float) -> void:
 		viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
 		for copy in _copies:
 			copy.render_target_update_mode = SubViewport.UPDATE_ONCE
+		_update_keys(open)
 
 
 ## The colour scheme changed: the sheet takes a theme in the new colours and draws again.
 func _on_scheme_changed() -> void:
 	Kit.apply_theme(_root)
+	if _bar != null:
+		_bar.add_theme_stylebox_override("panel", _bar_box())
 	_material.set_shader_parameter("back_color", Kit.BG_SUNKEN)
+	_body_material.set_shader_parameter("color", Kit.BG_SUNKEN)
 	wake()
+
+
+func _bar_box() -> StyleBoxFlat:
+	var box := Kit._box(Kit.BG_SUNKEN, 0, 0, Kit.BORDER, MARGIN)
+	box.content_margin_top = 3
+	box.content_margin_bottom = 3
+	box.content_margin_right = 4
+	return box
 
 
 ## Keeps the sheet redrawing for a short while. Call it when what the panel shows may
@@ -301,6 +374,12 @@ func aim(origin: Vector3, direction: Vector3) -> Vector3:
 ## Whether a pixel is on the sheet, or within `margin` pixels of its edge.
 func contains(pixel: Vector2, margin := 0.0) -> bool:
 	return Rect2(Vector2.ZERO, pixel_size).grow(margin).has_point(pixel)
+
+
+## How far the key at `pixel` stands in front of the sheet when nothing pushes it, in
+## metres: where the tip meets it. 0 where there is no key.
+func rest_at(pixel: Vector2) -> float:
+	return keys.rest_at(pixel) * magnification
 
 
 ## The point in the room that is `lift` metres in front of a pixel of the panel.
@@ -379,8 +458,15 @@ func pointer_scroll(pixel: Vector2, up: bool) -> void:
 	wake()
 
 
+## How far in front of the sheet the tip is, in metres, so that the key under it
+## goes down with it. INF when the pointer is not a tip close by (a ray, say).
+func pointer_tip(height: float) -> void:
+	_tip_height = height
+
+
 ## The pointer went away. Anything it was holding down is let go.
 func pointer_leave() -> void:
+	_tip_height = INF
 	if _pressed:
 		pointer_button(_last_pixel, false)
 	if _inside:
@@ -439,6 +525,7 @@ func _push_button(pixel: Vector2, button: MouseButton, pressed: bool) -> void:
 	event.position = pixel
 	event.global_position = pixel
 	event.button_mask = MOUSE_BUTTON_MASK_LEFT if _pressed else 0
+	event.ctrl_pressed = modifier
 	viewport.push_input(event, true)
 
 
@@ -492,8 +579,33 @@ func _fit() -> void:
 		copy.size = smaller
 	_quad.size = metres()
 	_material.set_shader_parameter("pixels", Vector2(viewport.size))
+	keys.set_pictures(viewport.get_texture(), _copies[0].get_texture(), _copies[1].get_texture(), Vector2(pixel_size))
+	keys.mark_stale()
+	_body_mesh.size = Vector3(metres().x, metres().y, THICKNESS)
 	wake()
 	resized.emit()
+
+
+## A node came into the tree or left it: when it is one of this sheet's, the keys
+## look for the panel's buttons again.
+func _on_node_changed(node: Node) -> void:
+	if viewport.is_ancestor_of(node):
+		keys.mark_stale()
+
+
+## Stands the keys where the buttons are now: those under an open pop-up stay down,
+## and so do those a scrolling panel shows less than half of.
+func _update_keys(open: Array[Window]) -> void:
+	var covers: Array[Rect2] = []
+	for window in open:
+		covers.append(Rect2(window.position, window.size))
+	var clip := Rect2(_scroll.get_global_position(), _scroll.size)
+	var touch := {
+		"pixel": _last_pixel if _inside else Vector2(-1.0, -1.0),
+		"height": _tip_height / magnification,
+		"pressed": _pressed,
+	}
+	keys.update(_root, Vector2(pixel_size), _scroll, clip, covers, touch)
 
 
 ## Shows the tooltip of the control under the pointer once the pointer has rested on

@@ -74,10 +74,12 @@ impl Session {
             "waiting": self.playback.is_waiting(),
             "tool": self.tools.tool,
             "current_layer": self.current_layer(),
-            "paint_layer": self.paint_layer,
+            "paint_layer": self.paint_layer(),
             "transform_target": self.transform_target,
             "selection_count": self.selection.count(),
             "tool_active": self.is_tool_active(),
+            // Paint or Line laying down a stroke; not a handle of the gimbal, nor any other tool.
+            "painting": self.is_painting(),
             "grabbing": self.grabbed().is_some(),
             // The track the copied keys came from, when keys have been copied.
             "copied_keys": self.copied_keys(),
@@ -87,6 +89,7 @@ impl Session {
     /// One row per layer in list order, parents before children.
     pub fn layer_rows(&self) -> Value {
         let frame = self.evaluate();
+        let paint_layer = self.paint_layer();
         let mut rows = Vec::with_capacity(self.doc.layer_count());
         let mut folded_at: Option<usize> = None;
         for id in self.doc.walk() {
@@ -134,7 +137,7 @@ impl Session {
                 "animated": layer.anim.has_motion_keys(),
                 "selected": self.selected_layers.contains(&id),
                 "current": self.current_layer() == Some(id),
-                "paint_target": self.paint_layer == Some(id),
+                "paint_target": paint_layer == Some(id),
                 "transform_target": self.transform_target == Some(id),
                 "default_viewpoint": self.doc.settings.default_viewpoint == Some(id),
             }));
@@ -185,6 +188,15 @@ impl Session {
 
     pub fn document_info(&self) -> Value {
         let settings = &self.doc.settings;
+        let (mut paint_layers, mut lit_paint_layers) = (0, 0);
+        for id in self.doc.walk() {
+            if let Some(paint) = self.doc.layer(id).and_then(|l| l.as_paint()) {
+                paint_layers += 1;
+                if paint.shading == crate::model::Shading::Lit {
+                    lit_paint_layers += 1;
+                }
+            }
+        }
         json!({
             "title": settings.title,
             "description": settings.description,
@@ -202,6 +214,9 @@ impl Session {
             "layers": self.doc.layer_count(),
             "strokes": self.doc.stroke_count(),
             "points": self.doc.point_count(),
+            // Paint layers, and how many of them scene lights shade.
+            "paint_layers": paint_layers,
+            "lit_paint_layers": lit_paint_layers,
             "flicks_per_second": FLICKS_PER_SECOND,
         })
     }
@@ -213,7 +228,7 @@ impl Session {
             "version": 1,
             "tools": self.tools,
             "options": self.options,
-            "paint_layer": self.paint_layer,
+            "paint_layer": self.paint_layer(),
             "current_layer": self.current_layer(),
             "transform_target": self.transform_target,
             "view": self.view.world_from_viewer,
@@ -246,13 +261,10 @@ impl Session {
             layer("current_layer"),
             layer("transform_target"),
         );
-        if let Some(current) = current {
+        // The tools work on the current layer. A state saved before that was so names
+        // its paint layer separately; it stands in when no current layer was saved.
+        if let Some(current) = current.or(paint) {
             self.selected_layers = vec![current];
-        }
-        if let Some(paint) =
-            paint.filter(|id| self.doc.layer(*id).is_some_and(|l| l.as_paint().is_some()))
-        {
-            self.paint_layer = Some(paint);
         }
         self.transform_target = target.filter(|id| *id != self.doc.root());
         // A view with no usable rotation keeps the default; one zoomed beyond the

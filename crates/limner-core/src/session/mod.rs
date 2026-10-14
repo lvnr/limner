@@ -11,6 +11,7 @@ mod gimbal;
 mod grab;
 mod history;
 pub mod input;
+mod lights;
 pub mod media;
 mod options;
 mod playback;
@@ -34,7 +35,7 @@ pub use options::{AutoSelect, Options};
 pub use playback::{Playback, PlaybackEvent};
 pub use props::{apply_kind_patch, kind_props};
 pub use selection::Selection;
-pub use view::{View, DEFAULT_ZOOM_LIMITS};
+pub use view::{brush_grid_spacing, View, BRUSH_GRID_SEEN, DEFAULT_ZOOM_LIMITS};
 
 use crate::eval::{evaluate, Clock, RenderFrame};
 use crate::json::patched;
@@ -45,6 +46,22 @@ use crate::time::Flicks;
 use glam::DVec3;
 use serde_json::{json, Value};
 use tools::ToolSettings;
+
+/// Where Paint and Line put a new stroke, given the current layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PaintHome {
+    /// Into the frame this paint layer shows.
+    Layer(LayerId),
+    /// Into a new paint layer made inside this group, at this index.
+    NewLayerIn(LayerId, usize),
+}
+
+/// What to do instead, when Paint or Line cannot work on the current layer.
+pub(crate) const CHOOSE_TO_PAINT: &str = "Choose a paint layer or a group to paint in.";
+/// What to do instead, when a tool that changes strokes has nothing to work on.
+pub(crate) const CHOOSE_TO_CHANGE: &str = "Choose a paint layer to work on, or select strokes.";
+/// What to do instead, when the frame stick has no paint layer to make frames in.
+pub(crate) const CHOOSE_FOR_FRAMES: &str = "Choose a paint layer to make frames in.";
 
 /// An edit in progress that spans several commands or frames of input, such as
 /// dragging a slider. It becomes one undo step.
@@ -71,10 +88,9 @@ pub struct Session {
     pub playback: Playback,
     pub tools: ToolSettings,
     pub options: Options,
-    /// Rows selected in the layer list; the last one is the current layer.
+    /// Rows selected in the layer list; the last one is the current layer. The
+    /// painting tools work on the current layer: see [`Session::paint_layer`].
     selected_layers: Vec<LayerId>,
-    /// The layer the painting tools draw into.
-    paint_layer: Option<LayerId>,
     /// What grabbing moves; `None` is the view.
     transform_target: Option<LayerId>,
     /// Counts every change to the document: whether an edit did anything. It only
@@ -127,7 +143,6 @@ impl Session {
             tools: ToolSettings::default(),
             options: Options::default(),
             selected_layers: Vec::new(),
-            paint_layer: None,
             transform_target: None,
             edits: 1,
             saved: None,
@@ -169,7 +184,6 @@ impl Session {
         self.selection.clear();
         self.playback = Playback::default();
         self.selected_layers.clear();
-        self.paint_layer = None;
         self.transform_target = None;
         self.edits += 1;
         self.saved = Some((self.edits, self.doc.clone()));
@@ -181,8 +195,7 @@ impl Session {
     }
 
     fn adopt_document(&mut self) {
-        self.paint_layer = self.first_paint_layer();
-        self.selected_layers = self.paint_layer.into_iter().collect();
+        self.selected_layers = self.first_paint_layer().into_iter().collect();
     }
 
     fn first_paint_layer(&self) -> Option<LayerId> {
@@ -276,23 +289,29 @@ impl Session {
         self.selected_layers.last().copied()
     }
 
+    /// The layer the tools paint on and change strokes in: the current layer, when it
+    /// is a paint layer. With anything else current there is none (see
+    /// [`Session::paint_target`] for what Paint and Line do then).
     pub fn paint_layer(&self) -> Option<LayerId> {
-        self.paint_layer
+        self.current_layer()
+            .filter(|id| self.doc.layer(*id).is_some_and(|l| l.as_paint().is_some()))
+    }
+
+    /// The size of a cell of the brush grid at the current zoom, in world units.
+    pub fn brush_grid_spacing(&self) -> f64 {
+        self.view.brush_grid_spacing()
     }
 
     pub fn transform_target(&self) -> Option<LayerId> {
         self.transform_target
     }
 
-    /// Makes `id` the current layer, and the paint layer if it can be painted on.
+    /// Makes `id` the current layer, which is then what the tools work on.
     pub fn set_current_layer(&mut self, id: LayerId) {
         if self.doc.layer(id).is_none() {
             return;
         }
         self.selected_layers = vec![id];
-        if self.doc.layer(id).is_some_and(|l| l.as_paint().is_some()) {
-            self.paint_layer = Some(id);
-        }
         self.touch_state();
     }
 
@@ -489,9 +508,14 @@ impl Session {
     }
 
     /// Drops references to layers that no longer exist, after any change to the tree.
+    /// When the current layer itself is gone and no other row is left selected, the
+    /// first paint layer becomes current.
     fn after_document_change(&mut self) {
         self.selection.retain_existing(&self.doc);
         let doc = &self.doc;
+        let current_gone = self
+            .current_layer()
+            .is_some_and(|id| doc.layer(id).is_none());
         self.selected_layers.retain(|id| doc.layer(*id).is_some());
         if self
             .transform_target
@@ -499,17 +523,8 @@ impl Session {
         {
             self.transform_target = None;
         }
-        if self
-            .paint_layer
-            .is_none_or(|id| doc.layer(id).is_none_or(|l| l.as_paint().is_none()))
-        {
-            self.paint_layer = self
-                .selected_layers
-                .iter()
-                .rev()
-                .copied()
-                .find(|id| doc.layer(*id).is_some_and(|l| l.as_paint().is_some()))
-                .or_else(|| self.first_paint_layer());
+        if current_gone && self.selected_layers.is_empty() {
+            self.selected_layers.extend(self.first_paint_layer());
         }
         self.doc_revision += 1;
         self.touch_state();
@@ -550,22 +565,88 @@ impl Session {
         Some(label)
     }
 
-    /// Where a new stroke goes: the frame the paint layer shows now. A document with
-    /// no paint layer at all gets one.
+    /// Where Paint and Line would put a new stroke now, judged from the current layer
+    /// alone: into a paint layer, into a new paint layer made inside a group, a
+    /// sequence or the root (with nothing current, at the end of the root), or
+    /// nowhere, with the reason why.
+    pub(crate) fn paint_home(&self) -> Result<PaintHome, String> {
+        let Some(layer) = self.current_layer().and_then(|id| self.doc.layer(id)) else {
+            return Ok(PaintHome::NewLayerIn(self.doc.root(), usize::MAX));
+        };
+        if layer.locked && (layer.as_paint().is_some() || layer.as_group().is_some()) {
+            return Err(format!("Layer \"{}\" is locked", layer.name));
+        }
+        if layer.as_paint().is_some() {
+            Ok(PaintHome::Layer(layer.id))
+        } else if layer.as_group().is_some() {
+            Ok(PaintHome::NewLayerIn(layer.id, 0))
+        } else {
+            Err(self.not_a_paint_layer(CHOOSE_TO_PAINT))
+        }
+    }
+
+    /// The layer the tools that change strokes work on when no strokes are selected:
+    /// the current layer, when it is an unlocked paint layer.
+    pub(crate) fn tool_layer(&self) -> Result<LayerId, String> {
+        let Some(id) = self.paint_layer() else {
+            return Err(self.not_a_paint_layer(CHOOSE_TO_CHANGE));
+        };
+        match self.doc.layer(id) {
+            Some(layer) if layer.locked => Err(format!("Layer \"{}\" is locked", layer.name)),
+            _ => Ok(id),
+        }
+    }
+
+    /// Says what the current layer is, for a message saying the tools cannot work on
+    /// it, followed by `then`: what to do instead.
+    pub(crate) fn not_a_paint_layer(&self, then: &str) -> String {
+        match self.current_layer().and_then(|id| self.doc.layer(id)) {
+            Some(layer) => {
+                let what = match &layer.kind {
+                    LayerKind::Group(g) if g.sequence.is_some() => "a sequence",
+                    LayerKind::Group(_) => "a group",
+                    LayerKind::Paint(_) => "a paint layer",
+                    LayerKind::Picture(_) => "a picture layer",
+                    LayerKind::Model(_) => "a model layer",
+                    LayerKind::Sound(_) => "a sound layer",
+                    LayerKind::Viewpoint(_) => "a spawn area",
+                    LayerKind::Camera(_) => "a camera layer",
+                    LayerKind::Light(_) => "a light layer",
+                };
+                format!("\"{}\" is {what}. {then}", layer.name)
+            }
+            None => format!("No layer is chosen. {then}"),
+        }
+    }
+
+    /// Where a new stroke goes: the frame the current paint layer shows now. With a
+    /// group, a sequence or the root current (or nothing at all), a new paint layer
+    /// is made inside it first and becomes current; inside an edit, the layer and
+    /// the stroke are then one undo step. Anything else current refuses.
     pub(crate) fn paint_target(&mut self) -> Result<tools::PaintTarget, String> {
-        let layer = match self.paint_layer {
-            Some(layer) => layer,
-            None => {
-                let root = self.doc.root();
+        let layer = match self.paint_home()? {
+            PaintHome::Layer(layer) => layer,
+            PaintHome::NewLayerIn(parent, index) => {
+                let clip_start = if self.options.create_layers_at_playhead {
+                    self.doc
+                        .settings
+                        .rate
+                        .snap_floor(self.evaluate().child_time(&self.doc, parent))
+                        .max(0)
+                } else {
+                    0
+                };
                 let created = layers::add_layer(
                     self.doc_mut(),
                     NewLayerKind::Paint,
-                    root,
-                    usize::MAX,
+                    parent,
+                    index,
                     None,
-                    0,
+                    clip_start,
                 )
                 .map_err(|e| e.to_string())?;
+                // Shaded like the rest of the paint, when the rest takes light.
+                self.paint_added(created);
                 self.set_current_layer(created);
                 created
             }
@@ -900,8 +981,20 @@ impl Session {
                 {
                     self.doc_mut().settings.default_viewpoint = Some(id);
                 }
+                // Lights are put where they show, and make the paint take light.
+                let message = match kind {
+                    NewLayerKind::Light => self.after_light_added(id)?,
+                    NewLayerKind::Paint => {
+                        self.paint_added(id);
+                        None
+                    }
+                    _ => None,
+                };
                 self.set_current_layer(id);
-                Ok(json!({ "layer": id }))
+                Ok(match message {
+                    Some(message) => json!({ "layer": id, "message": message }),
+                    None => json!({ "layer": id }),
+                })
             }
             Command::DeleteLayers { layers: ids } => {
                 let mut successor = None;
@@ -1228,6 +1321,10 @@ impl Session {
                     crate::ops::lighting::bake_lighting(self.doc_mut(), &frame, layer)?;
                 Ok(json!({ "layers": layers, "points": points }))
             }
+            Command::SetShading { layers, shading } => {
+                let changed = self.set_shading(&layers, shading)?;
+                Ok(json!({ "changed": changed }))
+            }
             Command::TransformAgain => self.transform_again(),
             other => unreachable!("{other:?} does not edit the document"),
         }
@@ -1284,15 +1381,7 @@ impl Session {
                         }
                     }
                 }
-                if let Some(paint) = self
-                    .selected_layers
-                    .iter()
-                    .rev()
-                    .copied()
-                    .find(|id| self.doc.layer(*id).is_some_and(|l| l.as_paint().is_some()))
-                {
-                    self.paint_layer = Some(paint);
-                }
+                // The last row is the current layer, and with it what the tools work on.
                 Value::Null
             }
             Command::SetTransformTarget { layer } => {

@@ -35,15 +35,15 @@ const HELPER_LAYERS := 2
 const HIGHLIGHT_SHADER := preload("res://shaders/highlight.gdshader")
 ## Half the side of the grid plane, in grid cells of the coarse spacing.
 const GRID_EXTENT := 40.0
-## How many cells the brush grid reaches each way from the hand.
+## How many cells the brush grid reaches each way from the hand. The size of a cell
+## comes from the core (`LimnerScene.brush_grid_spacing`), which snaps lines to it.
 const BRUSH_GRID_CELLS := 3
-## How large a cell of the brush grid should look, in metres as seen.
-const BRUSH_GRID_SEEN := 0.05
 
 ## When true the dither pattern of see-through strokes changes every frame.
 var animate_dither := true
 var show_grid := true
-## The brush grid: a small grid in the air around the drawing hand.
+## The brush grid: a small grid in the air around the drawing hand. It also shows,
+## whatever this says, while the Line tool snaps to it.
 var show_brush_grid := false
 
 var scene: LimnerScene
@@ -252,29 +252,18 @@ func _setup_brush_grid() -> void:
 	add_child(_brush_grid)
 
 
-## The size of a cell of the brush grid, in world units: 1, 2 or 5 times a power of
-## ten, whichever looks nearest to `BRUSH_GRID_SEEN` at this zoom. Every such grid
-## shares lines with the floor grid.
-static func brush_grid_spacing(world_per_metre: float) -> float:
-	var wanted := BRUSH_GRID_SEEN * world_per_metre
-	var decade := pow(10.0, floorf(log(wanted) / log(10.0)))
-	var best := decade
-	for step: float in [2.0, 5.0, 10.0]:
-		if absf(log(decade * step / wanted)) < absf(log(best / wanted)):
-			best = decade * step
-	return best
-
-
-## Keeps the brush grid around the drawing hand. The lattice sits on the world's own
-## grid lines and moves a whole cell at a time, so its lines stay where they are
-## while the hand moves among them.
+## Keeps the brush grid around the drawing hand, when it is asked for or while the
+## Line tool snaps to it. The lattice sits on the world's own grid lines and moves a
+## whole cell at a time, so its lines stay where they are while the hand moves among
+## them. The size of a cell is the core's: 1, 2 or 5 times a power of ten, whichever
+## looks nearest to five centimetres at this zoom.
 func _update_brush_grid() -> void:
-	var cursor := scene.tool_cursor() if show_brush_grid else {}
-	_brush_grid.visible = cursor.get("tracked", false)
+	var cursor := scene.tool_cursor()
+	_brush_grid.visible = cursor.tracked and (show_brush_grid or cursor.grid_snap)
 	if not _brush_grid.visible:
 		return
 	var viewer_from_world := scene.viewer_from_world()
-	var spacing := brush_grid_spacing(scene.view_scale())
+	var spacing := scene.brush_grid_spacing()
 	var hand: Vector3 = viewer_from_world.affine_inverse() * (cursor.position as Vector3)
 	var cell := (hand / spacing).round()
 	_brush_grid.transform = viewer_from_world * Transform3D(Basis.from_scale(Vector3.ONE * spacing), cell * spacing)

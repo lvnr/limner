@@ -86,7 +86,7 @@ func test_the_brush_grid_stays_with_the_hand_on_the_worlds_own_lines() -> void:
 	await frames(2)
 	check(grid.visible, "shown around a hand that is there")
 	check_eq(grid.layers, LimnerWorld.HELPER_LAYERS, "on the layer that pictures and renders leave out")
-	check_near(LimnerWorld.brush_grid_spacing(world.scene.view_scale()), 0.05, "five centimetres at the scale of a new document")
+	check_near(world.scene.brush_grid_spacing(), 0.05, "five centimetres at the scale of a new document")
 	var origin := grid.transform.origin
 	check(origin.is_equal_approx(Vector3(0.1, 1.2, -0.7)), "on the nearest crossing of the world's lines: %s" % origin)
 	# A move within the cell leaves the lines where they are.
@@ -106,7 +106,23 @@ func test_the_brush_grid_stays_with_the_hand_on_the_worlds_own_lines() -> void:
 	world.scene.input_commit(0.011)
 	await frames(2)
 	check(not grid.visible, "gone with the hand")
-	# Cells are 1, 2 or 5 times a power of ten, whichever looks nearest to five centimetres.
-	check_near(LimnerWorld.brush_grid_spacing(10.0), 0.5, "zoomed out ten times")
-	check_near(LimnerWorld.brush_grid_spacing(3.0), 0.2, "zoomed out three times")
-	check_near(LimnerWorld.brush_grid_spacing(0.02), 0.001, "zoomed far in")
+	# Cells are 1, 2 or 5 times a power of ten, whichever looks nearest to five
+	# centimetres (the core's tests try other zooms).
+	world.scene.view_zoom(Vector3.ZERO, 0.1)
+	check_near(world.scene.brush_grid_spacing(), 0.5, "zoomed out ten times")
+	world.scene.view_zoom(Vector3.ZERO, 10.0)
+	# Held off, the grid still shows while the Line tool snaps to it.
+	world.show_brush_grid = false
+	run({"cmd": "set_tool", "tool": "line"})
+	world.scene.input_hand(0, Vector3(0.11, 1.21, -0.72), Quaternion.IDENTITY, 0.0, 0.0, Vector2.ZERO, 0)
+	world.scene.input_hand(1, Vector3(-0.2, 1.0, -0.5), Quaternion.IDENTITY, 1.0, 0.0, Vector2.ZERO, 0)
+	world.scene.input_commit(0.011)
+	await frames(2)
+	check(grid.visible, "the modifier with the Line tool shows the grid it snaps to")
+	world.scene.input_hand(1, Vector3(-0.2, 1.0, -0.5), Quaternion.IDENTITY, 0.0, 0.0, Vector2.ZERO, 0)
+	world.scene.input_commit(0.011)
+	await frames(2)
+	check(not grid.visible, "and lets it go with the modifier")
+	world.scene.input_hand_absent(0)
+	world.scene.input_hand_absent(1)
+	world.scene.input_commit(0.011)

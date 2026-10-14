@@ -20,6 +20,7 @@ const ACTION_TRIGGER := &"trigger"
 const ACTION_GRIP := &"grip"
 const ACTION_STICK := &"stick"
 const ACTION_STICK_CLICK := &"stick_click"
+const ACTION_STICK_TOUCH := &"stick_touch"
 const ACTION_TRACKPAD := &"trackpad"
 const ACTION_TRACKPAD_CLICK := &"trackpad_click"
 const ACTION_LOWER := &"lower_button"
@@ -78,8 +79,39 @@ func start(viewport: Viewport) -> String:
 	XRServer.world_scale = 1.0
 	viewport.use_xr = true
 	# Until the runtime says the session has the user's attention, the hands do nothing.
-	has_attention = false
+	# Coming back from the desktop, the session already has it and will not say so
+	# again, so the state it is in now is read.
+	has_attention = session_state() == OpenXRInterface.SESSION_STATE_FOCUSED
 	return ""
+
+
+## Gives the main viewport back to the desktop: it is drawn on the screen again, at
+## the pace the project asks for. OpenXR itself keeps running (in this build of Godot
+## it cannot be started again once stopped), so the headset needs something else to
+## show meanwhile: see `XRHoldingView`.
+func stop(viewport: Viewport) -> void:
+	_set_attention(false)
+	for connected: Signal in [interface.session_begun, interface.session_visible, interface.session_focussed, interface.session_stopping, interface.session_loss_pending, interface.pose_recentered, interface.instance_exiting]:
+		for connection: Dictionary in connected.get_connections():
+			var callable: Callable = connection.callable
+			if callable.get_object() == self:
+				connected.disconnect(callable)
+	viewport.use_xr = false
+	# While it drew for the headset the renderer gave the viewport the headset's size
+	# and two eyes, and turning that off does not give the old ones back: until its
+	# size is set again it draws nothing (seen on a Mac, where it is left with none).
+	var drawn := Vector2i(viewport.get_visible_rect().size)
+	RenderingServer.viewport_set_size(viewport.get_viewport_rid(), drawn.x, drawn.y)
+	DisplayServer.window_set_vsync_mode(int(ProjectSettings.get_setting("display/window/vsync/vsync_mode", DisplayServer.VSYNC_ENABLED)))
+	Engine.max_fps = int(ProjectSettings.get_setting("application/run/max_fps", 0))
+
+
+## The OpenXR session's state, one of `OpenXRInterface.SessionState`; unknown in a
+## build of Godot that cannot say.
+func session_state() -> int:
+	if interface == null or not interface.has_method("get_session_state"):
+		return OpenXRInterface.SESSION_STATE_UNKNOWN
+	return int(interface.call("get_session_state"))
 
 
 func poll(delta: float) -> float:
@@ -94,6 +126,7 @@ func poll(delta: float) -> float:
 		state.grip = controller.get_float(ACTION_GRIP)
 		state.stick = controller.get_vector2(ACTION_STICK)
 		state.stick_click = controller.is_button_pressed(ACTION_STICK_CLICK)
+		state.stick_touch = controller.is_button_pressed(ACTION_STICK_TOUCH)
 		# A trackpad stands in for a stick only while it is pressed down: a thumb
 		# resting on it must not undo or step frames.
 		if controller.is_button_pressed(ACTION_TRACKPAD_CLICK):

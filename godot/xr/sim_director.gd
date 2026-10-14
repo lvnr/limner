@@ -7,6 +7,9 @@ extends Node
 ## It works through the same doors a user does: hands are moved and the panels react.
 ## Everything is done within a few frames of starting, because `--shot` takes its
 ## picture eight frames after the app's own options have been applied.
+##
+## Besides those, `--sim-stick-click` clicks the drawing hand's thumbstick once, after
+## the hands are placed: what shows or hides the gimbal.
 
 ## Frames to wait before touching the panels: the app applies its own options (the
 ## demo sheet, a document to open) two frames in, and the panels need a frame or two
@@ -35,7 +38,7 @@ func _ready() -> void:
 	var index := 0
 	while index < arguments.size():
 		var word := arguments[index]
-		if word == "--sim-button-map":
+		if word == "--sim-button-map" or word == "--sim-stick-click":
 			options[word] = ""
 		elif word.begins_with("--sim-") and index + 1 < arguments.size():
 			index += 1
@@ -59,6 +62,13 @@ func _direct(options: Dictionary) -> void:
 		_sim.set_tip(XRRig.LEFT, _vector(options["--sim-left"]))
 	if options.has("--sim-right"):
 		_sim.set_tip(XRRig.RIGHT, _vector(options["--sim-right"]))
+	if options.has("--sim-left-stick"):
+		# The thumb rests on the left stick, pushed this far.
+		var push := _numbers(options["--sim-left-stick"])
+		_sim.states[XRRig.LEFT].stick = Vector2(push[0], push[1] if push.size() > 1 else 0.0)
+		_sim.states[XRRig.LEFT].stick_touch = true
+	if options.has("--sim-left-trigger"):
+		_sim.states[XRRig.LEFT].trigger = float(options["--sim-left-trigger"])
 	if options.has("--sim-panel"):
 		_shell.palette.set_shown(true)
 		_shell.palette.show_panel(options["--sim-panel"])
@@ -70,6 +80,9 @@ func _direct(options: Dictionary) -> void:
 	for i in START_FRAMES:
 		await get_tree().process_frame
 	var side := _shell.drawing_side()
+	if options.has("--sim-stick-click"):
+		var hand: String = XRRig.SIDE_NAMES[side]
+		await _sim.play([{"time": 0.0, hand: {"stick_click": true}}, {"time": 0.1, hand: {"stick_click": false}}])
 	for option: String in ["--sim-touch", "--sim-poke", "--sim-ray"]:
 		if not options.has(option):
 			continue

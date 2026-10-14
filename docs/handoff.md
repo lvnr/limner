@@ -61,17 +61,18 @@ Three things in the PowerShell scripts were wrong and are fixed: Windows PowerSh
 
 ## The first session with the headset
 
-`docs/xr.md` has the full list: how to make Meta's PC app the active OpenXR runtime, a 15-step first session in order, and the names of the constants to tune at each step (where the brush tip sits, how deep a poke has to go, where the palette rides in the hand). In short:
+`docs/xr.md` has the full list: how to make Meta's PC app the active OpenXR runtime, a 17-step first session in order, and the names of the constants to tune at each step (where the brush tip sits, how deep a poke has to go, where the palette rides in the hand). In short:
 
 1. Start with `scripts\godot.ps1 --path godot -- --xr --no-sim`, so that a failure is reported instead of hidden behind the simulated rig.
 2. If the scene does not appear in the headset, the reason is on the desktop window's message line and in the log. OpenXR complaints about the action map (`godot/xr/action_map.tres`) are the first thing to look for: no runtime has seen it yet.
-3. Work down the list in `docs/xr.md`: floor and head, controllers and the brush tip, painting, grips, the palette, poking, the ray, pinning, typing, pop-ups, the button map, taking the headset off, the left hand, frame rate.
+3. Work down the list in `docs/xr.md`: floor and head, controllers and the brush tip, painting, grips, the palette, poking, the ray, pinning, typing, pop-ups, the button map, taking the headset off, the left hand, frame rate, files, and changing to the desktop and back.
 
 The original Rift is a PC headset, so the "PC headset" target in the Performance panel is the one to watch. A standalone Quest build needs downloads that were deliberately not made here (the Android part of Godot's export templates, the Android SDK and NDK, the OpenXR vendors plugin); the steps are in `docs/xr.md`.
 
 ## What has never been checked
 
 - **Anything in a headset.** Session start, controller bindings, stereo rendering of every shader, haptics, the palette's place and size, poke depths, performance.
+- **Changing between the desktop and a real headset.** "Continue in the headset" and "Continue on the desktop" (desktop top bar, View menu, the Settings panel in both) have done the round trip only with the simulated rig, where the work, its undo history and the selection come through and nothing is left behind (`godot/tests/test_mode_switch.gd`). Only a Windows PC with the headset can show: whether the main window comes back drawing normally, at its old size, when the headset lets go of it; whether the headset shows the holding sheet while the desktop is in use, and a trigger brings the headset back with the hands working at once; and whether quitting from the headset's menu while on the desktop leaves the app running there with the headset greyed out. Step 17 of the first session in `docs/xr.md` walks through it.
 - **Linux.** The Rust code is portable and has no platform-specific parts, but it has not been built or run there. Windows is now checked on the desktop (see "Windows, first run" below); Windows with a headset is not.
 - **A Quest.** No Android build of the extension, no export, no vendors plugin.
 - **Packaged builds on Linux and Quest.** `scripts/package.sh` made a macOS package here, debug and release, and the packaged app was started and looked at. `scripts\package.ps1` has made a Windows release package (see below). The macOS package holds the extension for Apple silicon only and is not notarised; the Windows one is not signed, so Windows SmartScreen warns before the first start.

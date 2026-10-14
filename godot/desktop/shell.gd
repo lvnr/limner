@@ -7,6 +7,10 @@ extends Node
 ## exactly as grabbing the world does in a headset, so tool sizes and precision
 ## behave the same in both.
 
+## The user asked to carry on in the headset: "headset". The app makes the change
+## (`main.gd`, `switch_to`), after this signal's emitter has finished.
+signal switch_requested(to: String)
+
 ## Where the virtual head is, in viewer space.
 const HEAD := Vector3(0.0, 1.4, 0.0)
 ## How far in front of the head the point is that navigation turns and zooms about.
@@ -38,11 +42,17 @@ const IMPORT_FILTERS := [
 	"*.limnz ; Limner projects (a project folder can be chosen too, as can a Quill project folder)",
 ]
 enum EditMenu { UNDO, REDO, DUPLICATE, DELETE, RENAME, SELECT_ALL, DESELECT, TRANSFORM_AGAIN }
-enum ViewMenu { FRAME_ALL, HOME, GRID, EXTRAS, PANELS, FULLSCREEN, GIMBAL }
+enum ViewMenu { FRAME_ALL, HOME, GRID, EXTRAS, PANELS, FULLSCREEN, GIMBAL, HEADSET }
 
 var world: LimnerWorld
 var editor: LimnerEditor
+## True when the shell takes over from the headset in a running app, rather than at
+## start: the work in hand is not offered as work to recover and the start-up
+## preferences are not applied again. Set it before the shell enters the tree.
+var switched := false
 var camera: Camera3D
+## The shape of the tool at the drawing hand, in the world.
+var cursor: ToolCursor
 ## The root of the interface. Hidden with Tab for an unobstructed view.
 var ui: Control
 var layers_panel: LayersPanel
@@ -65,6 +75,8 @@ var _toast: Label
 var _toast_timer := 0.0
 var _undo_button: Button
 var _redo_button: Button
+## The top bar's "Continue in the headset".
+var _headset_button: Button
 var _view_menu: PopupMenu
 var _edit_menu: PopupMenu
 var _file_dialog: FileDialog
@@ -95,17 +107,21 @@ func _ready() -> void:
 	sounds.name = "Sounds"
 	add_child(sounds)
 	hand.sounds = sounds
-	Preferences.shared().apply_at_start(editor)
+	if not switched:
+		Preferences.shared().apply_at_start(editor)
 	add_child(hand)
-	autosave = Autosave.new()
-	autosave.name = "Autosave"
-	autosave.editor = editor
-	add_child(autosave)
+	# The app hands over its own autosave, which lasts the whole run; a shell started
+	# alone (a test) makes one.
+	if autosave == null:
+		autosave = Autosave.new()
+		autosave.name = "Autosave"
+		autosave.editor = editor
+		add_child(autosave)
 	world.scene.playback_event.connect(func(event: String) -> void:
 		if event == "stop":
 			sounds.play("stop")
 	)
-	var cursor := ToolCursor.new()
+	cursor = ToolCursor.new()
 	cursor.name = "ToolCursor"
 	cursor.scene = world.scene
 	world.add_child(cursor)
@@ -115,11 +131,13 @@ func _ready() -> void:
 	editor.document_changed.connect(_refresh)
 	editor.state_changed.connect(_refresh)
 	editor.document_replaced.connect(_refresh)
+	ModeSwitch.events.changed.connect(_refresh_mode_switch)
 	_refresh()
+	_refresh_mode_switch()
 	# Work left unsaved when the app last closed badly is offered back, unless this
-	# run is an automated one.
+	# run is an automated one, or the work in hand came over from the headset.
 	var args := OS.get_cmdline_user_args()
-	if not Autosave.pending().is_empty() and not (args.has("--shot") or args.has("--bench") or args.has("--no-recovery")):
+	if not switched and not Autosave.pending().is_empty() and not (args.has("--shot") or args.has("--bench") or args.has("--no-recovery")):
 		_offer_recovery.call_deferred()
 
 
@@ -130,6 +148,7 @@ func _build_interface() -> void:
 	ui = Control.new()
 	ui.name = "Root"
 	# The colour scheme follows the preference, and a change of it re-themes the panels at once.
+	Kit.set_headset(false)
 	Kit.follow_preferences()
 	Kit.events.scheme_changed.connect(_on_scheme_changed)
 	ui.theme = Kit.make_theme()
@@ -226,6 +245,7 @@ func _on_scheme_changed() -> void:
 ## of the controllers does, which is worth reading before putting a headset on.
 func _settings_panel() -> SettingsPanel:
 	var panel := SettingsPanel.new(editor)
+	panel.switch_requested.connect(func(to: String) -> void: switch_requested.emit(to))
 	panel.button_map_requested.connect(func() -> void:
 		var dialog := AcceptDialog.new()
 		dialog.title = "Controller buttons"
@@ -317,6 +337,8 @@ func _build_top_bar() -> Control:
 	_view_menu.add_separator()
 	_view_menu.add_check_item("Panels", ViewMenu.PANELS, KEY_TAB)
 	_view_menu.add_check_item("Full screen", ViewMenu.FULLSCREEN, KEY_MASK_CMD_OR_CTRL | KEY_MASK_SHIFT | KEY_F)
+	_view_menu.add_separator()
+	_view_menu.add_item(ModeSwitch.TO_HEADSET, ViewMenu.HEADSET)
 	_view_menu.id_pressed.connect(_on_view_menu)
 	menu.add_child(_view_menu)
 
@@ -325,6 +347,9 @@ func _build_top_bar() -> Control:
 	_redo_button = Kit.icon_button("redo", "Redo", editor.redo)
 	row.add_child(_undo_button)
 	row.add_child(_redo_button)
+	row.add_child(VSeparator.new())
+	_headset_button = Kit.icon_button("headset", ModeSwitch.TO_HEADSET, ask_for_headset)
+	row.add_child(_headset_button)
 	row.add_child(VSeparator.new())
 	_title = Kit.label("")
 	row.add_child(_title)
@@ -411,6 +436,23 @@ func _on_file_menu(id: int) -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		_after_saving_changes(_quit)
+
+
+## Takes down what this shell put outside itself, for the headset to take over: the
+## camera and the tool cursor in the world, and the hold on the window's close button.
+## The shell is freed straight after; whatever it connected to the editor goes with it.
+func stop() -> void:
+	set_process(false)
+	set_process_input(false)
+	set_process_unhandled_input(false)
+	get_tree().auto_accept_quit = true
+	for node: Node3D in [camera, cursor]:
+		if node != null and is_instance_valid(node):
+			if node.get_parent() != null:
+				node.get_parent().remove_child(node)
+			node.free()
+	camera = null
+	cursor = null
 
 
 ## Quits on purpose: whatever is unsaved now was given up knowingly. A copy from last
@@ -590,7 +632,29 @@ func _on_view_menu(id: int) -> void:
 		ViewMenu.FULLSCREEN:
 			var window := get_window()
 			window.mode = Window.MODE_WINDOWED if window.mode == Window.MODE_FULLSCREEN else Window.MODE_FULLSCREEN
+		ViewMenu.HEADSET:
+			ask_for_headset()
 	_refresh()
+
+
+## Asks the app to carry on in the headset, or says why it cannot.
+func ask_for_headset() -> void:
+	var reason := ModeSwitch.unavailable_reason()
+	if reason != "":
+		show_message(reason, true)
+		return
+	switch_requested.emit("headset")
+
+
+## The top bar's button and the View menu's entry offer the headset only when there
+## is one to change to; otherwise they say why not.
+func _refresh_mode_switch() -> void:
+	var available := ModeSwitch.unavailable_reason() == ""
+	_headset_button.disabled = not available
+	_headset_button.tooltip_text = ModeSwitch.headset_tooltip()
+	var index := _view_menu.get_item_index(ViewMenu.HEADSET)
+	_view_menu.set_item_disabled(index, not available)
+	_view_menu.set_item_tooltip(index, ModeSwitch.headset_tooltip())
 
 
 ## Brings one of the tabbed panels under the layer list to the front, by name.

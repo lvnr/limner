@@ -1,14 +1,17 @@
 class_name SettingsPanel
 extends VBoxContainer
 ## The Settings panel: the preferences that belong to the person rather than to a
-## document, and two things to ask for by hand: the sheet of controls, and standing
-## at the initial spawn area again.
+## document, and three things to ask for by hand: the sheet of controls, standing at
+## the initial spawn area again, and carrying on in the other interface (the headset
+## from the desktop, the desktop from the headset).
 ##
 ## The preferences are the app's shared `Preferences`; a change here is saved at once
 ## and every part of the interface that listens follows it.
 
 ## The user asked to see the sheet that lists what every control does.
 signal button_map_requested
+## The user asked to carry on in the other interface: "headset" or "desktop".
+signal switch_requested(to: String)
 
 ## The longest time between automatic saves that the slider offers, in minutes.
 const AUTOSAVE_SLIDER_MAX := 30.0
@@ -23,6 +26,10 @@ var _button_map_at_start: CheckBox
 var _gimbal: CheckBox
 var _theme: OptionButton
 var _autosave: SliderRow
+## "Continue in the headset" on the desktop, "Continue on the desktop" in a headset.
+var _switch: Button
+## Why the headset cannot be used, under the button, when it cannot.
+var _switch_note: Label
 
 
 func _init(limner_editor: LimnerEditor) -> void:
@@ -50,8 +57,10 @@ func _init(limner_editor: LimnerEditor) -> void:
 	add_child(_button_map_at_start)
 	_gimbal = Kit.toggle("Gimbal shown by default", "Whether a session starts with the gimbal showing, instead of only when asked for", func(on: bool) -> void: preferences.set_value("show_gimbal_by_default", on))
 	add_child(_gimbal)
-	_theme = Kit.option(["Dark", "Light"], "The interface's colours: dark panels with light text, or light panels with dark text. A change shows at once.", func(index: int) -> void: preferences.set_value("theme", Preferences.CHOICES["theme"][index]))
-	add_child(Form.row("Colours", [_theme], "The interface's colours"))
+	# The desktop and the headset each keep a scheme of their own; the row sets the
+	# one of the interface in use.
+	_theme = Kit.option(["Dark", "Light"], "The interface's colours: dark panels with light text, or light panels with dark text. The desktop and the headset each keep their own. A change shows at once.", func(index: int) -> void: preferences.set_value(Kit.scheme_preference(), Preferences.CHOICES["theme"][index]))
+	add_child(Form.row("Colours", [_theme], "The colours of this interface"))
 
 	add_child(Kit.heading("Saving"))
 	_autosave = SliderRow.new("Autosave", 0.0, AUTOSAVE_SLIDER_MAX, 1.0, "How often the open project is saved by itself. All the way down switches it off.", _autosave_text)
@@ -62,9 +71,21 @@ func _init(limner_editor: LimnerEditor) -> void:
 	add_child(_wide(Kit.button("Show button map", "Shows or hides the sheet that says what every control does", func() -> void: button_map_requested.emit(), "info")))
 	add_child(_wide(Kit.button("Recentre view on the initial spawn area", "Puts you back where the piece starts, facing the way it starts", _recentre, "home")))
 
+	add_child(Kit.heading("Desktop and headset"))
+	_switch = _wide(Kit.button(ModeSwitch.TO_HEADSET, "", _on_switch_pressed, "headset"))
+	add_child(_switch)
+	_switch_note = Kit.label("", true)
+	_switch_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_switch_note.custom_minimum_size = Vector2(120, 0)
+	add_child(_switch_note)
+
 
 func _ready() -> void:
 	preferences.changed.connect(_on_preference_changed)
+	# The row's words follow the interface the panel is shown in, and whether a
+	# headset is there to change to.
+	Kit.events.scheme_changed.connect(_refresh_switch)
+	ModeSwitch.events.changed.connect(_refresh_switch)
 	refresh()
 
 
@@ -76,8 +97,30 @@ func refresh() -> void:
 	Kit.set_quiet(_button_map_at_start, preferences.flag("show_button_map_at_start"))
 	Kit.set_quiet(_gimbal, preferences.flag("show_gimbal_by_default"))
 	var themes: Array = Preferences.CHOICES["theme"]
-	Kit.set_quiet(_theme, maxi(0, themes.find(preferences.text("theme"))))
+	Kit.set_quiet(_theme, maxi(0, themes.find(preferences.text(Kit.scheme_preference()))))
 	_autosave.set_value(preferences.number("autosave_minutes"))
+	_refresh_switch()
+
+
+## The change of interface the row offers here: to the desktop in a headset, to the
+## headset on the desktop.
+func switch_target() -> String:
+	return "desktop" if Kit.headset else "headset"
+
+
+func _refresh_switch() -> void:
+	var to_desktop := switch_target() == "desktop"
+	var reason := "" if to_desktop else ModeSwitch.unavailable_reason()
+	_switch.text = ModeSwitch.TO_DESKTOP if to_desktop else ModeSwitch.TO_HEADSET
+	_switch.icon = Icons.texture("desktop" if to_desktop else "headset", Kit.TEXT, 18)
+	_switch.tooltip_text = "Takes off the headset's interface and carries on with the same work on the desktop" if to_desktop else ModeSwitch.headset_tooltip()
+	_switch.disabled = reason != ""
+	_switch_note.text = reason
+	_switch_note.visible = reason != ""
+
+
+func _on_switch_pressed() -> void:
+	switch_requested.emit(switch_target())
 
 
 func _on_preference_changed(_key: String) -> void:

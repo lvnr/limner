@@ -9,7 +9,7 @@
 use super::animation::KeyTrack;
 use super::tools::{BrushStyle, ToolKind};
 use crate::math::{Flip, Xform};
-use crate::model::{Action, Interp, LayerId};
+use crate::model::{Action, Interp, LayerId, Shading};
 use crate::ops::frames::NewFrame;
 use crate::ops::layers::NewLayerKind;
 use crate::ops::OpError;
@@ -356,6 +356,15 @@ pub enum Command {
     BakeLighting {
         layer: LayerId,
     },
+    /// Sets whether lights shade paint: on each paint layer listed, and on every
+    /// paint layer inside each group listed, as one undo step. With no layers listed,
+    /// every paint layer in the document. Locked layers, and layers in a locked
+    /// group, are left as they are. Returns `{changed}`, how many layers changed.
+    SetShading {
+        #[serde(default)]
+        layers: Vec<LayerId>,
+        shading: Shading,
+    },
     /// Adds ready-made strokes to the frame a paint layer shows: what the Text tool
     /// and scripts use. The paint layer is used when `layer` is left out.
     AddStrokes {
@@ -504,6 +513,7 @@ impl Command {
             SelectionToNewLayer { copy: false } => "Move strokes to new layer",
             Optimize { .. } => "Optimize strokes",
             BakeLighting { .. } => "Bake lighting",
+            SetShading { .. } => "Change shading",
             AddStrokes { .. } => "Add strokes",
             TransformAgain => "Transform again",
             Undo

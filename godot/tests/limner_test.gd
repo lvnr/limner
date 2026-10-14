@@ -9,6 +9,9 @@ var failures: Array[String] = []
 
 
 func setup() -> void:
+	# Kit's look is the app's, kept between tests: each starts on the desktop's, dark.
+	Kit.set_headset(false)
+	Kit.use_scheme("dark")
 	world = LimnerWorld.new()
 	add_child(world)
 	editor = LimnerEditor.new()

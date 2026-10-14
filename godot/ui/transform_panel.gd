@@ -96,7 +96,7 @@ func _init(limner_editor: LimnerEditor) -> void:
 	_auto_select = Kit.option(["None", "Its layer", "Its group"], "What moves when you grab a stroke instead of empty space", _on_auto_select)
 	add_child(Kit.label("Grabbing a stroke moves"))
 	add_child(_auto_select)
-	add_child(_option_toggle(Kit.toggle("Show gimbal", "Shows the rings and arrows for moving the transform object or the selection precisely", Callable()), "show_gimbal"))
+	add_child(_option_toggle(Kit.toggle("Show gimbal", "Shows the rings and arrows for moving things precisely: the transform object, the current layer while the view is the transform object, or the selection while the Selection tool is in hand", Callable()), "show_gimbal"))
 	add_child(_option_toggle(Kit.toggle("Animate duplicates", "Each repeat of a duplicate-and-move puts the copy on a new frame", Callable()), "animate_duplicates"))
 
 	_steps = NumberField.new("How many steps make a full turn when a gimbal ring is turned in steps", 1, 360, true)

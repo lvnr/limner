@@ -1,6 +1,6 @@
 //! The Paint and Line tools: the two that lay down new strokes.
 
-use super::settings::BrushStyle;
+use super::settings::{BrushStyle, LineSettings};
 use super::space::{LayerSpace, PaintTarget};
 use super::stroke_builder::{build_points, Sample, StrokeStyle, MAX_STROKE_POINTS};
 use super::Taper;
@@ -330,6 +330,10 @@ impl PaintGesture {
 
 /// A straight line being pulled out from where the trigger was pressed.
 pub(crate) struct LineGesture {
+    /// Drawn with the Paint tool and the modifier: a free line in the brush's own
+    /// style and size, which the stick resizes as it does the brush. Drawn with the
+    /// Line tool, the modifier snaps its ends to the brush grid instead.
+    from_brush: bool,
     target: PaintTarget,
     addr: StrokeAddr,
     twin: Option<Twin>,
@@ -342,14 +346,43 @@ pub(crate) struct LineGesture {
     last_hand: DVec3,
 }
 
+/// Moves a world-space point to the nearest crossing of a lattice `spacing` apart,
+/// lined up with the world's origin and axes: the lines the brush grid shows.
+pub(crate) fn snap_to_grid(point: DVec3, spacing: f64) -> DVec3 {
+    if spacing.is_finite() && spacing > 0.0 {
+        (point / spacing).round() * spacing
+    } else {
+        point
+    }
+}
+
 impl LineGesture {
-    pub(crate) fn begin(session: &mut Session, input: &InputFrame) -> Result<Self, String> {
+    /// The brush, size and opacity the line is drawn with.
+    fn settings(from_brush: bool, session: &Session) -> LineSettings {
+        if from_brush {
+            let paint = session.tools.paint;
+            LineSettings {
+                brush: paint.brush,
+                size: paint.size,
+                opacity: paint.opacity,
+                directional: paint.directional,
+            }
+        } else {
+            session.tools.line
+        }
+    }
+
+    pub(crate) fn begin(
+        session: &mut Session,
+        input: &InputFrame,
+        from_brush: bool,
+    ) -> Result<Self, String> {
         let target = session.paint_target()?;
         let hand_world = session
             .view
             .world_from_viewer
             .transform_point(input.main.position);
-        let settings = session.tools.line;
+        let settings = Self::settings(from_brush, session);
         let mirror = session.mirror_in(target.layer);
         let drawing = session
             .strokes_mut()
@@ -367,6 +400,7 @@ impl LineGesture {
             .zip(twin_of)
             .map(|(mirror, original)| Twin::open(drawing, &original, mirror));
         let mut gesture = Self {
+            from_brush,
             target,
             addr,
             twin,
@@ -391,29 +425,23 @@ impl LineGesture {
         }
         self.last_hand = hand_world;
 
-        let mut end_world = hand_world;
-        if input.alt() > 0.5 {
-            // Snap to the world axis the line runs along most.
-            let delta = hand_world - self.origin;
-            let abs = delta.abs();
-            let along = if abs.x >= abs.y && abs.x >= abs.z {
-                DVec3::X
-            } else if abs.y >= abs.z {
-                DVec3::Y
-            } else {
-                DVec3::Z
-            };
-            end_world = self.origin + along * delta.dot(along);
+        let (mut start_world, mut end_world) = (self.origin, hand_world);
+        if !self.from_brush && input.alt() > 0.5 {
+            // Both ends on the nearest crossings of the brush grid, in world space,
+            // at the spacing the grid has at this zoom.
+            let spacing = session.brush_grid_spacing();
+            start_world = snap_to_grid(start_world, spacing);
+            end_world = snap_to_grid(end_world, spacing);
         }
 
         let viewer_from_world = world_from_viewer.inverse();
         let (start, end) = (
-            viewer_from_world.transform_point(self.origin),
+            viewer_from_world.transform_point(start_world),
             viewer_from_world.transform_point(end_world),
         );
         let length = start.distance(end);
         let segments = ((length / LINE_SEGMENT).ceil() as usize).clamp(1, MAX_LINE_SEGMENTS);
-        let settings = session.tools.line;
+        let settings = Self::settings(self.from_brush, session);
         let hand = &input.main;
         let samples: Vec<Sample> = (0..=segments)
             .map(|i| {

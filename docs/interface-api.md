@@ -26,7 +26,7 @@ The pieces:
 
 | Member | What it is |
 |---|---|
-| `run(command: Dictionary) -> Variant` | Runs a command. Returns its result (`true` when it has none) or `null` after emitting `message(text, true)` with the reason. |
+| `run(command: Dictionary) -> Variant` | Runs a command. Returns its result (`true` when it has none) or `null` after emitting `message(text, true)` with the reason. A result that carries a `message` (adding the first light, see `add_layer`) is passed on as `message(text, false)`. |
 | `try_run(command) -> bool` | Runs a command quietly; returns whether it worked. |
 | `begin(label)`, `commit()`, `cancel()` | Wrap several commands into one undo step, or abandon them. |
 | `undo()`, `redo()` | |
@@ -35,7 +35,7 @@ The pieces:
 | `catch_up()` | Reads `status`, the rows, info and settings again now. A command's change signals arrive on the next frame; code that runs a command and reads what it did in the same frame (a context menu built right after the click selected a row, several layers moved one after another, several wheel steps in one frame) calls this in between. |
 | `row(id) -> Dictionary` | The row for a layer, or `{}`. |
 | `current_layer() -> int` | The row last selected, or -1. |
-| `get_info() -> Dictionary` | Document settings and counts. |
+| `get_info() -> Dictionary` | Document settings and counts, among them `paint_layers` and `lit_paint_layers` (how many paint layers scene lights shade). |
 | `get_tools() -> Dictionary` | Tool settings (see `ToolSettings`). |
 | `get_options() -> Dictionary` | Editor options (see `Options`). |
 | `set_option(key, value)` | Shorthand for `set_options`. |
@@ -45,7 +45,7 @@ The pieces:
 
 ### `status`
 
-`doc_revision`, `state_revision`, `dirty`, `can_undo`, `can_redo`, `undo_label`, `redo_label`, `can_transform_again`, `time` (flicks), `seconds`, `frame`, `playing`, `waiting` (held at a Stop), `tool`, `current_layer`, `paint_layer`, `transform_target` (ids or `null`), `selection_count` (selected strokes), `tool_active` (a trigger gesture is under way), `grabbing` (a grip holds something), `copied_keys` (the track the keys waiting to be pasted came from, or `null`).
+`doc_revision`, `state_revision`, `dirty`, `can_undo`, `can_redo`, `undo_label`, `redo_label`, `can_transform_again`, `time` (flicks), `seconds`, `frame`, `playing`, `waiting` (held at a Stop), `tool`, `current_layer`, `paint_layer` (the current layer when it is a paint layer, else `null`), `transform_target` (ids or `null`), `selection_count` (selected strokes), `tool_active` (a trigger gesture is under way, a handle of the gimbal included), `painting` (Paint or Line is laying down a stroke: what the hiss of paint follows), `grabbing` (a grip holds something), `copied_keys` (the track the keys waiting to be pasted came from, or `null`).
 
 With nothing to redo, `redo` repeats the last move of a copy (see `transform_again`); `can_redo` and `redo_label` say so.
 
@@ -118,6 +118,17 @@ symmetry: "off" | "x" | "y" | "z"     mirrored working, across the pivot of the 
 - `mode`: `"normal"`, `"darken"`, `"multiply"`, `"overlay"`, `"burn"`, `"lighten"`, `"screen"`, `"add"`, `"dodge"`, `"hue"`, `"saturation"`, `"color"`, `"luminosity"`, `"opacity"` (the order of the Colorize panel).
 - Sizes are radii in viewer-space metres, 0.0005 to 0.5; use an exponential slider. `inner` is a fraction of `size`. `opacity`, `strength`, `threshold` run 0 to 1. `anim_duration` is seconds.
 
+### What the tools work on
+
+The tools work on the current layer (the last row selected); there is no separate paint target. `status.paint_layer` and a row's `paint_target` name the current layer when it is a paint layer, and nothing otherwise.
+
+- **Paint and Line.** A paint layer current: the stroke goes into the frame it shows. A group, a sequence or the root current (or nothing at all): a new paint layer is made inside it, at the top (with nothing current, at the end of the root), and becomes current; the layer and the stroke are one undo step. A locked group or paint layer refuses. A camera, light, spawn area, picture, model or sound current: the trigger does nothing and gives one message, such as `"Camera" is a camera layer. Choose a paint layer or a group to paint in.`
+- **Colorize, Eraser, Thicken, Nudge, Optimize and the Grab tool.** With strokes selected they work on the selection, whatever is current. Otherwise only on a current, unlocked paint layer; anything else refuses with a message (`… Choose a paint layer to work on, or select strokes.`).
+- **Selection tool.** Sweeps the current paint layer, or every visible unlocked one with `select_in_all_layers`. A plain press deselects whatever is current.
+- The lower button's delete-at-hand and its blink, onion skins, the mirror plane, `optimize` with `scope: "layer"`, `copy_selection_to_frames` and `add_strokes` without a `layer` follow the same rule; with no paint layer current they do nothing (or fail, for commands; `add_strokes` makes a layer in a current group, as the brush does). The other hand's frame stick says why once per push.
+- **Modifier with Paint:** the brush draws a free straight line in its own brush, size and opacity, and the drawing hand's stick resizes it while it is pulled. **Modifier with Line:** both ends of the line snap to the nearest crossings of the brush grid, in world space, at `LimnerScene.brush_grid_spacing()` (1, 2 or 5 times a power of ten, nearest to 5 cm as seen; the core's `brush_grid_spacing`). The brush grid shows while that is so, even with `show_brush_grid` off.
+- A trigger pressed while the drawing hand's own grip holds something (the view, a layer, a handle) does not start the tool; a gesture already under way carries on.
+
 ### Options
 
 `show_grid`, `onion_skin`, `onion_frames` (0 = all), `snap_to_frames`, `snap_to_clips`, `create_layers_at_playhead`, `loop_range`, `recording`, `select_in_all_layers`, `select_in_all_frames`, `auto_select` (`"none"`, `"layer"`, `"group"`), `show_gimbal`, `rotation_snap_steps`, `allow_translate`, `allow_rotate`, `allow_scale`, `level_horizon`, `animate_duplicates`, `mute`, `preview_spawn_area`, `show_extras`, `default_interp` (`"step"`, `"linear"`, `"ease_in"`, `"ease_out"`, `"ease_in_out"`, `"smooth"`), `painting_mode` (the other hand's stick and its click do nothing; the Timeline panel sets it when its tracks are put away), `show_stroke_at_hand` (blink the stroke the lower button would delete), `show_brush_grid` (a small grid in the air around the drawing hand; the shells pass it on to `LimnerWorld.show_brush_grid`).
@@ -142,7 +153,7 @@ A command is a dictionary with a `cmd` entry. Fields marked optional may be left
 ### Layers
 | Command | Fields | Result |
 |---|---|---|
-| `add_layer` | `kind` (`group`, `sequence`, `paint`, `viewpoint`, `camera`, `light`), optional `parent`, `index`, `name` | `{layer}` |
+| `add_layer` | `kind` (`group`, `sequence`, `paint`, `viewpoint`, `camera`, `light`), optional `parent`, `index`, `name` | `{layer}`, and `message` when there is something to tell the user. A light is put where it shows (below). A paint layer added while the document has a light and some lit paint is lit itself. |
 | `delete_layers`, `duplicate_layers` | `layers` (ids) | `{layers}` for duplicate |
 | `set_layer` | `layer`, optional `name`, `visible`, `locked`, `collapsed`, `show_bounds`, `opacity`, `transform`, `pivot` | A `transform` or `pivot` whose rotation has (nearly) zero length, or whose scale is not above zero, is refused; a rotation of any other length is normalised. |
 | `set_layer_kind` | `layer`, `values` (fields of `props` to change) | |
@@ -156,10 +167,12 @@ A command is a dictionary with a `cmd` entry. Fields marked optional may be left
 
 Opacity and transform edits write a key at the playhead when the layer is already animated on that channel or when recording is on; otherwise they set the resting value.
 
+**A new light** (`add_layer` with `kind: "light"`, from any interface) is placed where it can be seen and lights the work, from what the session knows: the eyes (`input_head`), the hands and the view. It goes 0.8 m ahead of the eyes and 0.3 m above them, in the room, and points at a spot 1.3 m ahead and 0.2 m below the eyes: 45 degrees down. "Ahead" is level with the floor, toward the middle of the tracked hands, or straight ahead of the room (-Z, where the desktop's camera looks) when no hand is tracked. The layer keeps a scale of one in its parent, and a point or spot light reaches 3 m of the room as seen when it was added (`range` in the parent's units). The constants are in `crates/limner-core/src/session/lights.rs`. When no paint layer in the document is lit, adding a light also sets every paint layer that is not locked to `lit`, in the same undo step, and the result carries `message`: "Paint layers now take light. A layer set to Unlit in its properties stays flat."
+
 ### What is being worked on (not undoable)
 | Command | Fields |
 |---|---|
-| `select_layers` | `layers`, optional `mode` (`replace`, `add`, `remove`, `toggle`). Fails, changing nothing, when one of them does not exist. |
+| `select_layers` | `layers`, optional `mode` (`replace`, `add`, `remove`, `toggle`). Fails, changing nothing, when one of them does not exist. The last row selected is the current layer, and the tools work on it (see below). |
 | `set_transform_target` | `layer` (id, or `null` for the view) |
 | `set_options` | `values` |
 | `set_tool` | `tool` |
@@ -219,12 +232,15 @@ With `recording` on, any transform or opacity change writes a key at the playhea
 | `selection_to_new_layer` | `copy` (bool) |
 | `optimize` | `scope` (`"layer"` or `"all"`) |
 | `add_strokes` | `strokes` (a list of `{points: [[x, y, z], ...], width, brush?, color?, opacity?, normal?}`), optional `layer` (the paint layer when left out), `space` (`"layer"` or `"viewer"`), `select`. Adds ready-made strokes to the frame the layer shows; returns `{strokes, layer}`. `editor.add_text(text, height, solid, font, align)` builds on it: line breaks start new lines, the block is centred in front of the viewer, `align` is a `HorizontalAlignment` (left, centre, right), and `font` comes from `TextStrokes.font_named(family, bold, italic)` (empty family: the built-in font; `null` when the family is not installed; a family without its own bold or italic face is thickened or slanted). |
+| `set_shading` | `shading` (`"lit"` or `"unlit"`), optional `layers`: sets it on each paint layer listed and on every paint layer inside each group listed, or with no `layers` on every paint layer in the document, as one undo step ("Change shading"). Locked layers and layers in a locked group are left alone. Returns `{changed}`. The Layer panel's "Light all paint layers" sends it. |
 | `bake_lighting` | `layer`: paints the light falling on the lit paint layers in and under it into their strokes and makes them unlit, with the shadows of lights whose `shadows` is on. Returns `{layers, points}`. |
 | `transform_again` | After a copy was moved (a grab or a gimbal drag with the modifier held): makes another copy, moved as far again. With the option `animate_duplicates`, stroke copies land on a new frame each. Fails when there is nothing to repeat; see `status.can_transform_again`. |
 
 ## Hands, grabs and the gimbal
 
 Shells feed the scene what the hands do, once per frame, and the core decides what that means. Panels do not need any of this; it is here for the shells (`godot/desktop`, `godot/xr`) and for anything drawn at the hands.
+
+Only one shell runs at a time, but which one can change while the app runs (`LimnerApp.switch_to` in `godot/main.gd`; `docs/xr.md`, "Changing to the desktop and back"). The world, the editor and the document stay; a shell puts nothing in the world that its `stop()` does not take away again, and a panel keeps no state that only its shell's lifetime would clear. The Settings panel's `switch_requested(to)` is how a panel asks for the change.
 
 | `LimnerScene` method | What it does |
 |---|---|
@@ -233,7 +249,8 @@ Shells feed the scene what the hands do, once per frame, and the core decides wh
 | `input_hand_absent(which)`, `input_head(position)` | |
 | `input_commit(delta) -> Array` | Applies the frame. Returns feedback: `{type: "haptic", main, strength, seconds}`, `{type: "sound", name}`, `{type: "message", text}`, `{type: "menu"}`. |
 | `input_cancel()` | Abandons the gesture or grab under way and undoes what it did. |
-| `tool_cursor() -> Dictionary` | `{tracked, position, rotation, tool, radius, inner, color, opacity, active, alt, at_handle}` |
+| `tool_cursor() -> Dictionary` | `{tracked, position, mirror_position, rotation, tool, radius, inner, color, opacity, active, painting, blocked, grid_snap, alt, at_handle}`. `active`: the trigger is working the tool or a handle. `painting`: Paint or Line is laying down a stroke. `blocked`: the message the trigger would give because the current layer is not one the tool can work on, or `""`; `ToolCursor` then draws a hollow grey ring. `grid_snap`: the Line tool is in hand with the modifier held. |
+| `brush_grid_spacing() -> float` | The size of a cell of the brush grid at this zoom, in world units: what `LimnerWorld` draws and the Line tool snaps to. |
 | `gimbal() -> Dictionary` | Empty when there is none; else `{subject, layer, position, rotation, size, hovered, active, arrow_start, arrow_end, plane_near, plane_far, center_radius}`. `GimbalView` draws it. |
 | `is_grabbing(which) -> bool` | |
 | `mirror_plane() -> Dictionary` | Empty unless mirrored working is on; else `{position, rotation, size}` of the mirror in viewer space. `LimnerWorld` draws it. |
@@ -245,7 +262,9 @@ A grip takes hold of, in this order: a handle of the gimbal the hand is at; the 
 
 Selected strokes carried by a grip, or turned by the trigger on a ring of the gimbal, stay where they are in the document until the grip or trigger lets go; the scene shows them, and their highlight, moved, so a frame of the carry costs the same however much is selected. The move is then written into the strokes once, as one undo step. Anything that reads stroke positions (commands, `layer_details`, saving) sees them where they were until then; the gimbal and the selection's pivot follow the hand all along. In the core this is `Session::selection_motion()`, and `SelectionMotion::split` divides a drawing into what stays and what moves.
 
-The gimbal shows when `show_gimbal` is on and either a layer is the transform object or the Selection tool has a selection. A grip on a handle moves or turns the thing; the trigger on an arrow or the middle moves the pivot, and on a ring turns in `rotation_snap_steps` steps. On the desktop the left button over a handle is the grip, and with Alt the trigger.
+The gimbal shows when `show_gimbal` is on, for: the selection, when the Selection tool is in hand and strokes are selected; else the layer that is the transform object; else, while the view is the transform object, the current layer, unless that is the root or locked. A grip on a handle moves or turns the thing; the trigger on an arrow, a square or the middle moves the pivot, and on a ring turns in `rotation_snap_steps` steps. On the desktop the left button over a handle is the grip, and with Alt the trigger. A click of the drawing hand's stick shows or hides it; shown with nothing to move, it gives the message "Nothing to transform: choose a layer, or select strokes".
+
+A layer's gimbal sits at its pivot. A pivot that was never set (the layer's origin, unturned: the identity, as a new layer and most painted ones have) puts the gimbal at the middle of the layer's content instead, as `reset_pivot` would, or at the origin when the layer has no content of its own. The moment the gimbal starts to move, turn or re-pivot such a layer, that middle is written as the layer's pivot, in the same undo step, so the layer turns about it and its animation interpolates about it from then on; painting more does not move it. The file format is unchanged: a pivot that is the identity is simply one not yet set. One consequence: after `make_pivot_origin` the pivot is the identity again, so the gimbal goes back to the middle of the content.
 
 ## Files and media
 

@@ -194,20 +194,28 @@ func test_headset_panels_follow_the_scheme() -> void:
 		return
 	(shell.rig as SimRig).listen_to_devices = false
 	await frames(4)
+	check_eq(Kit.headset, true, "the panels take the headset's look")
+	check_eq(Kit.scheme_preference(), "headset_theme", "and follow the headset's own scheme")
 	var surface: XRPanelSurface = shell.palette.surfaces["Tools"]
 	var root: PanelContainer = surface._root
 	var sheet := root.get_theme_stylebox("panel") as StyleBoxFlat
-	check_eq(Color(sheet.bg_color, 1.0), Color(DARK.BG, 1.0), "a sheet is dark")
-	preferences.set_value("theme", "light")
-	await frames(2)
-	sheet = root.get_theme_stylebox("panel") as StyleBoxFlat
-	check_eq(Color(sheet.bg_color, 1.0), Color(LIGHT.BG, 1.0), "the sheet turns light")
-	check_eq(surface.content.get_theme_color("font_color", "Label"), LIGHT.TEXT, "its labels read light")
-	var tab: Button = shell.palette._strip.buttons["Tools"]
-	check_eq(_icon_color(tab.icon), LIGHT.TEXT, "the palette's tabs are made again")
-	check_eq(shell._mirror_hint.get_theme_color("font_color"), LIGHT.TEXT, "the line on the desktop window follows")
+	check_eq(Color(sheet.bg_color, 1.0), Color(LIGHT.BG, 1.0), "a sheet is light, as Quill's are, whatever the desktop uses")
 	preferences.set_value("theme", "dark")
 	await frames(2)
 	sheet = root.get_theme_stylebox("panel") as StyleBoxFlat
-	check_eq(Color(sheet.bg_color, 1.0), Color(DARK.BG, 1.0), "and back")
+	check_eq(Color(sheet.bg_color, 1.0), Color(LIGHT.BG, 1.0), "the desktop's scheme does not reach the headset")
+	preferences.set_value("headset_theme", "dark")
+	await frames(2)
+	sheet = root.get_theme_stylebox("panel") as StyleBoxFlat
+	check_eq(Color(sheet.bg_color, 1.0), Color(DARK.BG, 1.0), "the sheet turns dark")
+	check_eq(surface.content.get_theme_color("font_color", "Label"), DARK.TEXT, "its labels read dark")
+	var coin: Button = shell.palette.coins["Tools"]
+	check_eq(_icon_color(coin.icon), DARK.TEXT, "the palette's round buttons are made again")
+	check_eq(shell._mirror_hint.get_theme_color("font_color"), DARK.TEXT, "the line on the desktop window follows")
+	preferences.set_value("headset_theme", "light")
+	await frames(2)
+	sheet = root.get_theme_stylebox("panel") as StyleBoxFlat
+	check_eq(Color(sheet.bg_color, 1.0), Color(LIGHT.BG, 1.0), "and back")
+	shell.queue_free()
+	Kit.set_headset(false)
 	check(messages.is_empty(), "no errors: %s" % [messages])

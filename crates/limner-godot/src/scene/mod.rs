@@ -623,9 +623,13 @@ impl LimnerScene {
     }
 
     /// What to draw at the drawing hand: `{tracked, position, rotation, tool, radius,
-    /// inner (or null), color, opacity, active, alt, at_handle}`, in viewer space.
-    /// `at_handle` is true when the hand is at a handle of the gimbal, where the
-    /// trigger works the handle instead of the tool.
+    /// inner (or null), color, opacity, active, painting, blocked, grid_snap, alt,
+    /// at_handle}`, in viewer space. `at_handle` is true when the hand is at a handle
+    /// of the gimbal, where the trigger works the handle instead of the tool.
+    /// `painting` is true while Paint or Line lays down a stroke. `blocked` is the
+    /// message the trigger would give because the current layer is not one the tool
+    /// can work on, or an empty string when it would work. `grid_snap` is true when
+    /// the Line tool would snap to the brush grid.
     #[func]
     fn tool_cursor(&self) -> VarDictionary {
         let cursor = self.session.cursor();
@@ -657,6 +661,9 @@ impl LimnerScene {
             "color" => color_from_linear(cursor.color),
             "opacity" => cursor.opacity,
             "active" => cursor.active,
+            "painting" => cursor.painting,
+            "blocked" => cursor.blocked.as_deref().unwrap_or(""),
+            "grid_snap" => cursor.grid_snap,
             "alt" => cursor.alt,
             "at_handle" => cursor.at_handle,
         }
@@ -749,6 +756,13 @@ impl LimnerScene {
     #[func]
     fn view_scale(&self) -> f64 {
         self.session.view.scale()
+    }
+
+    /// The size of a cell of the brush grid at this zoom, in world units: the lattice
+    /// the brush grid shows and the Line tool snaps to with the modifier.
+    #[func]
+    fn brush_grid_spacing(&self) -> f64 {
+        self.session.brush_grid_spacing()
     }
 
     // ----- rendering -----

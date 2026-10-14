@@ -19,8 +19,6 @@ const HISS_SECONDS := 1.0
 ## Length of the stretch at the end of the hiss that is blended into its start so
 ## that the repeat cannot be heard, in seconds.
 const HISS_BLEND_SECONDS := 0.1
-## Tools that lay down paint, and so hiss while they are applied.
-const PAINTING_TOOLS := ["paint", "line"]
 
 var _players := {}
 var _hiss: AudioStreamPlayer
@@ -62,10 +60,12 @@ func set_painting(painting: bool) -> void:
 
 
 ## Keeps the painting hiss in step with what the drawing hand is doing. Call it once
-## a frame, after the frame's input has been committed.
+## a frame, after the frame's input has been committed. It hisses only while Paint or
+## Line lays down a stroke: not while the trigger works a handle of the gimbal, nor
+## for the tools that change strokes.
 func follow_tool(scene: LimnerScene) -> void:
 	var cursor := scene.tool_cursor()
-	set_painting(bool(cursor.active) and PAINTING_TOOLS.has(cursor.tool))
+	set_painting(bool(cursor.get("painting", false)))
 
 
 ## True while the painting hiss is sounding.
