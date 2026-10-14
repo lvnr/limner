@@ -74,9 +74,12 @@ Export to glTF, USD/USDZ, FBX and OBJ with hierarchy, animation, lights and came
 ## A look
 
 <p align="center">
-  <img src="docs/images/desktop.png" alt="The desktop interface: tools on the left, layers and properties on the right, the timeline below" width="860">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/desktop-light.png">
+    <img src="docs/images/desktop.png" alt="The desktop interface: tools on the left, layers and properties on the right, the timeline below" width="860">
+  </picture>
 </p>
-<p align="center"><sub>The desktop interface. The same panels ride on the hand in a headset.</sub></p>
+<p align="center"><sub>The desktop interface, in the dark or light scheme to match your GitHub theme. The same panels ride on the hand in a headset.</sub></p>
 
 ## Getting started
 
