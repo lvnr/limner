@@ -147,21 +147,29 @@ scripts/{fetch-godot,godot,test,shot}.{sh,ps1}
 - [x] **11.2 `docs/handoff.md`, `docs/quill-differences.md`, `docs/roadmap.md`, README, `CLAUDE.md`.**
 - [x] **11.3 Full verification pass and final report.** Numbers below.
 
+## After the hand-over
+
+Done on the Mac after the plan was finished, before the repository went public at github.com/lvnr/limner:
+
+- The known gaps that did not need a headset: the Grab and Selection tools across the mirror, a twin of the tool preview at the mirror image, text in several lines in any installed font, shadows when baking light, carrying a large selection without re-making its strokes, the Timeline scrolling during drags and Escape cancelling them, sounds and peaks in the Performance panel, sound in USD and USDZ exports, a light colour scheme, Quill's painting mode and brush grid, the blink on the stroke the lower button would delete, and spawn areas as saved views.
+- A code review of the whole codebase in four parts, and fixes for what it found: nested edits that a failed tool start could undo, transforms that stored NaN, hostile files that could claim huge allocations, a recovery copy deleted on recovery, and a headset session with no way to save, among others.
+- Packaging scripts, the MIT licence, a logo, a README and a CI workflow (which has not run yet: GitHub refused to start it because of a billing lock on the account).
+
 ## State at hand-over
 
 Measured on the development Mac (M1 Max, Godot 4.8 dev 7) with everything above committed.
 
 | Check | Result |
 |---|---|
-| `cargo test --workspace` | 517 passed, 0 failed, 3 ignored; 232 of them are in `limner-core` |
+| `cargo test --workspace` | 607 passed, 0 failed, 4 ignored; 283 of them are in `limner-core` |
 | The three ignored tests | Two run Apple's USD tools on exported files and pass when asked for with `-- --ignored`; the third writes sample files for outside tools |
 | `cargo clippy --workspace --all-targets`, `cargo fmt --all -- --check` | Clean |
-| Interface tests, headless (`scripts/test.sh`) | 177 passed, 0 failed |
-| Interface tests that need a window (`-- capture export_panel monitor`) | 26 passed, 0 failed |
+| Interface tests, headless (`scripts/test.sh`) | 221 passed, 0 failed |
+| Interface tests that need a window (`-- capture export_panel monitor`) | 30 passed, 0 failed |
 | `scripts/package.sh` | A 74 MB macOS package. The packaged app starts, loads the extension, draws, and runs the simulated headset interface |
 | Frame time on the owner's sample project (53 layers, 948,032 triangles) at 1440 x 900, V-Sync off | 3.2 ms in the packaged release build, 3.3 ms in the development build |
 
-About 53,000 lines of Rust and 19,000 of GDScript.
+About 59,000 lines of Rust and 23,000 of GDScript.
 
 Not covered by any of this: a headset, Windows, Linux, a Quest, and other 3D programs opening the exports. `docs/handoff.md` has the list.
 
