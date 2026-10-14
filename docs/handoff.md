@@ -24,7 +24,12 @@ The project is public at [github.com/lvnr/limner](https://github.com/lvnr/limner
 
 ```powershell
 git clone https://github.com/lvnr/limner.git
+cd limner
+git config user.name lvnr
+git config user.email 3449973+lvnr@users.noreply.github.com
 ```
+
+The two `git config` lines matter: the repository is public, and without them commits made on the PC would carry whatever email address that PC's Git uses.
 
 The research behind the project (the Quill feature report and its notes, `reports/` and `research_notes/`) is kept out of the repository on purpose: it describes Quill's install files and quotes numbers from a private sample. It stays on the Mac; copy those two folders across by hand if the PC session should have them, and keep them out of git (they are listed in `.gitignore`).
 

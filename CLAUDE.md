@@ -27,7 +27,7 @@ Everything in the plan is built. It was built on a Mac with no headset, so nothi
 - `~/projects/quill-exporter/` is the owner's private artwork and Quill's exporter. Read-only. Never copy it into the repository. Tests that use it must skip when it is missing (`LIMNER_SAMPLE_DIR` overrides the path) and print only totals.
 - Do not run, decompile or inspect Quill's binaries (its EULA forbids reverse engineering). Format knowledge comes from user-owned files and from the Apache/MIT-licensed sources under `local/ref/`. Measuring how Quill behaves by using it, as any user would, is fine and wanted.
 - `limner-core` has no I/O and no Godot types. `limner-godot` holds no product logic.
-- The repository is public at github.com/lvnr/limner (MIT). Before committing, check new files for local paths, private material and anything from the research notes. Commits use the GitHub noreply address set in the repo's git config.
+- The repository is public at github.com/lvnr/limner (MIT). Before committing, check new files for local paths, private material and anything from the research notes. Commits use the GitHub noreply address: on a fresh clone, run `git config user.name lvnr` and `git config user.email 3449973+lvnr@users.noreply.github.com` in the repository before the first commit, so that no personal address is published.
 
 ## Layout
 
