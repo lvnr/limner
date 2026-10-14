@@ -4,18 +4,22 @@
 //! the result. It holds no product logic: what is visible, where, and what an edit
 //! does are all decided in the core.
 
+mod nodes;
+mod overlays;
+mod strokes;
+
 use crate::convert::{
     color_from_linear, dictionary_from_json, dvec3, json_from_variant, transform3d,
     variant_from_json,
 };
-use crate::meshes::{chunk_key, MeshCache};
+use crate::meshes::MeshCache;
 use godot::classes::image::Format;
-use godot::classes::{Image, Material, MeshInstance3D};
+use godot::classes::{Image, Material};
 use godot::prelude::*;
 use limner::core::dither;
-use limner::core::eval::{Content, LayerState};
-use limner::core::glam::{DAffine3, DQuat, DVec3};
-use limner::core::model::{Document, Drawing, LayerId};
+use limner::core::eval::Content;
+use limner::core::glam::{DQuat, DVec3};
+use limner::core::model::{Document, LayerId};
 use limner::core::session::{
     Feedback, HandInput, InputFrame, PlaybackEvent, Session, DEFAULT_ZOOM_LIMITS,
 };
@@ -23,34 +27,7 @@ use limner::core::tess::SurfaceKind;
 use limner::core::time;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-
-/// One chunk of a paint layer on screen.
-struct ChunkInstance {
-    node: Gd<MeshInstance3D>,
-    /// Identity of the chunk whose mesh the node shows; zero when it shows none.
-    key: usize,
-    kinds: Vec<SurfaceKind>,
-    origin: DVec3,
-    /// Whether the materials currently applied are the faded-layer set.
-    faded: Option<bool>,
-    opacity: f32,
-    transform: Option<Transform3D>,
-    visible: bool,
-}
-
-#[derive(Default)]
-struct LayerInstances {
-    chunks: Vec<ChunkInstance>,
-}
-
-#[derive(Default, Clone, Copy)]
-struct Stats {
-    visible_layers: usize,
-    chunks: usize,
-    vertices: usize,
-    triangles: usize,
-    meshes_built: usize,
-}
+use strokes::{container, set_visible, sync_layer, LayerInstances, Stats};
 
 #[derive(GodotClass)]
 #[class(base=Node3D)]
@@ -67,6 +44,8 @@ pub struct LimnerScene {
     cache: MeshCache,
     layers: HashMap<LayerId, LayerInstances>,
     container: Option<Gd<Node3D>>,
+    /// Nodes for the layers that are not paint.
+    nodes: nodes::LayerNodes,
     /// Indexed by `SurfaceKind`.
     materials: [Option<Gd<Material>>; 4],
     stats: Stats,
@@ -86,6 +65,7 @@ impl INode3D for LimnerScene {
             cache: MeshCache::default(),
             layers: HashMap::new(),
             container: None,
+            nodes: nodes::LayerNodes::default(),
             materials: [None, None, None, None],
             stats: Stats::default(),
         }
@@ -235,22 +215,63 @@ impl LimnerScene {
         Image::create_from_data(size as i32, size as i32, false, Format::R8, &data)
     }
 
-    /// Opens the document at `path`. Returns `{ok, error, warnings, kind}`.
+    /// Opens the document at `path`: a native project or a Quill project folder.
+    /// Returns `{ok, error, warnings, kind}`, where `kind` is "Limner project" or
+    /// "Quill project".
     #[func]
     fn open(&mut self, path: GString) -> VarDictionary {
         let path_string = path.to_string();
         match limner::open(Path::new(&path_string)) {
             Ok(opened) => {
                 self.clear_instances();
-                self.source_path = path_string;
                 self.source_kind = opened.kind.label().to_owned();
                 self.warnings = opened.warnings;
                 self.session.replace_document(opened.document);
+                match opened.kind {
+                    limner::SourceKind::Limn => {
+                        if let Some(state) = limner::read_state(Path::new(&path_string)) {
+                            self.session.restore_editor_state(&state);
+                        }
+                    }
+                    limner::SourceKind::Quill => {
+                        if let Some(state) = &opened.quill_state {
+                            self.adopt_quill_state(state);
+                        }
+                    }
+                }
+                self.source_path = path_string;
                 self.signals().document_replaced().emit();
                 vdict! { "ok" => true, "error" => "", "kind" => self.source_kind.clone(), "warnings" => &self.get_warnings() }
             }
             Err(error) => {
                 vdict! { "ok" => false, "error" => error.to_string(), "kind" => "", "warnings" => &PackedStringArray::new() }
+            }
+        }
+    }
+
+    /// Saves the document at `path` in the native format: a project folder, or one
+    /// packed file when the path ends in `.limnz`. The editor's working state is
+    /// saved with it, and `thumbnail` (PNG data, may be empty) as the project's
+    /// picture. Returns `{ok, error, bytes_written}`.
+    #[func]
+    fn save(&mut self, path: GString, thumbnail: PackedByteArray) -> VarDictionary {
+        let path_string = path.to_string();
+        let state = self.session.editor_state();
+        let thumbnail = (!thumbnail.is_empty()).then(|| thumbnail.as_slice());
+        match limner::save_with_state(
+            self.session.doc(),
+            Path::new(&path_string),
+            &state,
+            thumbnail,
+        ) {
+            Ok(report) => {
+                self.source_path = path_string;
+                self.source_kind = limner::SourceKind::Limn.label().to_owned();
+                self.session.mark_saved();
+                vdict! { "ok" => true, "error" => "", "bytes_written" => report.bytes_written as i64 }
+            }
+            Err(error) => {
+                vdict! { "ok" => false, "error" => error.to_string(), "bytes_written" => 0 }
             }
         }
     }
@@ -476,6 +497,19 @@ impl LimnerScene {
         transform3d(&self.session.view.viewer_from_world_affine())
     }
 
+    /// Where a layer is in viewer space at the playhead: the transform for anything
+    /// drawn at the layer, such as a gizmo. Its scale includes the layer's and the view's.
+    #[func]
+    fn layer_transform(&self, layer: i64) -> Transform3D {
+        let frame = self.session.evaluate();
+        match frame.get(LayerId(layer.max(0) as u64)) {
+            Some(state) => {
+                transform3d(&(self.session.view.viewer_from_world_affine() * state.world))
+            }
+            None => Transform3D::IDENTITY,
+        }
+    }
+
     /// World units per metre of viewer space.
     #[func]
     fn view_scale(&self) -> f64 {
@@ -540,6 +574,9 @@ impl LimnerScene {
             true
         });
 
+        self.nodes
+            .sync(container, session, &frame, &viewer_from_world);
+
         stats.meshes_built = self.cache.built_this_frame;
         self.cache.end_frame();
         self.stats = stats;
@@ -547,6 +584,20 @@ impl LimnerScene {
 }
 
 impl LimnerScene {
+    /// Carries over what a Quill project remembers about how it was being worked on.
+    fn adopt_quill_state(&mut self, state: &limner::quill::QuillState) {
+        if let Some(layer) = state
+            .paint_layer
+            .as_deref()
+            .and_then(|path| self.session.doc().find_by_path(path))
+        {
+            self.session.set_current_layer(layer);
+        }
+        if let Some(show_grid) = state.show_grid {
+            self.session.options.show_grid = show_grid;
+        }
+    }
+
     /// Tells the interface about changes since it was last told.
     fn announce_changes(&mut self) {
         let now = (self.session.doc_revision(), self.session.state_revision());
@@ -560,6 +611,7 @@ impl LimnerScene {
     }
 
     fn clear_instances(&mut self) {
+        self.nodes.clear();
         for (_, instances) in self.layers.drain() {
             for chunk in instances.chunks {
                 chunk.node.clone().queue_free();
@@ -567,115 +619,5 @@ impl LimnerScene {
         }
         self.cache.clear();
         self.stats = Stats::default();
-    }
-}
-
-/// The node that parents every stroke mesh, created on first use.
-fn container<'a>(slot: &'a mut Option<Gd<Node3D>>, base: &mut Base<Node3D>) -> &'a mut Gd<Node3D> {
-    slot.get_or_insert_with(|| {
-        let mut node = Node3D::new_alloc();
-        node.set_name("Strokes");
-        base.to_init_gd().add_child(&node);
-        node
-    })
-}
-
-fn set_visible(chunk: &mut ChunkInstance, visible: bool) {
-    if chunk.visible != visible {
-        chunk.node.set_visible(visible);
-        chunk.visible = visible;
-    }
-}
-
-/// A small per-layer number that keeps the dither patterns of different layers apart.
-fn layer_seed(id: LayerId) -> f32 {
-    (id.0.wrapping_mul(2_654_435_761) % 251) as f32
-}
-
-#[allow(clippy::too_many_arguments)]
-fn sync_layer(
-    instances: &mut LayerInstances,
-    state: &LayerState,
-    drawing: &Drawing,
-    viewer_from_world: &DAffine3,
-    cache: &mut MeshCache,
-    materials: &[Option<Gd<Material>>; 4],
-    container: &mut Gd<Node3D>,
-    stats: &mut Stats,
-) {
-    let chunks = drawing.chunks();
-    while instances.chunks.len() < chunks.len() {
-        let mut node = MeshInstance3D::new_alloc();
-        node.set_visible(false);
-        node.set_instance_shader_parameter("layer_seed", &layer_seed(state.id).to_variant());
-        container.add_child(&node);
-        instances.chunks.push(ChunkInstance {
-            node,
-            key: 0,
-            kinds: Vec::new(),
-            origin: DVec3::ZERO,
-            faded: None,
-            opacity: -1.0,
-            transform: None,
-            visible: false,
-        });
-    }
-
-    let layer_matrix = *viewer_from_world * state.world;
-    let faded = state.opacity < 0.999;
-
-    for (instance, chunk) in instances.chunks.iter_mut().zip(chunks) {
-        let key = chunk_key(chunk);
-        let built = cache.get(chunk);
-        let Some(built) = built else {
-            instance.key = key;
-            instance.kinds.clear();
-            set_visible(instance, false);
-            continue;
-        };
-        if instance.key != key || instance.kinds.is_empty() {
-            instance.node.set_mesh(&built.mesh);
-            instance.kinds.clone_from(&built.kinds);
-            instance.origin = built.origin;
-            instance.key = key;
-            instance.faded = None;
-            instance.transform = None;
-        }
-        if instance.faded != Some(faded) {
-            for (surface, kind) in instance.kinds.iter().enumerate() {
-                // On a faded layer even opaque strokes are dithered.
-                let material_kind = match (faded, kind) {
-                    (true, SurfaceKind::TubeOpaque) => SurfaceKind::TubeSeeThrough,
-                    (true, SurfaceKind::FlatOpaque) => SurfaceKind::FlatSeeThrough,
-                    _ => *kind,
-                };
-                if let Some(material) = &materials[material_kind as usize] {
-                    instance
-                        .node
-                        .set_surface_override_material(surface as i32, material);
-                }
-            }
-            instance.faded = Some(faded);
-        }
-        if instance.opacity != state.opacity {
-            instance
-                .node
-                .set_instance_shader_parameter("layer_opacity", &state.opacity.to_variant());
-            instance.opacity = state.opacity;
-        }
-        // The chunk centre is added here, in double precision, so vertices stay small
-        // numbers however far the chunk is from the layer origin.
-        let transform = transform3d(&(layer_matrix * DAffine3::from_translation(instance.origin)));
-        if instance.transform != Some(transform) {
-            instance.node.set_transform(transform);
-            instance.transform = Some(transform);
-        }
-        set_visible(instance, true);
-        stats.chunks += 1;
-        stats.vertices += built.vertices;
-        stats.triangles += built.triangles;
-    }
-    for instance in instances.chunks.iter_mut().skip(chunks.len()) {
-        set_visible(instance, false);
     }
 }

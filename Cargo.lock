@@ -409,6 +409,7 @@ dependencies = [
  "limner-core",
  "limner-format",
  "limner-quill",
+ "serde_json",
  "tempfile",
  "thiserror",
 ]

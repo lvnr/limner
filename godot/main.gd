@@ -7,6 +7,7 @@ extends Node
 ##   -- --time <seconds>     move the playhead
 ##   -- --orbit <yaw,pitch>  turn the view, in degrees, after framing
 ##   -- --exec <json>        run a command, e.g. '{"cmd":"add_layer","kind":"light"}'
+##   -- --save <path>        save as a .limn folder or .limnz file
 ##   -- --demo               paint a sample sheet with every brush
 ##   -- --no-panels          hide the docks
 ##   -- --static-dither      keep the dither pattern still (for repeatable screenshots)
@@ -71,6 +72,9 @@ func _apply_arguments() -> void:
 					print("exec ", args[i], " -> ", reply)
 				else:
 					push_error("--exec needs a JSON object, got: %s" % args[i])
+			"--save":
+				i += 1
+				editor.save_document(args[i])
 			"--demo":
 				LimnerDemo.run(editor)
 			"--no-panels":

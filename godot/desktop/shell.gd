@@ -80,6 +80,7 @@ func _ready() -> void:
 	cursor.scene = world.scene
 	world.add_child(cursor)
 	_build_interface()
+	get_tree().auto_accept_quit = false
 	editor.message.connect(show_message)
 	editor.document_changed.connect(_refresh)
 	editor.state_changed.connect(_refresh)
@@ -199,6 +200,9 @@ func _build_top_bar() -> Control:
 	file.add_item("New", FileMenu.NEW, KEY_MASK_CMD_OR_CTRL | KEY_N)
 	file.add_item("Open…", FileMenu.OPEN, KEY_MASK_CMD_OR_CTRL | KEY_O)
 	file.add_separator()
+	file.add_item("Save", FileMenu.SAVE, KEY_MASK_CMD_OR_CTRL | KEY_S)
+	file.add_item("Save As…", FileMenu.SAVE_AS, KEY_MASK_CMD_OR_CTRL | KEY_MASK_SHIFT | KEY_S)
+	file.add_separator()
 	file.add_item("Quit", FileMenu.QUIT, KEY_MASK_CMD_OR_CTRL | KEY_Q)
 	file.id_pressed.connect(_on_file_menu)
 	menu.add_child(file)
@@ -295,27 +299,113 @@ func _thousands(value: int) -> String:
 func _on_file_menu(id: int) -> void:
 	match id:
 		FileMenu.NEW:
-			editor.new_document()
+			_after_saving_changes(editor.new_document)
 		FileMenu.OPEN:
-			_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_ANY
-			_file_dialog.title = "Open a Limner document or a Quill project folder"
-			for connection in _file_dialog.file_selected.get_connections():
-				_file_dialog.file_selected.disconnect(connection.callable)
-			for connection in _file_dialog.dir_selected.get_connections():
-				_file_dialog.dir_selected.disconnect(connection.callable)
-			_file_dialog.file_selected.connect(_open_path)
-			_file_dialog.dir_selected.connect(_open_path)
-			_file_dialog.popup_centered_ratio(0.7)
+			_after_saving_changes(_choose_document_to_open)
+		FileMenu.SAVE:
+			save()
+		FileMenu.SAVE_AS:
+			save_as()
 		FileMenu.QUIT:
-			get_tree().quit()
+			_after_saving_changes(get_tree().quit)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_after_saving_changes(get_tree().quit)
+
+
+## Shows the file dialog and calls `chosen` with the path picked.
+func _ask_for_path(mode: FileDialog.FileMode, title: String, filters: PackedStringArray, chosen: Callable) -> void:
+	for selected: Signal in [_file_dialog.file_selected, _file_dialog.dir_selected]:
+		for connection: Dictionary in selected.get_connections():
+			selected.disconnect(connection.callable)
+	_file_dialog.file_mode = mode
+	_file_dialog.title = title
+	_file_dialog.filters = filters
+	_file_dialog.file_selected.connect(chosen, CONNECT_ONE_SHOT)
+	if mode == FileDialog.FILE_MODE_OPEN_ANY:
+		_file_dialog.dir_selected.connect(chosen, CONNECT_ONE_SHOT)
+	_file_dialog.popup_centered_ratio(0.7)
+
+
+func _choose_document_to_open() -> void:
+	_ask_for_path(FileDialog.FILE_MODE_OPEN_ANY, "Open a Limner project or a Quill project folder", PackedStringArray(), _open_path)
 
 
 func _open_path(path: String) -> void:
 	# A file inside a project folder stands for the folder.
-	if path.get_file() in ["Quill.json", "Quill.qbin", "State.json"]:
+	if path.get_file() in ["Quill.json", "Quill.qbin", "State.json", "limn.json"]:
 		path = path.get_base_dir()
 	if editor.open_document(path):
-		frame_all()
+		# A project saved by Limner reopens with the view it was left with.
+		if not editor.path_is_native:
+			frame_all()
+
+
+## Saves to where the document came from, or asks where when it has no place of its own yet.
+func save() -> void:
+	if editor.path != "" and editor.path_is_native:
+		editor.save_document(editor.path, await _thumbnail())
+	else:
+		save_as()
+
+
+func save_as() -> void:
+	var filters := PackedStringArray(["*.limn ; Limner project (a folder)", "*.limnz ; Limner project packed into one file"])
+	_file_dialog.current_file = editor.title() + ".limn"
+	_ask_for_path(FileDialog.FILE_MODE_SAVE_FILE, "Save the project", filters, _save_to)
+
+
+func _save_to(path: String) -> void:
+	if path.get_extension().to_lower() not in ["limn", "limnz"]:
+		path += ".limn"
+	editor.save_document(path, await _thumbnail())
+
+
+## A small picture of the view without the panels, as PNG data.
+func _thumbnail() -> PackedByteArray:
+	var was_visible := ui.visible
+	ui.visible = false
+	await RenderingServer.frame_post_draw
+	var image := get_viewport().get_texture().get_image()
+	ui.visible = was_visible
+	if image == null or image.is_empty():
+		return PackedByteArray()
+	image.resize(512, maxi(1, roundi(512.0 * image.get_height() / image.get_width())), Image.INTERPOLATE_LANCZOS)
+	return image.save_png_to_buffer()
+
+
+## Runs `action` straight away when there is nothing to lose, and otherwise asks first
+## whether to save, discard or stay.
+func _after_saving_changes(action: Callable) -> void:
+	if not world.scene.status().dirty:
+		action.call()
+		return
+	var dialog := ConfirmationDialog.new()
+	dialog.title = "Unsaved changes"
+	dialog.dialog_text = "Save the changes to %s first?" % editor.title()
+	dialog.ok_button_text = "Save"
+	dialog.cancel_button_text = "Cancel"
+	dialog.add_button("Don't save", true, "discard")
+	dialog.confirmed.connect(func() -> void:
+		if editor.path != "" and editor.path_is_native:
+			if editor.save_document(editor.path, await _thumbnail()):
+				action.call()
+		else:
+			# Nowhere to save to yet: ask, and leave the action for the user to repeat.
+			save_as()
+	)
+	dialog.custom_action.connect(func(_name: StringName) -> void:
+		dialog.hide()
+		action.call()
+	)
+	dialog.visibility_changed.connect(func() -> void:
+		if not dialog.visible:
+			dialog.queue_free()
+	)
+	ui.add_child(dialog)
+	dialog.popup_centered()
 
 
 func _on_edit_menu(id: int) -> void:

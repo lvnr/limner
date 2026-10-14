@@ -116,6 +116,37 @@ pub fn save(doc: &Document, path: &Path) -> Result<SaveReport, SaveError> {
     Ok(limner_format::save_project(doc, path, &options)?)
 }
 
+/// Saves `doc` like [`save`], and with it the editor's working state and, when given,
+/// a PNG picture of the project. Both travel with the project but are not part of
+/// the document: a project opens the same without them.
+pub fn save_with_state(
+    doc: &Document,
+    path: &Path,
+    state: &serde_json::Value,
+    thumbnail: Option<&[u8]>,
+) -> Result<SaveReport, SaveError> {
+    if is_packed_path(path) {
+        return Ok(limner_format::save_packed_with(
+            doc,
+            path,
+            &SaveOptions::default(),
+            Some(state),
+            thumbnail,
+        )?);
+    }
+    let report = save(doc, path)?;
+    limner_format::write_state(path, state)?;
+    if let Some(png) = thumbnail {
+        limner_format::write_thumbnail(path, png)?;
+    }
+    Ok(report)
+}
+
+/// The editor state saved with a native project, if it has any that can be read.
+pub fn read_state(path: &Path) -> Option<serde_json::Value> {
+    limner_format::read_state(path).ok().flatten()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

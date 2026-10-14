@@ -166,6 +166,19 @@ func open_document(file_path: String) -> bool:
 	return true
 
 
+## Saves the document at `file_path` (a `.limn` folder or a `.limnz` file), with
+## `thumbnail` (PNG data, may be empty) as its picture. Returns true when it worked.
+func save_document(file_path: String, thumbnail := PackedByteArray()) -> bool:
+	var result := scene.save(file_path, thumbnail)
+	if not result.ok:
+		message.emit("Could not save: %s" % result.error, true)
+		return false
+	path = file_path
+	path_is_native = true
+	message.emit("Saved %s" % file_path.get_file(), false)
+	return true
+
+
 func title() -> String:
 	var name: String = get_info().get("title", "")
 	if name == "":

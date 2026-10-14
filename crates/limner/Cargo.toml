@@ -11,6 +11,7 @@ limner-core = { version = "0.1.0", path = "../limner-core" }
 limner-format = { version = "0.1.0", path = "../limner-format" }
 limner-quill = { version = "0.1.0", path = "../limner-quill" }
 thiserror = "2.0.21"
+serde_json = "1.0.154"
 
 [dev-dependencies]
 limner-format = { path = "../limner-format", features = ["testing"] }

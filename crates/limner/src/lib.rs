@@ -7,5 +7,8 @@ pub use limner_core as core;
 pub use limner_format as format;
 pub use limner_quill as quill;
 
-pub use files::{open, save, OpenError, Opened, SaveError, SourceKind};
+pub use files::{
+    is_packed_path, open, read_state, save, save_with_state, OpenError, Opened, SaveError,
+    SourceKind,
+};
 pub use limner_format::SaveReport;
