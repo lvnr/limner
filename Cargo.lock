@@ -404,7 +404,7 @@ checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
 name = "limner"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "limner-core",
  "limner-export",
@@ -417,7 +417,7 @@ dependencies = [
 
 [[package]]
 name = "limner-cli"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -429,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "limner-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "glam",
@@ -440,7 +440,7 @@ dependencies = [
 
 [[package]]
 name = "limner-export"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "limner-core",
  "limner-quill",
@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "limner-format"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "limner-core",
@@ -467,7 +467,7 @@ dependencies = [
 
 [[package]]
 name = "limner-godot"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "godot",
  "limner",
@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "limner-quill"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "bytemuck",
  "limner-core",

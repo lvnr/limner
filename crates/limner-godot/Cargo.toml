@@ -11,5 +11,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 godot = { workspace = true }
-limner = { version = "0.1.0", path = "../limner" }
+limner = { version = "0.2.0", path = "../limner" }
 serde_json = "1.0.154"

@@ -8,10 +8,10 @@ publish = false
 
 [dependencies]
 # glam is used through `limner_core::glam`, so the two crates can never disagree on its version.
-limner-core = { version = "0.1.0", path = "../limner-core" }
+limner-core = { version = "0.2.0", path = "../limner-core" }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
 
 [dev-dependencies]
 # Only for the local-only test that exports the owner's sample project.
-limner-quill = { version = "0.1.0", path = "../limner-quill" }
+limner-quill = { version = "0.2.0", path = "../limner-quill" }
