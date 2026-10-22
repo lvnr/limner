@@ -30,8 +30,9 @@ const TOOL_KEYS := {
 	KEY_N: "nudge",
 	KEY_O: "optimize",
 }
-const LEFT_DOCK_WIDTH := 292
-const RIGHT_DOCK_WIDTH := 324
+## The docks take the width of the widest panel in them; nothing in them scrolls.
+const LEFT_DOCK_WIDTH := 0
+const RIGHT_DOCK_WIDTH := 0
 
 enum FileMenu { NEW, OPEN, SAVE, SAVE_AS, IMPORT, EXPORT, QUIT }
 ## What File > Import offers: pictures, sounds and models become layers.
@@ -62,6 +63,8 @@ var timeline: TimelinePanel
 ## The stand-in for the drawing hand.
 var hand: DesktopHand
 var left_dock: VBoxContainer
+## The panels used while painting (Tools, Color, Text), one at a time, in the left dock.
+var painting: TabContainer
 var right_dock: VBoxContainer
 var bottom_dock: VBoxContainer
 ## The tabbed panels under the layer list.
@@ -184,38 +187,36 @@ func _build_interface() -> void:
 	timeline = TimelinePanel.new(editor)
 	bottom_dock.add_child(timeline)
 
+	# The panels used while painting on the left, one at a time as on the palette: the
+	# Tools and Color panels stacked would not fit a window under the Layers panel.
+	painting = TabContainer.new()
+	painting.name = "Painting"
 	var tools := ToolsPanel.new(editor)
 	tools.text_requested.connect(func() -> void: show_details("Text"))
-	left_dock.add_child(tools)
-	left_dock.add_child(Kit.separator())
-	left_dock.add_child(ColorPanel.new(editor))
+	_add_tab(painting, tools, "paint")
+	_add_tab(painting, ColorPanel.new(editor), "colorize")
+	_add_tab(painting, TextPanel.new(editor), "text")
+	left_dock.add_child(painting)
 
 	details = TabContainer.new()
 	details.name = "Details"
-	details.custom_minimum_size = Vector2(0, 330)
 	# Its File section opens documents too; a Quill project is framed as File > Open does.
 	var document := DocumentPanel.new(editor)
 	document.document_opened.connect(func(native: bool) -> void:
 		if not native:
 			frame_all()
 	)
-	# Tabs show an icon; the panel's name is the tooltip.
+	# The other panels on the right, in the order of the palette's round buttons.
 	for entry: Array in [
 		[TransformPanel.new(editor), "move"],
+		[MonitorPanel.new(editor), "camera"],
 		[PropertiesPanel.new(editor), "paint_layer"],
-		[document, "new_file"],
+		[document, "document"],
+		[_settings_panel(), "settings"],
+		[PerformancePanel.new(editor), "performance"],
 		[ExportPanel.new(editor), "export"],
-		[MonitorPanel.new(editor), "film"],
-		[PerformancePanel.new(editor), "chart"],
-		[_settings_panel(), "gear"],
-		[TextPanel.new(editor), "text"],
 	]:
-		var panel: Control = entry[0]
-		var index := details.get_tab_count()
-		details.add_child(_scrolling(panel))
-		details.set_tab_title(index, "")
-		details.set_tab_icon(index, Icons.texture(entry[1], Kit.TEXT, 18))
-		details.set_tab_tooltip(index, panel.name)
+		_add_tab(details, entry[0], entry[1])
 	right_dock.add_child(details)
 	# The kind key of a layer row shows that layer's settings; Import shows where from.
 	timeline.settings_requested.connect(func(_layer: int) -> void: show_details("Layer"))
@@ -265,28 +266,25 @@ func _settings_panel() -> SettingsPanel:
 	return panel
 
 
-## Wraps a panel so that it scrolls when it is taller than the room it is given.
-## The wrapper takes the panel's name, which is what a tab shows.
-func _scrolling(panel: Control) -> ScrollContainer:
-	var scroll := ScrollContainer.new()
-	scroll.name = panel.name
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(panel)
-	return scroll
+## Adds a panel as a tab that shows its icon, with the panel's name as the tooltip.
+func _add_tab(tabs: TabContainer, panel: Control, icon: String) -> void:
+	var index := tabs.get_tab_count()
+	tabs.add_child(panel)
+	tabs.set_tab_title(index, "")
+	tabs.set_tab_icon(index, Icons.texture(icon, Kit.TEXT, 18))
+	tabs.set_tab_tooltip(index, panel.name)
 
 
+## A dock: as wide as `width`, or as its widest panel when that is 0. Nothing in it
+## scrolls: the panels have one size each.
 func _dock(parent: Control, width: int) -> VBoxContainer:
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(width, 0)
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	panel.add_child(scroll)
 	var content := VBoxContainer.new()
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	content.add_theme_constant_override("separation", 10)
-	scroll.add_child(content)
+	panel.add_child(content)
 	parent.add_child(panel)
 	return content
 
@@ -663,17 +661,18 @@ func _refresh_mode_switch() -> void:
 	_view_menu.set_item_tooltip(index, ModeSwitch.headset_tooltip())
 
 
-## Brings one of the tabbed panels under the layer list to the front, by name.
+## Brings one of the tabbed panels of either dock to the front, by name.
 func show_details(panel_name: String) -> void:
-	for index in details.get_tab_count():
-		if details.get_tab_control(index).name == panel_name:
-			details.current_tab = index
+	for tabs: TabContainer in [painting, details]:
+		for index in tabs.get_tab_count():
+			if tabs.get_tab_control(index).name == panel_name:
+				tabs.current_tab = index
 
 
 ## Shows or hides the docks, leaving the menu bar.
 func set_panels_visible(visible: bool) -> void:
-	left_dock.get_parent().get_parent().visible = visible
-	right_dock.get_parent().get_parent().visible = visible
+	left_dock.get_parent().visible = visible
+	right_dock.get_parent().visible = visible
 	bottom_dock.get_parent().visible = visible and bottom_dock.get_child_count() > 0
 
 

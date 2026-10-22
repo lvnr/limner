@@ -86,8 +86,9 @@ func _init(limner_editor: LimnerEditor) -> void:
 	var pivot_origin := Kit.button("Make pivot origin", "Makes the pivot the layer's origin without moving what is drawn", _run_on_subject.bind("make_pivot_origin", {}))
 	var again := Kit.button("Transform again", "Repeats the last duplicate-and-move on a fresh copy", func() -> void: editor.run({"cmd": "transform_again"}))
 	_layer_controls.append_array([reset_pivot, pivot_origin])
+	# One a row, so that their names show whole beside the options' column.
 	var commands := GridContainer.new()
-	commands.columns = 2
+	commands.columns = 1
 	for command: Button in [_reset_transform, reset_pivot, pivot_origin, again]:
 		command.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		command.clip_text = true
