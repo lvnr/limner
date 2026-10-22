@@ -41,12 +41,14 @@ On the PC:
    scripts\fetch-godot.ps1                 # downloads the pinned Godot into tools\
    cargo build -p limner-godot             # builds the extension the Godot project loads
    scripts\test.ps1                        # Rust tests, then the interface tests
-   scripts\godot.ps1 --xr-mode off --path godot -- --desktop     # the app, on the desktop
+   scripts\godot.ps1 --xr-mode off --path godot '--' --desktop   # the app, on the desktop ('--' in quotes: see below)
    scripts\package.ps1                     # optional: a packaged Limner.exe in local\out\builds\windows\
    ```
 3. If something fails at step 2, that is new information: none of it has run on Windows. The likely places are the PowerShell scripts (written without a Windows machine) and paths with backslashes. `CLAUDE.md` is written for the next Claude Code session and has the layout, the rules and the commands.
 
 The project is set to start OpenXR whenever the app starts on Windows. That is what makes a headset work without a switch, and it means the headset's software can wake up for a desktop session. `--xr-mode off` (before the `--`) prevents that; the test and screenshot scripts already pass it.
+
+In PowerShell, write the `--` that separates Godot's options from Limner's in quotes, `'--'`: PowerShell drops a bare `--` before a script sees it, and Limner's options then reach Godot as its own and are ignored. The scripts do this already.
 
 ### Windows, first run
 
@@ -63,7 +65,7 @@ Three things in the PowerShell scripts were wrong and are fixed: Windows PowerSh
 
 `docs/xr.md` has the full list: how to make Meta's PC app the active OpenXR runtime, a 17-step first session in order, and the names of the constants to tune at each step (where the brush tip sits, how deep a poke has to go, where the palette rides in the hand). In short:
 
-1. Start with `scripts\godot.ps1 --path godot -- --xr --no-sim`, so that a failure is reported instead of hidden behind the simulated rig.
+1. Start with `scripts\godot.ps1 --path godot '--' --xr --no-sim`, so that a failure is reported instead of hidden behind the simulated rig.
 2. If the scene does not appear in the headset, the reason is on the desktop window's message line and in the log. OpenXR complaints about the action map (`godot/xr/action_map.tres`) are the first thing to look for: no runtime has seen it yet.
 3. Work down the list in `docs/xr.md`: floor and head, controllers and the brush tip, painting, grips, the palette, poking, the ray, pinning, typing, pop-ups, the button map, taking the headset off, the left hand, frame rate, files, and changing to the desktop and back.
 

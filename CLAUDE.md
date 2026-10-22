@@ -79,7 +79,7 @@ scripts/package.sh                                                    # packaged
 cargo run -p limner-cli -- inspect <project>
 ```
 
-On Windows the project starts OpenXR whenever the app starts. Put `--xr-mode off` before the `--` to keep the headset's software asleep for desktop work; `test.ps1` and `shot.ps1` already do.
+On Windows the project starts OpenXR whenever the app starts. Put `--xr-mode off` before the `--` to keep the headset's software asleep for desktop work; `test.ps1` and `shot.ps1` already do. In PowerShell the `--` must be quoted, `'--'`: a bare one is dropped before the script sees it.
 
 ## Conventions
 

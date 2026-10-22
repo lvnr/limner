@@ -83,7 +83,7 @@ shaders/enabled=true
 - `startup_alert=false`: without a headset Godot would otherwise put up a system dialog; Limner falls back to the desktop by itself.
 - The reference space is left at Godot's default, Stage: the origin is the middle of the play area, on the floor.
 
-One thing to know before switching this on: with `openxr/enabled=true`, Godot starts the OpenXR runtime every time Limner starts, before any script runs. On a PC where SteamVR is the OpenXR runtime that can launch SteamVR even for a desktop session. Starting with Godot's own `--xr-mode off` (before the `--`) prevents it: `scripts\godot.ps1 --xr-mode off --path godot -- --desktop`.
+One thing to know before switching this on: with `openxr/enabled=true`, Godot starts the OpenXR runtime every time Limner starts, before any script runs. On a PC where SteamVR is the OpenXR runtime that can launch SteamVR even for a desktop session. Starting with Godot's own `--xr-mode off` (before the `--`) prevents it: `scripts\godot.ps1 --xr-mode off --path godot '--' --desktop`. In PowerShell the `--` has to be in quotes: a bare one is dropped before the script sees it, and the app's own options are then lost.
 
 ## The controls, as built
 
