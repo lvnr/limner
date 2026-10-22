@@ -2,6 +2,8 @@
 
 Design: `docs/superpowers/specs/2026-10-22-quill-style-panels-design.md`. Each step ends with the tests passing, a look at screenshots of what changed, and a commit.
 
+**Done, 2026-10-22**, all sixteen steps, on Windows with the simulated headset. Two choices made along the way: on the desktop, panel heights are not held to their design size (a dock gives a panel its height, and the older widgets keep their pixel sizes there), and the desktop's left dock shows Tools, Color and Text one at a time, since stacked they do not fit a window above the Layers panel. Not done: the step's release (the package and a GitHub release are left to the owner's word).
+
 ## 1. Foundations
 
 1. **Icons and font.** Copy the study's 90 SVGs into `godot/ui/icons/`, Noto Sans and its licence into `godot/ui/fonts/`. `Icons.texture()` loads a file icon when one exists (tinted like the stroke icons; cached). A table in `docs/icons.md` maps our icon names to the new files; names with no new file keep their stroke icon. Kit uses Noto Sans. Credit and licence in `docs/icons.md` and the README.
