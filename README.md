@@ -165,4 +165,4 @@ Limner is an independent project. It is not affiliated with or endorsed by Smoot
 
 ## Licence
 
-[MIT](LICENSE).
+[MIT](LICENSE). The filled icons were drawn for Limner by a contributor and are released under the same licence; the interface font, Noto Sans, is under the SIL Open Font Licence ([docs/icons.md](docs/icons.md)).

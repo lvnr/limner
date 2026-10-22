@@ -388,9 +388,20 @@ static func _box(color: Color, radius := 5, border := 0, border_color := BORDER,
 	return box
 
 
+static var _font: Font
+
+
+## The interface's typeface: Noto Sans (SIL Open Font Licence, `ui/fonts/OFL.txt`).
+static func font() -> Font:
+	if _font == null:
+		_font = load("res://ui/fonts/NotoSans.ttf") as Font
+	return _font
+
+
 ## The theme every Limner panel uses.
 static func make_theme() -> Theme:
 	var theme := Theme.new()
+	theme.default_font = font()
 	theme.default_font_size = 15 if headset else 14
 
 	for kind in ["Button", "MenuButton", "OptionButton"]:

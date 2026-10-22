@@ -1,8 +1,49 @@
 class_name Icons
-## Limner's icon set: small line drawings defined as SVG and rendered at whatever
-## scale the interface needs. All of them are original to this project.
+## Limner's icon set, rendered at whatever scale the interface needs. Two kinds, all
+## original to this project:
+##
+## - filled drawings on a 48 grid (`IconArt.ART`, made from `art/icons/*.svg` by
+##   `scripts/icons.py`; see `docs/icons.md`), used wherever one exists;
+## - line drawings on a 24 grid (`BODIES` below), for everything the filled set does
+##   not cover, such as the timeline's frame, clip and key commands.
+##
+## A name is looked up in the filled set first, then through `ALIASES` (the older
+## names the panels use for a drawing the filled set has under another name), then
+## in `BODIES`.
 
 const SIZE := 24
+
+## Older icon names and the filled drawing that stands for each.
+const ALIASES := {
+	"eraser": "erase",
+	"paint_layer": "paint",
+	"eye": "visible",
+	"eye_off": "hidden",
+	"lock": "locked",
+	"unlock": "unlocked",
+	"trash": "delete",
+	"flatten": "layers",
+	"stack": "layers",
+	"pencil": "rename",
+	"bbox": "bounds",
+	"prev_frame": "previous",
+	"next_frame": "next",
+	"gear": "settings",
+	"folder_open": "open",
+	"new_file": "new",
+	"chart": "performance",
+	"shape_capped_cylinder": "brush_capped_round",
+	"shape_capped_ellipse": "brush_capped_oval",
+	"shape_rounded_ribbon": "brush_rounded_ribbon",
+	"shape_cylinder": "brush_round",
+	"shape_ellipse": "brush_oval",
+	"shape_ribbon": "brush_ribbon",
+	"shape_cube": "brush_square",
+	"tl_frame_blank": "blank",
+}
+## Names the filled set also has, where the line drawing says something it does not:
+## the timeline tells an empty key from a filled one.
+const KEEP_LINE := ["key", "key_filled"]
 
 ## Icon bodies on a 24 x 24 grid. `{c}` is replaced by the colour.
 const BODIES := {
@@ -164,11 +205,17 @@ static func texture(name: String, color: Color = Color(0.9, 0.9, 0.9), pixels: i
 	var key := "%s/%s/%d" % [name, color.to_html(), pixels]
 	if _cache.has(key):
 		return _cache[key]
-	var body: String = BODIES.get(name, BODIES["dot"])
-	var svg := (
-		'<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.800" stroke-linecap="round" stroke-linejoin="round">%s</svg>'
-		% [pixels, pixels, body]
-	).replace("{c}", "#" + color.to_html(false))
+	var svg := ""
+	var art := filled(name)
+	if art != "":
+		svg = art.replace("{px}", str(pixels))
+	else:
+		var body: String = BODIES.get(name, BODIES["dot"])
+		svg = (
+			'<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 24 24" fill="none" stroke="{c}" stroke-width="1.800" stroke-linecap="round" stroke-linejoin="round">%s</svg>'
+			% [pixels, pixels, body]
+		)
+	svg = svg.replace("{c}", "#" + color.to_html(false))
 	var icon: Texture2D = DPITexture.create_from_string(svg)
 	_cache[key] = icon
 	_made[icon] = [name, color, pixels]
@@ -195,4 +242,13 @@ static func describe(icon: Texture2D) -> Array:
 
 
 static func has(name: String) -> bool:
-	return BODIES.has(name)
+	return filled(name) != "" or BODIES.has(name)
+
+
+## The filled drawing that `name` stands for, with `{c}` and `{px}` still in it, or
+## an empty string when the name is drawn as a line icon.
+static func filled(name: String) -> String:
+	if name in KEEP_LINE:
+		return ""
+	var art_name: String = ALIASES.get(name, name)
+	return IconArt.ART.get(art_name, "")
