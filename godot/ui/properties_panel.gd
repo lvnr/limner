@@ -142,7 +142,7 @@ func _toggle(kind: String, field: String, text: String, tooltip: String) -> void
 
 ## A drop-down for a setting that takes one of `values`; `names` are what the user reads.
 func _choice(kind: String, field: String, text: String, tooltip: String, values: Array, names: Array) -> void:
-	var menu := Kit.option(names, tooltip, func(index: int) -> void:
+	var menu := Kit.choice(names, tooltip, func(index: int) -> void:
 		if _prop(field) != values[index]:
 			_write(field, values[index])
 	)
@@ -421,7 +421,7 @@ func _build_sound() -> void:
 	_controls["sound.attenuation.max"] = farthest
 	_editable.append(farthest)
 
-	var direction := Kit.option(["None", "Cone", "Frustum"], "Whether the sound is louder one way than the others", _on_sound_direction)
+	var direction := Kit.choice(["None", "Cone", "Frustum"], "Whether the sound is louder one way than the others", _on_sound_direction)
 	_add("sound", "direction", direction, Form.row("Direction", [direction]))
 	var degrees := 180.0 / PI
 	_slider("sound", "modifier.cone.inner", SliderField.new("Inner angle", 0.0, 180.0, 0.1, "Full volume inside this angle", "°"), degrees)

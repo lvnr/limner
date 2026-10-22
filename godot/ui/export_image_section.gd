@@ -22,11 +22,11 @@ const QUALITY_NAMES := {"draft": "Draft", "good": "Good", "best": "Best"}
 
 var editor: LimnerEditor
 
-var _kind: OptionButton
+var _kind: Cycler
 var _from: LayerChoice
 var _size: SizeChoice
 var _size_row: Control
-var _width: OptionButton
+var _width: Cycler
 var _width_row: Control
 var _eyes: NumberField
 var _eyes_row: Control
@@ -42,7 +42,7 @@ func _init(limner_editor: LimnerEditor) -> void:
 	editor = limner_editor
 	name = "Image"
 
-	_kind = Kit.fitted_option(KINDS.map(func(kind: Array) -> String: return kind[1]), "A picture of what a view shows, or of everything around a place", func(_index: int) -> void: refresh())
+	_kind = Kit.choice(KINDS.map(func(kind: Array) -> String: return kind[1]), "A picture of what a view shows, or of everything around a place", func(_index: int) -> void: refresh())
 	add_child(Form.row("Picture", [_kind]))
 	_from = LayerChoice.new(editor, ["camera"], "Current view", "Where the picture is taken from")
 	add_child(Form.row("From", [_from]))
@@ -50,7 +50,7 @@ func _init(limner_editor: LimnerEditor) -> void:
 	_size = SizeChoice.new(editor, LimnerCapture.MAX_SIZE, "The size of the picture, up to 8192 pixels a side")
 	_size_row = Form.row("Size", [_size])
 	add_child(_size_row)
-	_width = Kit.fitted_option([], "The size of the picture; its shape follows from the kind of picture", Callable())
+	_width = Kit.choice([], "The size of the picture; its shape follows from the kind of picture", Callable())
 	_width_row = Form.row("Size", [_width])
 	add_child(_width_row)
 	_eyes = NumberField.new("How far apart the two eyes are, in metres of the room you stand in", 0.0, 1.0)

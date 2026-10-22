@@ -13,7 +13,7 @@ const FORMATS := [
 
 var editor: LimnerEditor
 
-var _format: OptionButton
+var _format: Cycler
 var _format_note: Label
 var _moving: ChoiceRow
 var _moving_row: Control
@@ -37,7 +37,7 @@ func _init(limner_editor: LimnerEditor) -> void:
 	editor = limner_editor
 	name = "Model"
 
-	_format = Kit.fitted_option(FORMATS.map(func(format: Array) -> String: return format[1]), "The kind of file to write", func(_index: int) -> void: refresh())
+	_format = Kit.choice(FORMATS.map(func(format: Array) -> String: return format[1]), "The kind of file to write", func(_index: int) -> void: refresh())
 	add_child(Form.row("Format", [_format]))
 	_format_note = Form.note()
 	add_child(_format_note)

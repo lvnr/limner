@@ -6,13 +6,34 @@ extends HBoxContainer
 ##
 ## Choices are pairs of a key string and the words shown for it. Stepping stops at
 ## the ends unless `wraps` is set.
+##
+## It also answers to the parts of `OptionButton` that panels use (`item_count`,
+## `selected`, `select`, `get_item_text`, `item_selected`, item metadata, `disabled`),
+## so that it can take a drop-down's place without the code around it changing.
 
 signal chosen(key: String)
+## Reported with `chosen`, with the place of the choice in the list.
+signal item_selected(index: int)
 
 var wraps := false
+## How many choices there are.
+var item_count: int:
+	get:
+		return _keys.size()
+## The place of the choice shown, or -1.
+var selected: int:
+	get:
+		return _index
+## Whether the keys are switched off.
+var disabled: bool:
+	get:
+		return not _enabled
+	set(value):
+		set_enabled(not value)
 
 var _keys: Array[String] = []
 var _texts: Array[String] = []
+var _metadata: Array = []
 var _index := -1
 var _enabled := true
 var _before: Button
@@ -21,6 +42,7 @@ var _value: Label
 
 
 func _init(tooltip := "", choices: Array = []) -> void:
+	tooltip_text = tooltip
 	add_theme_constant_override("separation", Kit.u(4))
 	_before = Kit.key("previous", "Previous", _step.bind(-1))
 	_after = Kit.key("next", "Next", _step.bind(1))
@@ -48,11 +70,56 @@ func set_choices(choices: Array) -> void:
 	var current := get_value()
 	_keys.clear()
 	_texts.clear()
+	_metadata.clear()
 	for choice: Array in choices:
 		_keys.append(String(choice[0]))
 		_texts.append(String(choice[1]))
+		_metadata.append(null)
 	_index = _keys.find(current)
 	_show()
+
+
+## Adds a choice at the end: its words, and its place as its key.
+func add_item(text: String) -> void:
+	_keys.append(str(_keys.size()))
+	_texts.append(text)
+	_metadata.append(null)
+	_show()
+
+
+## Takes every choice away.
+func clear() -> void:
+	_keys.clear()
+	_texts.clear()
+	_metadata.clear()
+	_index = -1
+	_show()
+
+
+## Shows the choice at `index` (-1 for none), without reporting it, as
+## `OptionButton.select` does.
+func select(index: int) -> void:
+	_index = index if index >= 0 and index < _keys.size() else -1
+	_show()
+
+
+func get_item_text(index: int) -> String:
+	return _texts[index] if index >= 0 and index < _texts.size() else ""
+
+
+func set_item_text(index: int, text: String) -> void:
+	if index >= 0 and index < _texts.size():
+		_texts[index] = text
+		_show()
+
+
+func get_item_metadata(index: int) -> Variant:
+	return _metadata[index] if index >= 0 and index < _metadata.size() else null
+
+
+func set_item_metadata(index: int, value: Variant) -> void:
+	if index >= 0 and index < _metadata.size():
+		_metadata[index] = value
 
 
 ## Shows `key` as the choice made, without reporting it as a change. A key that is not
@@ -87,6 +154,7 @@ func _step(by: int) -> void:
 	_index = next
 	_show()
 	chosen.emit(_keys[_index])
+	item_selected.emit(_index)
 
 
 func _show(text := "") -> void:

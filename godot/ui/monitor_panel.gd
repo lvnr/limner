@@ -18,7 +18,7 @@ var _camera: LayerChoice
 var _previous: Button
 var _next: Button
 var _grid: ChoiceRow
-var _resolution: OptionButton
+var _resolution: Cycler
 var _resolution_custom: HBoxContainer
 var _width: NumberField
 var _height: NumberField
@@ -36,7 +36,7 @@ func _init(limner_editor: LimnerEditor) -> void:
 	name = "Monitor"
 
 	_camera = LayerChoice.new(editor, ["camera"], "", "The camera layer whose view is shown")
-	_camera.chosen.connect(func(_layer: int) -> void: _on_camera_chosen())
+	_camera.layer_chosen.connect(func(_layer: int) -> void: _on_camera_chosen())
 	_previous = Kit.icon_button("left", "Previous camera", func() -> void: step_camera(-1))
 	_next = Kit.icon_button("right", "Next camera", func() -> void: step_camera(1))
 	_with_camera = Kit.column([Kit.row([_previous, _camera, _next])])
@@ -53,7 +53,7 @@ func _init(limner_editor: LimnerEditor) -> void:
 	_with_camera.add_child(Form.row("Framing", [_grid]))
 
 	var sizes: Array = DocumentPanel.RESOLUTIONS.map(func(size: Array) -> String: return "%d × %d" % size)
-	_resolution = Kit.option(sizes + ["Custom…"], "The size of the pictures and video that camera layers render. It belongs to the document.", _on_resolution_chosen)
+	_resolution = Kit.choice(sizes + ["Custom…"], "The size of the pictures and video that camera layers render. It belongs to the document.", _on_resolution_chosen)
 	_with_camera.add_child(Form.row("Resolution", [_resolution]))
 	_width = NumberField.new("Width in pixels, 16 to 16384", 16, 16384, true)
 	_height = NumberField.new("Height in pixels, 16 to 16384", 16, 16384, true)

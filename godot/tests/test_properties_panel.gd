@@ -28,7 +28,7 @@ func _type(field: LineEdit, text: String) -> void:
 	await frames(2)
 
 
-func _choose(menu: OptionButton, text: String) -> void:
+func _choose(menu: Cycler, text: String) -> void:
 	for index in menu.item_count:
 		if menu.get_item_text(index) == text:
 			menu.select(index)
@@ -134,7 +134,7 @@ func test_says_so_when_there_is_no_layer_and_follows_the_current_one() -> void:
 func test_paint_settings() -> void:
 	var panel := await _panel()
 	var paint := int(row_named("Paint").id)
-	var shading: OptionButton = panel._controls["paint.shading"]
+	var shading: Cycler = panel._controls["paint.shading"]
 	check_eq(shading.get_item_text(shading.selected), "Unlit", "shading shown")
 	check_eq(shading.tooltip_text, "Lit layers are shaded by the scene's lights", "shading tooltip")
 	await _choose(shading, "Lit")
@@ -216,7 +216,7 @@ func test_sequence_and_group_settings() -> void:
 func test_light_settings() -> void:
 	var panel := await _panel()
 	var light := await _add("light")
-	var type: OptionButton = panel._controls["light.kind"]
+	var type: Cycler = panel._controls["light.kind"]
 	var range_row: SliderField = panel._controls["light.range"]
 	var angle: SliderField = panel._controls["light.spot_angle"]
 	var softness: SliderField = panel._controls["light.spot_blend"]
@@ -355,7 +355,7 @@ func test_spawn_area_settings() -> void:
 	var initial: CheckBox = panel._controls["viewpoint.initial"]
 	check_eq(initial.button_pressed, false, "the new spawn area is not the initial one")
 
-	var height: OptionButton = panel._controls["viewpoint.floor_level"]
+	var height: Cycler = panel._controls["viewpoint.floor_level"]
 	check_eq(height.get_item_text(height.selected), "Eye level", "height shown")
 	check(height.tooltip_text.contains("Eye level") and height.tooltip_text.contains("Floor level"), "the tooltip explains both")
 	await _choose(height, "Floor level")
@@ -453,7 +453,7 @@ func test_picture_settings() -> void:
 	if picture < 0:
 		return
 	check_eq(_shown_sections(panel), ["picture"], "sections for a picture")
-	var type: OptionButton = panel._controls["picture.projection"]
+	var type: Cycler = panel._controls["picture.projection"]
 	var stored := {"360": "equirect", "360 stereo": "equirect_stereo", "Cubemap cross": "cubemap_cross", "Cubemap strip": "cubemap_strip", "2D image": "flat"}
 	check_eq(type.item_count, stored.size(), "the kinds of picture")
 	for text: String in stored:
@@ -475,7 +475,7 @@ func test_model_settings() -> void:
 	if model < 0:
 		return
 	check_eq(_shown_sections(panel), ["model"], "sections for a model")
-	var lighting: OptionButton = panel._controls["model.shading"]
+	var lighting: Cycler = panel._controls["model.shading"]
 	await _choose(lighting, "Smooth")
 	check_eq(_props(model).shading, "lit", "smooth lighting")
 	await _choose(lighting, "Unlit")
@@ -505,7 +505,7 @@ func test_every_cone_and_frustum_control_changes_the_sound() -> void:
 	run({"cmd": "select_layers", "layers": [sound]})
 	await frames(2)
 	check_eq(_shown_sections(panel), ["sound"], "sections for a sound")
-	var direction: OptionButton = panel._controls["sound.direction"]
+	var direction: Cycler = panel._controls["sound.direction"]
 	var degrees := 180.0 / PI
 	# Each control, what it is dragged to, and what that is stored as.
 	var cases := {

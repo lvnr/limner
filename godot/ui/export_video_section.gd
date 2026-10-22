@@ -13,16 +13,16 @@ var editor: LimnerEditor
 var launcher: RenderLauncher
 
 var _camera: LayerChoice
-var _projection: OptionButton
+var _projection: Cycler
 var _range: ChoiceRow
 var _times: GridContainer
 var _start_seconds: NumberField
 var _start_frames: NumberField
 var _end_seconds: NumberField
 var _end_frames: NumberField
-var _rate: OptionButton
+var _rate: Cycler
 var _size: SizeChoice
-var _format: OptionButton
+var _format: Cycler
 var _format_note: Label
 var _quality: ChoiceRow
 var _quality_note: Label
@@ -50,7 +50,7 @@ func _init(limner_editor: LimnerEditor) -> void:
 
 	_camera = LayerChoice.new(editor, ["camera"], "Current view", "The camera layer the video is seen through, or the view as it is now")
 	add_child(Form.row("Camera", [_camera]))
-	_projection = Kit.fitted_option(PROJECTIONS.map(func(entry: Array) -> String: return entry[1]), "A flat picture through the camera's lens, or everything around the camera", func(_index: int) -> void: refresh())
+	_projection = Kit.choice(PROJECTIONS.map(func(entry: Array) -> String: return entry[1]), "A flat picture through the camera's lens, or everything around the camera", func(_index: int) -> void: refresh())
 	add_child(Form.row("Picture", [_projection]))
 
 	_range = ChoiceRow.new()
@@ -73,13 +73,13 @@ func _init(limner_editor: LimnerEditor) -> void:
 	add_child(_times)
 
 	var rates: Array = DocumentPanel.RATES.map(func(rate: int) -> String: return "%d fps" % rate)
-	_rate = Kit.fitted_option(["Document"] + rates, "How many frames the video has each second", func(_index: int) -> void: refresh())
+	_rate = Kit.choice(["Document"] + rates, "How many frames the video has each second", func(_index: int) -> void: refresh())
 	add_child(Form.row("Frame rate", [_rate]))
 	_size = SizeChoice.new(editor, LimnerCapture.MAX_SIZE, "The size of the video's frames. For a 360 video the width counts and the shape follows.")
 	add_child(Form.row("Size", [_size]))
 
 	var formats: Array = RenderLauncher.FORMATS.values()
-	_format = Kit.fitted_option(formats, "The kind of file the video is written as", func(_index: int) -> void: refresh())
+	_format = Kit.choice(formats, "The kind of file the video is written as", func(_index: int) -> void: refresh())
 	add_child(Form.row("Format", [_format]))
 	_format_note = Form.note()
 	add_child(_format_note)

@@ -1,11 +1,12 @@
 class_name LayerChoice
-extends OptionButton
-## A drop-down of the layers of some kinds, by name: the camera layers, say.
+extends Cycler
+## A choice of one of the layers of some kinds, by name: the camera layers, say. A
+## `Cycler`, stepped through with a key at each side, never a list over the panel.
 ##
 ## It can start with an entry that stands for no layer, such as "Current view". The
-## list follows the document; the choice is kept as long as its layer exists.
+## choices follow the document; the choice is kept as long as its layer exists.
 
-signal chosen(layer: int)
+signal layer_chosen(layer: int)
 
 var editor: LimnerEditor
 ## The kinds of layer listed.
@@ -19,15 +20,11 @@ var _listed := []
 
 ## `first`, when given, is an entry before the layers that stands for none of them.
 func _init(limner_editor: LimnerEditor, layer_kinds: Array, first := "", tooltip := "") -> void:
+	super(tooltip)
 	editor = limner_editor
 	kinds = layer_kinds
 	_first = first
-	tooltip_text = tooltip
-	focus_mode = Control.FOCUS_NONE
-	custom_minimum_size = Vector2(0, Kit.BUTTON)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	fit_to_longest_item = false
-	clip_text = true
 	item_selected.connect(_on_selected)
 
 
@@ -74,7 +71,7 @@ func refresh() -> void:
 			add_item(_first)
 			set_item_metadata(0, -1)
 		for row: Dictionary in rows:
-			add_icon_item(Icons.texture(LayerRows.KIND_ICONS.get(row.kind, "dot"), Kit.TEXT, 16), row.name)
+			add_item(row.name)
 			set_item_metadata(item_count - 1, int(row.id))
 	var found := -1
 	for index in item_count:
@@ -89,4 +86,4 @@ func refresh() -> void:
 
 func _on_selected(index: int) -> void:
 	_layer = int(get_item_metadata(index))
-	chosen.emit(_layer)
+	layer_chosen.emit(_layer)

@@ -24,7 +24,7 @@ var _haptics: CheckBox
 var _volume: SliderRow
 var _button_map_at_start: CheckBox
 var _gimbal: CheckBox
-var _theme: OptionButton
+var _theme: Cycler
 var _autosave: SliderRow
 ## "Continue in the headset" on the desktop, "Continue on the desktop" in a headset.
 var _switch: Button
@@ -59,7 +59,7 @@ func _init(limner_editor: LimnerEditor) -> void:
 	add_child(_gimbal)
 	# The desktop and the headset each keep a scheme of their own; the row sets the
 	# one of the interface in use.
-	_theme = Kit.option(["Dark", "Light"], "The interface's colours: dark panels with light text, or light panels with dark text. The desktop and the headset each keep their own. A change shows at once.", func(index: int) -> void: preferences.set_value(Kit.scheme_preference(), Preferences.CHOICES["theme"][index]))
+	_theme = Kit.choice(["Dark", "Light"], "The interface's colours: dark panels with light text, or light panels with dark text. The desktop and the headset each keep their own. A change shows at once.", func(index: int) -> void: preferences.set_value(Kit.scheme_preference(), Preferences.CHOICES["theme"][index]))
 	add_child(Form.row("Colours", [_theme], "The colours of this interface"))
 
 	add_child(Kit.heading("Saving"))

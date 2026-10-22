@@ -7,7 +7,7 @@ signal changed
 
 var editor: LimnerEditor
 
-var _menu: OptionButton
+var _menu: Cycler
 var _custom: HBoxContainer
 var _width: NumberField
 var _height: NumberField
@@ -16,7 +16,7 @@ var _height: NumberField
 func _init(limner_editor: LimnerEditor, largest: int, tooltip: String) -> void:
 	editor = limner_editor
 	var sizes: Array = DocumentPanel.RESOLUTIONS.map(func(size: Array) -> String: return "%d × %d" % size)
-	_menu = Kit.fitted_option(["Document"] + sizes + ["Custom…"], tooltip, _on_chosen)
+	_menu = Kit.choice(["Document"] + sizes + ["Custom…"], tooltip, _on_chosen)
 	add_child(_menu)
 	_width = NumberField.new("Width in pixels, 16 to %d" % largest, 16, largest, true)
 	_height = NumberField.new("Height in pixels, 16 to %d" % largest, 16, largest, true)

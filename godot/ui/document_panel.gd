@@ -40,7 +40,7 @@ var _title: TextField
 var _description: TextEdit
 var _background: ColorField
 var _ambient: ColorField
-var _rate: OptionButton
+var _rate: Cycler
 var _rate_custom: HBoxContainer
 var _rate_num: NumberField
 var _rate_den: NumberField
@@ -53,7 +53,7 @@ var _wants_custom_resolution := false
 ## Start and end of the working range, each as a box for seconds and one for frames.
 var _range_seconds := {}
 var _range_frames := {}
-var _resolution: OptionButton
+var _resolution: Cycler
 var _resolution_custom: HBoxContainer
 var _width: NumberField
 var _height: NumberField
@@ -109,7 +109,7 @@ func _init(limner_editor: LimnerEditor) -> void:
 	add_child(Kit.separator())
 
 	var rates: Array = RATES.map(func(rate: int) -> String: return "%d fps" % rate)
-	_rate = Kit.option(rates + ["Custom…"], "How many frames play each second, for every animated layer", _on_rate_chosen)
+	_rate = Kit.choice(rates + ["Custom…"], "How many frames play each second, for every animated layer", _on_rate_chosen)
 	add_child(Form.row("Frame rate", [_rate]))
 	_rate_num = NumberField.new("How many frames play in the seconds beside this", 1, 480000, true)
 	_rate_den = NumberField.new("How many seconds those frames take. 24000 frames in 1001 seconds is the 23.976 of television.", 1, 100000, true)
@@ -128,7 +128,7 @@ func _init(limner_editor: LimnerEditor) -> void:
 
 	add_child(Kit.heading("Camera resolution"))
 	var sizes: Array = RESOLUTIONS.map(func(size: Array) -> String: return "%d × %d" % size)
-	_resolution = Kit.option(sizes + ["Custom…"], "The size of the pictures and video that camera layers render", _on_resolution_chosen)
+	_resolution = Kit.choice(sizes + ["Custom…"], "The size of the pictures and video that camera layers render", _on_resolution_chosen)
 	add_child(_resolution)
 	_width = NumberField.new("Width in pixels, 16 to 16384", 16, 16384, true)
 	_height = NumberField.new("Height in pixels, 16 to 16384", 16, 16384, true)

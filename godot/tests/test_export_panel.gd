@@ -25,7 +25,7 @@ func _panel() -> ExportPanel:
 	return panel
 
 
-func _choose(menu: OptionButton, index: int) -> void:
+func _choose(menu: Cycler, index: int) -> void:
 	menu.select(index)
 	menu.item_selected.emit(index)
 	await frames(2)

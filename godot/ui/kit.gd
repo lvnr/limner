@@ -845,6 +845,21 @@ static func separator() -> HSeparator:
 	return HSeparator.new()
 
 
+## A choice among `items` (words) without a list, a `Cycler`: what Quill-style panels
+## use where a desktop panel would have a drop-down (see `option`). `on_selected` is
+## called with the place of the choice made.
+static func choice(items: Array, tooltip: String, on_selected: Callable) -> Cycler:
+	var node := Cycler.new(tooltip)
+	node.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for item: String in items:
+		node.add_item(item)
+	if not items.is_empty():
+		node.select(0)
+	if on_selected.is_valid():
+		node.item_selected.connect(on_selected)
+	return node
+
+
 static func option(items: Array, tooltip: String, on_selected: Callable) -> OptionButton:
 	var node := OptionButton.new()
 	node.tooltip_text = tooltip
@@ -862,8 +877,8 @@ static func option(items: Array, tooltip: String, on_selected: Callable) -> Opti
 static func set_quiet(control: Control, value: Variant) -> void:
 	if control is Range:
 		control.set_value_no_signal(value)
-	elif control is OptionButton:
-		control.select(value)
+	elif control is OptionButton or control is Cycler:
+		control.call("select", value)
 	elif control is BaseButton:
 		control.set_pressed_no_signal(value)
 	elif control is LineEdit:

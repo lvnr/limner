@@ -91,6 +91,8 @@ static func set_enabled(controls: Array, enabled: bool) -> void:
 	for control: Control in controls:
 		if control is SliderField or control is SliderRow or control is ColorField:
 			control.set_editable(enabled)
+		elif control is Cycler:
+			(control as Cycler).set_enabled(enabled)
 		elif control is LineEdit or control is TextEdit:
 			control.editable = enabled
 		elif control is BaseButton:
