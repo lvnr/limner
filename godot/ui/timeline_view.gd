@@ -58,6 +58,14 @@ var scroll_y := 0.0
 var names_width := 150.0
 ## The root-timeline time the playhead is drawn at.
 var playhead := 0
+## The height of a row, of the ruler, and of the scroll bars (0 without them). The
+## Layers panel sets them so that its rows of keys and these tracks line up.
+var row_height := float(ROW)
+var ruler_height := RULER
+var bar_size := BAR
+## Whether the view draws its own column of layer names. Without it the tracks start
+## at the left edge, and the rows' names are the panel's.
+var show_names := true
 
 var _h_bar: HScrollBar
 var _v_bar: VScrollBar
@@ -76,7 +84,7 @@ func _init(timeline_panel: TimelinePanel) -> void:
 	name = "Tracks"
 	clip_contents = true
 	focus_mode = Control.FOCUS_NONE
-	custom_minimum_size = Vector2(200, RULER + ROW * 3 + BAR)
+	custom_minimum_size = Vector2(200, ruler_height + row_height * 3 + bar_size)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
 
@@ -105,12 +113,14 @@ func _notification(what: int) -> void:
 
 
 func _layout() -> void:
-	names_width = clampf(size.x * 0.2, 96.0, 190.0)
+	names_width = clampf(size.x * 0.2, 96.0, 190.0) if show_names else 0.0
+	_h_bar.visible = bar_size > 0.0
+	_v_bar.visible = bar_size > 0.0
 	axis.left = names_width + PAD
-	_h_bar.position = Vector2(names_width, size.y - BAR)
-	_h_bar.size = Vector2(maxf(size.x - names_width - BAR, 0.0), BAR)
-	_v_bar.position = Vector2(size.x - BAR, RULER)
-	_v_bar.size = Vector2(BAR, maxf(size.y - RULER - BAR, 0.0))
+	_h_bar.position = Vector2(names_width, size.y - bar_size)
+	_h_bar.size = Vector2(maxf(size.x - names_width - bar_size, 0.0), bar_size)
+	_v_bar.position = Vector2(size.x - bar_size, ruler_height)
+	_v_bar.size = Vector2(bar_size, maxf(size.y - ruler_height - bar_size, 0.0))
 	if not _fitted and size.x > names_width + 80.0 and not panel.info.is_empty():
 		_fitted = true
 		fit()
@@ -121,7 +131,7 @@ func _layout() -> void:
 
 ## The part of the view the tracks are drawn in: right of the names, under the ruler.
 func tracks_rect() -> Rect2:
-	return Rect2(names_width, RULER, maxf(size.x - names_width - BAR, 0.0), maxf(size.y - RULER - BAR, 0.0))
+	return Rect2(names_width, ruler_height, maxf(size.x - names_width - bar_size, 0.0), maxf(size.y - ruler_height - bar_size, 0.0))
 
 
 ## Where a time on the root timeline is drawn.
@@ -136,12 +146,12 @@ func time_at(x: float) -> int:
 
 ## The top of row number `index` (rows are the panel's `rows`).
 func row_top(index: int) -> float:
-	return RULER + index * ROW - scroll_y
+	return ruler_height + index * row_height - scroll_y
 
 
 ## The number of the row drawn at `y`; it may be past either end of the list.
 func row_index_at(y: float) -> int:
-	return floori((y - RULER + scroll_y) / ROW)
+	return floori((y - ruler_height + scroll_y) / row_height)
 
 
 ## The number of the row that shows layer `id`, or -1.
@@ -159,13 +169,13 @@ func clip_center(id: int, clip: int) -> Vector2:
 	var entry: Dictionary = line.clips[clip]
 	var from := x_of(int(line.origin) + int(entry.start))
 	var to := from + 80.0 if entry.end == null else x_of(int(line.origin) + int(entry.end))
-	return Vector2((from + to) * 0.5, row_top(row_of(id)) + ROW * 0.5)
+	return Vector2((from + to) * 0.5, row_top(row_of(id)) + row_height * 0.5)
 
 
 ## Where the key at `time` (on the layer's own clock) of layer `id` is drawn.
 func key_position(id: int, track: String, time: int) -> Vector2:
 	var line: Dictionary = panel.timeline.get(id, {})
-	return Vector2(x_of(int(line.origin) + time), row_top(row_of(id)) + ROW * 0.5)
+	return Vector2(x_of(int(line.origin) + time), row_top(row_of(id)) + row_height * 0.5)
 
 
 ## True between a press on the tracks or the ruler and its release.
@@ -253,7 +263,7 @@ func _sync_bars() -> void:
 	_h_bar.max_value = maxf(content * 1.2 + visible_seconds * 0.25, axis.start + visible_seconds)
 	_h_bar.page = visible_seconds
 	_h_bar.value = axis.start
-	var rows_height := float(panel.rows.size() * ROW)
+	var rows_height := float(panel.rows.size() * row_height)
 	scroll_y = clampf(scroll_y, 0.0, maxf(rows_height - area.size.y, 0.0))
 	_v_bar.max_value = maxf(rows_height, area.size.y)
 	_v_bar.page = area.size.y
@@ -283,8 +293,8 @@ func _draw() -> void:
 	var area := tracks_rect()
 	draw_rect(Rect2(Vector2.ZERO, size), Kit.BG_SUNKEN)
 	var rows := panel.rows
-	var first := maxi(floori(scroll_y / ROW), 0)
-	var last := mini(ceili((scroll_y + area.size.y) / ROW), rows.size())
+	var first := maxi(floori(scroll_y / row_height), 0)
+	var last := mini(ceili((scroll_y + area.size.y) / row_height), rows.size())
 	var from := time_at(area.position.x)
 	var to := time_at(area.end.x)
 	for index in range(first, last):
@@ -294,26 +304,28 @@ func _draw() -> void:
 	if _band.has_area():
 		draw_rect(_band, Color(Kit.ACCENT, 0.18))
 		draw_rect(_band, Color(Kit.ACCENT, 0.9), false, 1.0)
-	for index in range(first, last):
-		_draw_name(index, rows[index], font)
-	draw_rect(Rect2(0.0, area.end.y, size.x, BAR), Kit.BG_SUNKEN)
+	if show_names:
+		for index in range(first, last):
+			_draw_name(index, rows[index], font)
+	draw_rect(Rect2(0.0, area.end.y, size.x, bar_size), Kit.BG_SUNKEN)
 	_draw_ruler(area, from, to, font)
-	draw_rect(Rect2(0.0, 0.0, names_width, RULER), Kit.RULER)
-	draw_string(font, Vector2(8.0, RULER * 0.5 + 4.0), "%d layers" % rows.size(), HORIZONTAL_ALIGNMENT_LEFT, names_width - 12.0, 11, Kit.TEXT_DIM)
-	draw_line(Vector2(names_width - 0.5, 0.0), Vector2(names_width - 0.5, size.y), Kit.BORDER)
-	draw_line(Vector2(0.0, RULER - 0.5), Vector2(size.x, RULER - 0.5), Kit.BORDER)
+	if show_names:
+		draw_rect(Rect2(0.0, 0.0, names_width, ruler_height), Kit.RULER)
+		draw_string(font, Vector2(8.0, ruler_height * 0.5 + 4.0), "%d layers" % rows.size(), HORIZONTAL_ALIGNMENT_LEFT, names_width - 12.0, 11, Kit.TEXT_DIM)
+		draw_line(Vector2(names_width - 0.5, 0.0), Vector2(names_width - 0.5, size.y), Kit.BORDER)
+	draw_line(Vector2(0.0, ruler_height - 0.5), Vector2(size.x, ruler_height - 0.5), Kit.BORDER)
 
 
 func _draw_track(index: int, row: Dictionary, area: Rect2, from: int, to: int, font: Font) -> void:
 	var id := int(row.id)
 	var top := row_top(index)
 	if row.current:
-		draw_rect(Rect2(area.position.x, top, area.size.x, ROW), Color(Kit.ACCENT, 0.14))
+		draw_rect(Rect2(area.position.x, top, area.size.x, row_height), Color(Kit.ACCENT, 0.14))
 	elif row.selected:
-		draw_rect(Rect2(area.position.x, top, area.size.x, ROW), Color(Kit.ACCENT, 0.07))
+		draw_rect(Rect2(area.position.x, top, area.size.x, row_height), Color(Kit.ACCENT, 0.07))
 	elif index % 2 == 1:
-		draw_rect(Rect2(area.position.x, top, area.size.x, ROW), Kit.ROW_ALT)
-	draw_line(Vector2(area.position.x, top + ROW - 0.5), Vector2(area.end.x, top + ROW - 0.5), Kit.ROW_LINE)
+		draw_rect(Rect2(area.position.x, top, area.size.x, row_height), Kit.ROW_ALT)
+	draw_line(Vector2(area.position.x, top + row_height - 0.5), Vector2(area.end.x, top + row_height - 0.5), Kit.ROW_LINE)
 	var line: Dictionary = panel.timeline.get(id, {})
 	if line.is_empty():
 		return
@@ -333,7 +345,7 @@ func _draw_track(index: int, row: Dictionary, area: Rect2, from: int, to: int, f
 		var edge := x_of(start)
 		var left := maxf(edge, area.position.x - 6.0)
 		var right := area.end.x + 6.0 if open else minf(x_of(end), area.end.x + 6.0)
-		var bar := Rect2(left, top + 4.0, maxf(right - left, 2.0), ROW - 8.0)
+		var bar := Rect2(left, top + 4.0, maxf(right - left, 2.0), row_height - 8.0)
 		var chosen := panel.selected_clip_layer == id and panel.selected_clip == number
 		var fill := base.lightened(0.22) if chosen else base
 		draw_rect(bar, Color(fill, 0.4) if is_root else fill)
@@ -512,7 +524,7 @@ func _draw_opacity_keys(id: int, line: Dictionary, top: float, area: Rect2, from
 	var origin := int(line.origin)
 	var active := panel.key_track == "opacity"
 	var chosen := _chosen_times(id, "opacity")
-	var low := top + ROW - 6.0
+	var low := top + row_height - 6.0
 	var high := top + 6.0
 	var first := maxi(first_at_or_after(keys, from - origin) - 1, 0)
 	var curve := PackedVector2Array()
@@ -601,7 +613,7 @@ func _draw_transform_keys(id: int, line: Dictionary, top: float, from: int, to: 
 	var active := panel.key_track == "transform"
 	var chosen := _chosen_times(id, "transform")
 	var reach := axis.duration_of(8.0)
-	var middle := top + ROW * 0.5
+	var middle := top + row_height * 0.5
 	var drawn := -100.0
 	for number in range(first_at_or_after(keys, from - origin - reach), keys.size()):
 		var key: Dictionary = keys[number]
@@ -654,7 +666,7 @@ func _draw_marks(id: int, line: Dictionary, top: float, from: int, to: int, font
 		var x := x_of(origin + time)
 		var color: Color = MARK_COLORS.get(mark.action, Kit.TEXT)
 		var flag := Rect2(x, top + 3.0, 13.0, 13.0)
-		draw_line(Vector2(x + 0.5, top + 2.0), Vector2(x + 0.5, top + ROW - 2.0), color, 2.0)
+		draw_line(Vector2(x + 0.5, top + 2.0), Vector2(x + 0.5, top + row_height - 2.0), color, 2.0)
 		draw_rect(flag, color)
 		if chosen.has(time):
 			draw_rect(flag.grow(1.5), Kit.INK, false, 2.0)
@@ -698,13 +710,13 @@ func _draw_name(index: int, row: Dictionary, font: Font) -> void:
 		back = Kit.SELECTION
 	elif row.selected:
 		back = Kit.SELECTION_SOFT
-	draw_rect(Rect2(0.0, top, names_width, ROW), back)
-	draw_line(Vector2(0.0, top + ROW - 0.5), Vector2(names_width, top + ROW - 0.5), Kit.ROW_LINE)
+	draw_rect(Rect2(0.0, top, names_width, row_height), back)
+	draw_line(Vector2(0.0, top + row_height - 0.5), Vector2(names_width, top + row_height - 0.5), Kit.ROW_LINE)
 	var color := Kit.TEXT if row.shown else Kit.TEXT_DIM
 	if row.current:
 		color = Kit.TEXT_ON_SELECTION
 	var x := 5.0 + int(row.depth) * INDENT
-	var middle := top + ROW * 0.5
+	var middle := top + row_height * 0.5
 	if int(row.children) > 0:
 		# The arrow that folds a group away, as in the layer list.
 		var arrow := PackedVector2Array([Vector2(x + 2.0, middle - 4.0), Vector2(x + 9.0, middle), Vector2(x + 2.0, middle + 4.0)])
@@ -722,8 +734,8 @@ func _draw_name(index: int, row: Dictionary, font: Font) -> void:
 
 
 func _draw_ruler(area: Rect2, from: int, to: int, font: Font) -> void:
-	var foot := RULER - RANGE_BAND
-	draw_rect(Rect2(names_width, 0.0, size.x - names_width, RULER), Kit.RULER)
+	var foot := ruler_height - RANGE_BAND
+	draw_rect(Rect2(names_width, 0.0, size.x - names_width, ruler_height), Kit.RULER)
 	draw_rect(Rect2(names_width, foot, size.x - names_width, RANGE_BAND), Kit.BG_SUNKEN)
 
 	# Ticks: frames when they are far enough apart, then seconds, then labelled steps.
@@ -793,11 +805,11 @@ func _draw_ruler(area: Rect2, from: int, to: int, font: Font) -> void:
 	if start_x >= names_width - 1.0 and start_x <= area.end.x:
 		draw_rect(Rect2(start_x, foot, 3.0, RANGE_BAND), grip)
 		draw_rect(Rect2(start_x, foot, 7.0, 2.5), grip)
-		draw_rect(Rect2(start_x, RULER - 2.5, 7.0, 2.5), grip)
+		draw_rect(Rect2(start_x, ruler_height - 2.5, 7.0, 2.5), grip)
 	if end_x >= names_width and end_x <= area.end.x + 1.0:
 		draw_rect(Rect2(end_x - 3.0, foot, 3.0, RANGE_BAND), grip)
 		draw_rect(Rect2(end_x - 7.0, foot, 7.0, 2.5), grip)
-		draw_rect(Rect2(end_x - 7.0, RULER - 2.5, 7.0, 2.5), grip)
+		draw_rect(Rect2(end_x - 7.0, ruler_height - 2.5, 7.0, 2.5), grip)
 
 
 ## Whole seconds as M:SS, or H:MM:SS from an hour on.
@@ -1041,15 +1053,15 @@ func _on_wheel(button: InputEventMouseButton) -> void:
 	if (button.ctrl_pressed or button.meta_pressed) and not over_names:
 		zoom_at(button.position.x, pow(1.18, amount if back else -amount))
 	elif button.shift_pressed or over_names:
-		scroll_rows((-1.0 if back else 1.0) * ROW * amount)
+		scroll_rows((-1.0 if back else 1.0) * row_height * amount)
 	else:
 		pan_pixels((-1.0 if back else 1.0) * 48.0 * amount)
 
 
 func _show_cursor(at: Vector2) -> void:
 	var shape := Control.CURSOR_ARROW
-	if at.x >= names_width and at.y < RULER:
-		if at.y >= RULER - RANGE_BAND and not _range_end_at(at.x).is_empty():
+	if at.x >= names_width and at.y < ruler_height:
+		if at.y >= ruler_height - RANGE_BAND and not _range_end_at(at.x).is_empty():
 			shape = Control.CURSOR_HSIZE
 	elif at.x >= names_width and at.y < tracks_rect().end.y:
 		var index := row_index_at(at.y)
@@ -1068,9 +1080,9 @@ func press(at: Vector2, add := false, toggle := false, double := false) -> void:
 	_finish_drag(false)
 	# Asked of the scene: the editor's copy of the status may be a frame old.
 	var before := int(editor.scene.status().time)
-	if at.x > size.x - BAR or at.y > size.y - BAR:
+	if at.x > size.x - bar_size or at.y > size.y - bar_size:
 		return
-	if at.y < RULER:
+	if at.y < ruler_height:
 		if at.x >= names_width:
 			_press_ruler(at)
 			_begin_drag(at, before)
@@ -1239,7 +1251,7 @@ func _follow_pointer() -> void:
 
 
 func _press_ruler(at: Vector2) -> void:
-	if at.y >= RULER - RANGE_BAND:
+	if at.y >= ruler_height - RANGE_BAND:
 		var end := _range_end_at(at.x)
 		if not end.is_empty():
 			_drag = {"kind": end.kind, "from": at, "moved": false, "start": int(panel.info.range_start), "end": int(panel.info.range_end)}
