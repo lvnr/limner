@@ -84,7 +84,7 @@ func test_shows_the_colours_of_a_new_document() -> void:
 	check_eq(panel._hex.text, "#000000", "hex of the paint colour")
 	check_eq(panel._swatches.size(), 16, "swatches")
 	check_eq(panel._swatches[5].color.to_html(false), LimnerEditor.screen_color(UNUSED).to_html(false), "an unused swatch")
-	check(panel.get_combined_minimum_size().x <= 264.0, "fits a panel 280 wide, needs %s" % panel.get_combined_minimum_size().x)
+	check_fits(panel)
 
 
 func test_the_picker_sets_the_paint_colour() -> void:
@@ -96,17 +96,13 @@ func test_the_picker_sets_the_paint_colour() -> void:
 	await frames(2)
 	check_eq((panel._bars[PAINT] as ColorChip).color.to_html(false), Color.from_hsv(0.6, 0.25, 0.75).to_html(false), "paint bar")
 	check_eq(panel._hex.text, "#" + Color.from_hsv(0.6, 0.25, 0.75).to_html(false), "hex field")
-	check_near(panel._hue_row.get_value(), 216.0, "hue slider", 0.5)
-	check_near(panel._saturation_row.get_value(), 0.25, "saturation slider", 0.005)
-	check_near(panel._value_row.get_value(), 0.75, "value slider", 0.005)
 	check_eq(panel._square.marker, Vector2(0.25, 0.75), "ring on the square")
 	check_near(panel._strip.marker.y, 0.6, "marker on the hue strip")
 	check_near(panel._square.hue, 0.6, "the square is drawn for the hue")
 
-	panel._saturation_row.slider.value = 0.5
-	panel._value_row.slider.value = 0.4
-	panel._hue_row.slider.value = 90.0
-	check_color(_paint(), _linear(0.25, 0.5, 0.4), "paint colour after moving the three sliders")
+	_drag(panel._strip, [Vector2(0.5, 0.25)])
+	_drag(panel._square, [Vector2(0.5, 0.4)])
+	check_color(_paint(), _linear(0.25, 0.5, 0.4), "paint colour after moving to another hue, saturation and value")
 	check_eq(editor.status.can_undo, false, "the paint colour is not an undo step")
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
@@ -211,15 +207,12 @@ func test_a_background_drag_is_one_undo_step() -> void:
 	check_eq(panel._hex.text, "#" + LimnerEditor.screen_color(NEW_BACKGROUND).to_html(false), "the picker follows the undo")
 	check_near(panel._hue, 0.3, "and keeps the hue it had")
 
-	panel._value_row.drag_started.emit()
-	for value: float in [0.8, 0.5, 0.2]:
-		panel._value_row.changed.emit(value)
-	panel._value_row.drag_ended.emit()
+	_drag(panel._square, [Vector2(0.5, 0.8), Vector2(0.5, 0.5), Vector2(0.5, 0.2)])
 	await frames(2)
-	check_near(LimnerEditor.screen_color(_background()).v, 0.2, "background after dragging the value slider")
+	check_near(LimnerEditor.screen_color(_background()).v, 0.2, "background after dragging down the square")
 	editor.undo()
 	await frames(2)
-	check_color(_background(), NEW_BACKGROUND, "the slider drag was one step too")
+	check_color(_background(), NEW_BACKGROUND, "that drag was one step too")
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
@@ -369,9 +362,7 @@ func test_follows_changes_made_behind_its_back() -> void:
 	check_eq((panel._bars[BACKGROUND] as ColorChip).color.to_html(false), LimnerEditor.screen_color([0.1, 0.1, 0.3]).to_html(false), "background bar")
 	check_eq(panel._swatches[9].color.to_html(false), LimnerEditor.screen_color([0.0, 0.5, 0.5]).to_html(false), "swatch")
 	check_eq(panel._hex.text, "#" + paint.to_html(false), "hex field")
-	check_near(panel._hue_row.get_value(), paint.h * 360.0, "hue slider", 0.5)
-	check_near(panel._saturation_row.get_value(), paint.s, "saturation slider", 0.005)
-	check_near(panel._value_row.get_value(), paint.v, "value slider", 0.005)
+	check_near(panel._strip.marker.y, paint.h, "marker on the hue strip")
 	check_near(panel._square.marker.x, paint.s, "ring on the square, across")
 	check_near(panel._square.marker.y, paint.v, "ring on the square, up")
 
@@ -382,3 +373,13 @@ func test_follows_changes_made_behind_its_back() -> void:
 	check_eq(panel._swatches[9].color.to_html(false), LimnerEditor.screen_color(UNUSED).to_html(false), "swatch after undo")
 	check_eq((panel._bars[PAINT] as ColorChip).color.to_html(false), paint.to_html(false), "the paint colour is not undone")
 	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_it_fits_in_a_headset() -> void:
+	Kit.set_headset(true)
+	var panel := ColorPanel.new(editor)
+	mount(panel)
+	await frames(2)
+	check_fits(panel, "in a headset")
+	check_eq(int(panel.pixel_size().x), int(ColorPanel.DESIGN_SIZE.x), "full size")
+	Kit.set_headset(false)

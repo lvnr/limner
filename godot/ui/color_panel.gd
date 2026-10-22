@@ -1,7 +1,8 @@
 class_name ColorPanel
-extends VBoxContainer
-## The colours: the paint colour and the background, a picker that edits whichever
-## of the two is selected, and the document's palette of sixteen swatches.
+extends LimnerPanel
+## The colours, as Quill's Color panel has them: the paint colour and the background,
+## the document's palette of sixteen swatches, a square of saturation and value with
+## a strip of hues beside it that fill the panel, and the colour written as hex.
 ##
 ## The picker works in the hue, saturation and value of the colour as it looks on
 ## screen, and keeps those three itself. The document only stores the mixed colour,
@@ -13,7 +14,9 @@ enum Target { PAINT, BACKGROUND }
 const SWATCHES := 16
 ## What every channel of a swatch holds until a colour is stored in it (linear RGB).
 const UNUSED_SWATCH := 0.82
-const AREA_HEIGHT := 140
+## The panel's size, and the least height of the colour square, in design pixels.
+const DESIGN_SIZE := Vector2(470, 560)
+const AREA_HEIGHT := 300
 ## Colours closer than this in every channel look the same on screen.
 const SAME_COLOR := 0.002
 
@@ -31,9 +34,6 @@ var _next_swatch := 0
 var _bars := {}
 var _square: PickerArea
 var _strip: PickerArea
-var _hue_row: SliderRow
-var _saturation_row: SliderRow
-var _value_row: SliderRow
 var _hex: LineEdit
 ## True while the hex field holds something typed that has not been entered yet.
 var _hex_typed := false
@@ -41,62 +41,58 @@ var _swatches: Array[ColorChip] = []
 
 
 func _init(limner_editor: LimnerEditor) -> void:
+	super(DESIGN_SIZE)
 	editor = limner_editor
 	name = "Color"
-	add_theme_constant_override("separation", ToolsPanel.SEPARATION)
 
 	_bars[Target.PAINT] = ColorChip.new("Edit the paint colour, which Paint, Line and Colorize use", "Paint colour")
 	_bars[Target.BACKGROUND] = ColorChip.new("Edit the background colour of the document", "Background colour")
 	for target: Target in _bars:
 		var bar: ColorChip = _bars[target]
+		bar.custom_minimum_size = Vector2(0, Kit.u(Kit.KEY))
+		bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		bar.chosen.connect(_select.bind(target))
-	add_child(Kit.row([_bars[Target.PAINT], _bars[Target.BACKGROUND]]))
-
-	_square = PickerArea.new(PickerArea.Kind.SATURATION_VALUE)
-	_square.custom_minimum_size = Vector2(120, AREA_HEIGHT)
-	_square.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_square.changed.connect(func(at: Vector2) -> void: _pick(_hue, at.x, at.y))
-	_strip = PickerArea.new(PickerArea.Kind.HUE)
-	_strip.custom_minimum_size = Vector2(28, AREA_HEIGHT)
-	_strip.changed.connect(func(at: Vector2) -> void: _pick(at.y, _saturation, _value))
-	for area: PickerArea in [_square, _strip]:
-		area.drag_started.connect(_begin_edit)
-		area.drag_ended.connect(_end_edit)
-	add_child(Kit.row([_square, _strip]))
-
-	_hue_row = SliderRow.new("Hue", 0.0, 360.0, 1.0, "Hue, as an angle round the colour wheel", func(degrees: float) -> String: return "%d°" % roundi(degrees))
-	_hue_row.changed.connect(func(degrees: float) -> void: _pick(degrees / 360.0, _saturation, _value))
-	_saturation_row = SliderRow.new("Saturation", 0.0, 1.0, 0.01, "From grey to the pure colour")
-	_saturation_row.changed.connect(func(saturation: float) -> void: _pick(_hue, saturation, _value))
-	_value_row = SliderRow.new("Value", 0.0, 1.0, 0.01, "From black to the full colour")
-	_value_row.changed.connect(func(value: float) -> void: _pick(_hue, _saturation, value))
-	for slider: SliderRow in [_hue_row, _saturation_row, _value_row]:
-		slider.drag_started.connect(_begin_edit)
-		slider.drag_ended.connect(_end_edit)
-		add_child(slider)
-
-	var hex_title := Kit.label("Hex")
-	hex_title.custom_minimum_size = Vector2(ToolsPanel.TITLE_WIDTH, Kit.ROW)
-	_hex = LineEdit.new()
-	_hex.tooltip_text = "The colour as #rrggbb, as it looks on screen (sRGB)"
-	_hex.custom_minimum_size = Vector2(0, Kit.ROW)
-	_hex.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_hex.select_all_on_focus = true
-	_hex.text_changed.connect(func(_text: String) -> void: _hex_typed = true)
-	_hex.text_submitted.connect(_on_hex_submitted)
-	_hex.focus_exited.connect(_on_hex_left)
-	add_child(Kit.row([hex_title, _hex, Kit.button("Add", "Store this colour in the next swatch", _add_swatch, "plus")]))
+	add_child(Kit.key_row([_bars[Target.PAINT], _bars[Target.BACKGROUND]]))
 
 	var grid := GridContainer.new()
 	grid.columns = 8
+	grid.add_theme_constant_override("h_separation", Kit.u(6))
+	grid.add_theme_constant_override("v_separation", Kit.u(6))
 	for index in SWATCHES:
 		var swatch := ColorChip.new("Press to use this colour. Hold, or right-click, to replace it with the current colour.")
 		swatch.holdable = true
+		swatch.custom_minimum_size = Vector2(Kit.u(30), Kit.u(30))
+		swatch.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		swatch.chosen.connect(_use_swatch.bind(index))
 		swatch.held.connect(_store_swatch.bind(index))
 		_swatches.append(swatch)
 		grid.add_child(swatch)
 	add_child(grid)
+
+	_square = PickerArea.new(PickerArea.Kind.SATURATION_VALUE)
+	_square.custom_minimum_size = Vector2(Kit.u(200), Kit.u(AREA_HEIGHT))
+	_square.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_square.changed.connect(func(at: Vector2) -> void: _pick(_hue, at.x, at.y))
+	_strip = PickerArea.new(PickerArea.Kind.HUE)
+	_strip.custom_minimum_size = Vector2(Kit.u(Kit.KEY), Kit.u(AREA_HEIGHT))
+	_strip.changed.connect(func(at: Vector2) -> void: _pick(at.y, _saturation, _value))
+	for area: PickerArea in [_square, _strip]:
+		area.drag_started.connect(_begin_edit)
+		area.drag_ended.connect(_end_edit)
+	var picker := Kit.key_row([_square, _strip])
+	picker.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	add_child(picker)
+
+	_hex = LineEdit.new()
+	_hex.tooltip_text = "The colour as #rrggbb, as it looks on screen (sRGB)"
+	_hex.custom_minimum_size = Vector2(0, Kit.u(Kit.KEY))
+	_hex.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_hex.select_all_on_focus = true
+	_hex.text_changed.connect(func(_text: String) -> void: _hex_typed = true)
+	_hex.text_submitted.connect(_on_hex_submitted)
+	_hex.focus_exited.connect(_on_hex_left)
+	var add := Kit.text_key("Add", "Store this colour in the next swatch", _add_swatch, "plus")
+	add_child(Kit.key_row([Kit.caption("Hex"), _hex, add]))
 
 
 func _ready() -> void:
@@ -155,9 +151,6 @@ func _show_picker() -> void:
 	_square.hue = _hue
 	_square.marker = Vector2(_saturation, _value)
 	_strip.marker = Vector2(0.5, _hue)
-	_hue_row.set_value(_hue * 360.0)
-	_saturation_row.set_value(_saturation)
-	_value_row.set_value(_value)
 	# Text being typed is left alone; anything else in the field is replaced.
 	var hex := "#" + _picked().to_html(false)
 	if not _hex_typed and _hex.text != hex:
