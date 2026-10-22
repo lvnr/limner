@@ -8,7 +8,14 @@ var editor: LimnerEditor
 var failures: Array[String] = []
 
 
+## The settings file every test starts with, empty, unless it chooses one of its own:
+## no test reads or changes the settings of whoever runs the tests.
+const TEST_SETTINGS := "user://test_settings.json"
+
+
 func setup() -> void:
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(TEST_SETTINGS))
+	Preferences.use_file(TEST_SETTINGS)
 	# Kit's look is the app's, kept between tests: each starts on the desktop's, dark.
 	Kit.set_headset(false)
 	Kit.use_scheme("dark")
