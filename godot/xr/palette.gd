@@ -32,6 +32,7 @@ const PANELS := [
 	{"title": "Monitor", "script": "res://ui/monitor_panel.gd", "icon": "film", "row": 1},
 	{"title": "Performance", "script": "res://ui/performance_panel.gd", "icon": "chart", "row": 1},
 	{"title": "Settings", "script": "res://ui/settings_panel.gd", "icon": "gear", "row": 1},
+	{"title": "Text", "script": "res://ui/text_panel.gd", "icon": "text", "row": 1},
 ]
 ## Width of a panel on the palette, in the panel's pixels: 35 cm.
 const PANEL_WIDTH := 384
@@ -114,6 +115,8 @@ func _ready() -> void:
 		rows[int(entry.get("row", 0))].append(coin)
 		if panel.has_signal("button_map_requested"):
 			panel.connect("button_map_requested", func() -> void: button_map_requested.emit())
+		if panel.has_signal("text_requested"):
+			panel.connect("text_requested", func() -> void: show_panel("Text"))
 		if current == "":
 			current = title
 	var cluster := _make_cluster(rows)

@@ -185,7 +185,9 @@ func _build_interface() -> void:
 	timeline = TimelinePanel.new(editor)
 	bottom_dock.add_child(timeline)
 
-	left_dock.add_child(ToolsPanel.new(editor))
+	var tools := ToolsPanel.new(editor)
+	tools.text_requested.connect(func() -> void: show_details("Text"))
+	left_dock.add_child(tools)
 	left_dock.add_child(Kit.separator())
 	left_dock.add_child(ColorPanel.new(editor))
 
@@ -209,6 +211,7 @@ func _build_interface() -> void:
 		[MonitorPanel.new(editor), "film"],
 		[PerformancePanel.new(editor), "chart"],
 		[_settings_panel(), "gear"],
+		[TextPanel.new(editor), "text"],
 	]:
 		var panel: Control = entry[0]
 		var index := details.get_tab_count()

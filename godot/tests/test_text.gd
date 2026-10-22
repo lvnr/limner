@@ -112,9 +112,9 @@ func test_text_is_added_as_selected_strokes_in_one_undo_step() -> void:
 	check_eq(messages.size(), 1, "and it says so")
 
 
-func test_the_tools_panel_writes_what_is_typed() -> void:
+func test_the_text_panel_writes_what_is_typed() -> void:
 	_fresh_preferences()
-	var panel := ToolsPanel.new(editor)
+	var panel := TextPanel.new(editor)
 	mount(panel)
 	await frames(2)
 	panel._text.text = "A"
@@ -213,10 +213,10 @@ func test_a_missing_font_falls_back_to_the_built_in_one() -> void:
 	preferences.choose_font("No Such Font Limner 1")
 	var notes: Array[String] = []
 	editor.message.connect(func(text: String, _is_error: bool) -> void: notes.append(text))
-	var panel := ToolsPanel.new(editor)
+	var panel := TextPanel.new(editor)
 	mount(panel)
 	await frames(2)
-	check_eq(panel._text_font.get_item_text(panel._text_font.selected), "No Such Font Limner 1 (not installed)", "the list says the font is missing")
+	check_eq(_chosen_font_key(panel), "No Such Font Limner 1 (not installed)", "the font keys say the font is missing")
 	panel._text.text = "A"
 	panel._text_solid.button_pressed = false
 	panel._add_text()
@@ -229,12 +229,13 @@ func test_a_missing_font_falls_back_to_the_built_in_one() -> void:
 
 func test_the_panel_chooses_and_remembers_a_font() -> void:
 	var preferences := _fresh_preferences()
-	var panel := ToolsPanel.new(editor)
+	var panel := TextPanel.new(editor)
 	mount(panel)
 	await frames(2)
-	check(panel.get_combined_minimum_size().x <= 300.0, "the panel fits a dock 300 wide, needs %s" % panel.get_combined_minimum_size().x)
-	check_eq(panel._text_font.get_item_text(panel._text_font.selected), ToolsPanel.BUILT_IN_FONT, "the built-in font to start with")
-	check_eq(panel._text_font.item_count, TextStrokes.system_fonts().size() + 2, "then every installed font, after a separator")
+	check_fits(panel)
+	check_eq(_chosen_font_key(panel), TextPanel.BUILT_IN_FONT, "the built-in font to start with")
+	check_eq(panel._font_list.size(), TextStrokes.system_fonts().size() + 1, "then every installed font")
+	check_eq(panel._font_pager.per_page, TextPanel.FONTS_PER_PAGE, "eight to a page")
 	var family := _some_system_font()
 	if family == "":
 		print("       (skipped the rest: no system font with outlines here)")
@@ -242,21 +243,21 @@ func test_the_panel_chooses_and_remembers_a_font() -> void:
 	# Searching narrows the list; Enter takes the first match.
 	panel._font_search.text = family
 	panel._font_search.text_changed.emit(family)
-	check(panel._text_font.item_count < 20, "a search leaves a short list: %d" % panel._text_font.item_count)
+	check(panel._font_list.size() < 20, "a search leaves a short list: %d" % panel._font_list.size())
+	check_eq(panel._font_pager.first, 0, "shown from its first page")
 	panel._font_search.text_submitted.emit(family)
 	await frames(2)
 	var chosen := preferences.text("text_font")
 	check(chosen.containsn(family), "the first match is chosen: %s" % chosen)
 	check_eq(preferences.value("recent_fonts"), [chosen], "and is the most recent")
-	check_eq(str(panel._text_font.get_item_metadata(panel._text_font.selected)), chosen, "the list shows it")
-	# Picking from the list works the same way.
+	check_eq(_chosen_font_key(panel), chosen, "its key is down")
+	# Pressing a font's key works the same way.
 	panel._font_search.text = ""
 	panel._font_search.text_changed.emit("")
-	panel._text_font.select(0)
-	panel._text_font.item_selected.emit(0)
+	(panel._fonts.buttons["0"] as Button).pressed.emit()
 	await frames(2)
 	check_eq(preferences.text("text_font"), "", "back to the built-in font")
-	check_eq(panel._text_font.get_item_text(1), chosen, "the recent font stays at the top of the list")
+	check_eq(panel._font_list[1][1], chosen, "the recent font stays near the start of the list")
 	# The text is written in the font chosen.
 	preferences.choose_font(family)
 	await frames(1)
@@ -271,7 +272,7 @@ func test_the_panel_chooses_and_remembers_a_font() -> void:
 
 func test_several_lines_from_the_panel_and_the_headset_keyboard() -> void:
 	_fresh_preferences()
-	var panel := ToolsPanel.new(editor)
+	var panel := TextPanel.new(editor)
 	mount(panel)
 	await frames(2)
 	# The headset's keyboard types into the box like a real one: Enter starts a line.
@@ -298,3 +299,33 @@ func test_several_lines_from_the_panel_and_the_headset_keyboard() -> void:
 	await frames(2)
 	check_eq(int(world.scene.info().strokes), 6, "three letters on two lines, each a stem and a dot")
 	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_the_text_box_never_needs_to_scroll() -> void:
+	_fresh_preferences()
+	var panel := TextPanel.new(editor)
+	mount(panel)
+	await frames(2)
+	panel._text.text = "one\ntwo\nthree\nfour"
+	panel._text.text_changed.emit()
+	check_eq(panel._text.get_line_count(), 4, "four lines fit")
+	panel._text.text = "one\ntwo\nthree\nfour\nfive"
+	panel._text.text_changed.emit()
+	check_eq(panel._text.text, "one\ntwo\nthree\nfour", "a fifth is taken back")
+	panel._text.text = "x".repeat(TextPanel.MAX_LINE + 1)
+	panel._text.text_changed.emit()
+	check_eq(panel._text.text, "one\ntwo\nthree\nfour", "as is a line too long for the box")
+	Kit.set_headset(true)
+	var headset := TextPanel.new(editor)
+	mount(headset)
+	await frames(2)
+	check_fits(headset, "in a headset")
+	Kit.set_headset(false)
+
+
+## The words on the font key that is down, or an empty string.
+func _chosen_font_key(panel: TextPanel) -> String:
+	for button: Button in panel._fonts.buttons.values():
+		if button.visible and button.button_pressed:
+			return button.text
+	return ""

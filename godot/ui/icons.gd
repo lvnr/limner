@@ -108,6 +108,11 @@ const BODIES := {
 	"export": '<path d="M12 15V4M8 8l4-4 4 4"/><path d="M5 13v6h14v-6"/>',
 	"import": '<path d="M12 4v11M8 11l4 4 4-4"/><path d="M5 13v6h14v-6"/>',
 	"grid": '<path d="M4 4h16v16H4zM4 9.300h16M4 14.700h16M9.300 4v16M14.700 4v16"/>',
+	# guides of the Tools panel: the grid around the brush, the blink of the stroke the
+	# lower button would delete, and text written in strokes
+	"brush_grid": '<circle cx="12" cy="12" r="2.500" fill="{c}"/><path d="M4 7.500h2M4 16.500h2M18 7.500h2M18 16.500h2M7.500 4v2M16.500 4v2M7.500 18v2M16.500 18v2"/>',
+	"blink": '<path d="M4 17c3-5 6-6 9-4s5 1 7-3"/><path d="M17 3v3M21 6l-2 1.500M13.500 5l2 1.500"/>',
+	"text": '<path d="M5 6V4h14v2M12 4v16M9 20h6"/>',
 	"gimbal": '<circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="8" ry="3"/><ellipse cx="12" cy="12" rx="3" ry="8"/>',
 	"flip": '<path d="M12 3v18" stroke-dasharray="2.500 2.500"/><path d="M9 7L4 17h5z"/><path d="M15 7l5 10h-5z" fill="{c}"/>',
 	"home": '<path d="M4 11l8-7 8 7"/><path d="M6 10v9h12v-9"/>',

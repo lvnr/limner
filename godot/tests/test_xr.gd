@@ -463,25 +463,18 @@ func test_the_lower_button_opens_a_context_menu_over_a_panel() -> void:
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
-func test_a_pop_up_opens_inside_its_panel() -> void:
+func test_a_choice_is_a_key_poked_not_a_list_opened() -> void:
 	if not await _start():
 		return
 	run({"cmd": "set_tool", "tool": "colorize"})
 	var surface := await _open("Tools")
 	var panel: ToolsPanel = surface.content
-	var option: OptionButton = panel._settings["colorize/mode"]
-	await _poke(surface, option)
-	var popup := option.get_popup()
-	check_eq(popup.visible, true, "poking a drop-down opens it")
-	check_eq(popup.is_embedded(), true, "inside the panel, not as a window of the desktop")
-	check(surface.viewport.get_embedded_subwindows().has(popup), "it belongs to the panel's own viewport")
-	check(Rect2i(Vector2i.ZERO, surface.pixel_size).encloses(Rect2i(popup.position, popup.size)), "and fits on the sheet: %s in %s" % [Rect2i(popup.position, popup.size), surface.pixel_size])
-	# Choose "Multiply", the third entry, by poking it.
-	var pixel := Vector2(popup.position) + Vector2(popup.size.x * 0.5, popup.size.y * 2.5 / popup.item_count)
-	await sim.play(sim.poke_steps(RIGHT, surface.world_point(pixel), _normal(surface)))
+	var modes: KeyGrid = panel._settings["colorize/mode"]
+	await _poke(surface, modes.buttons["multiply"])
 	await frames(3)
-	check_eq(world.scene.tool_settings()["colorize"]["mode"], "multiply", "an entry is chosen by poking it")
-	check_eq(popup.visible, false, "and the drop-down closes")
+	check_eq(world.scene.tool_settings()["colorize"]["mode"], "multiply", "a blend mode is chosen by poking its key")
+	check(surface.viewport.get_embedded_subwindows().is_empty(), "nothing opened over the panel")
+	check_eq(modes.get_value(), "multiply", "and its key stays down")
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
@@ -675,14 +668,6 @@ func test_buttons_stand_off_the_sheet_as_keys() -> void:
 	check(surface.keys.count > 10, "the panel's buttons stand up as keys: %d" % surface.keys.count)
 	check_near(surface.rest_at(surface.pixel_of(eraser)), XRPanelKeys.HEIGHT, "a button stands its full height", 1e-5)
 	check_near(surface.rest_at(surface.pixel_of(paint)), XRPanelKeys.HEIGHT * XRPanelKeys.LATCHED, "the chosen tool is latched half down", 1e-5)
-	var flat: CheckBox = null
-	for node: Node in panel.find_children("*", "CheckBox", true, false):
-		if (node as CheckBox).is_visible_in_tree():
-			flat = node
-			break
-	check(flat != null, "the Tools panel has a check box")
-	if flat != null:
-		check_eq(surface.rest_at(surface.pixel_of(flat)), 0.0, "a check box stays flat, as Quill's do")
 	eraser.disabled = true
 	surface.wake()
 	await frames(4)
@@ -693,6 +678,17 @@ func test_buttons_stand_off_the_sheet_as_keys() -> void:
 	# The round buttons under the panel are keys too.
 	var coin: Button = shell.palette.coins["Color"]
 	check_near(shell.palette.tabs.rest_at(shell.palette.tabs.pixel_of(coin)), XRPanelKeys.ROUND_HEIGHT, "a round button stands taller", 1e-5)
+	# Check boxes stay flat, as Quill's do.
+	var settings := await _open("Settings")
+	await frames(4)
+	var flat: CheckBox = null
+	for node: Node in settings.content.find_children("*", "CheckBox", true, false):
+		if (node as CheckBox).is_visible_in_tree():
+			flat = node
+			break
+	check(flat != null, "the Settings panel has a check box")
+	if flat != null:
+		check_eq(settings.rest_at(settings.pixel_of(flat)), 0.0, "a check box stays flat")
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 

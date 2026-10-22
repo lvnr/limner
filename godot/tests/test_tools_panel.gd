@@ -55,10 +55,12 @@ func _current_tool() -> String:
 	return world.scene.tool_settings()["tool"]
 
 
+## The key whose words are `text`, or whose tooltip starts with them and a colon (keys
+## with an icon, or with words shortened to fit, say what they do in full there).
 func _button(panel: ToolsPanel, text: String) -> Button:
 	for node: Node in panel.find_children("*", "Button", true, false):
 		var button: Button = node
-		if button.text == text:
+		if button.text == text or button.tooltip_text.begins_with(text + ":"):
 			return button
 	failures.append("there is no button \"%s\"" % text)
 	var stand_in := Button.new()
@@ -95,7 +97,7 @@ func test_each_tool_button_switches_tool_and_context() -> void:
 		for other: String in panel._contexts:
 			var context: Control = panel._contexts[other]
 			check_eq(context.visible, other == tool, "settings of %s shown while using %s" % [other, tool])
-		check(panel.get_combined_minimum_size().x <= 264.0, "%s fits a panel 280 wide, needs %s" % [tool, panel.get_combined_minimum_size().x])
+		check_fits(panel, tool)
 	check(messages.is_empty(), "no errors: %s" % [messages])
 	# The desktop's modifier is Shift (`DesktopHand._modifier`); Alt is the gimbal's.
 	var hints: Array = panel._contexts["thicken"].find_children("*", "Label", true, false).map(func(label: Label) -> String: return label.text)
@@ -111,8 +113,8 @@ func test_sliders_change_their_settings() -> void:
 	check_eq(size._value.text, "50 mm", "size is shown in millimetres")
 	size.slider.value = 0.0025
 	check_eq(size._value.text, "2.5 mm", "a small size keeps a decimal")
-	var opacity: SliderRow = panel._settings["paint/opacity"]
-	opacity.slider.value = 0.4
+	var opacity: OpacityRamp = panel._settings["paint/opacity"]
+	opacity.changed.emit(0.4)
 	check_near(_setting("paint", "opacity"), 0.4, "paint opacity")
 	var duration: SliderRow = panel._settings["paint/anim_duration"]
 	duration.slider.value = 0.25
@@ -138,7 +140,7 @@ func test_sliders_change_their_settings() -> void:
 
 func test_brush_and_taper_controls() -> void:
 	var panel := await _panel()
-	var brushes: ChoiceRow = panel._settings["paint/brush"]
+	var brushes: KeyGrid = panel._settings["paint/brush"]
 	check_eq(brushes.buttons.keys(), ["capped_cylinder", "capped_ellipse", "rounded_ribbon", "cylinder", "ellipse", "ribbon", "cube"], "order of the brushes")
 	check_eq(brushes.get_value(), "ellipse", "the brush in use is shown pressed")
 	for brush: String in brushes.buttons:
@@ -146,56 +148,58 @@ func test_brush_and_taper_controls() -> void:
 		(brushes.buttons[brush] as Button).pressed.emit()
 		check_eq(_setting("paint", "brush"), brush, "paint brush")
 		check_eq(brushes.get_value(), brush, "only the chosen brush is down")
-	(panel._settings["line/brush"] as ChoiceRow).buttons["ribbon"].pressed.emit()
+	(panel._settings["line/brush"] as KeyGrid).buttons["ribbon"].pressed.emit()
 	check_eq(_setting("line", "brush"), "ribbon", "line brush")
 	check_eq(_setting("paint", "brush"), "cube", "the paint brush is its own")
 
 	for key: String in ["opacity_taper", "width_taper"]:
-		var taper: ChoiceRow = panel._settings["paint/" + key]
-		check_eq(taper.buttons.keys(), ["none", "pressure", "auto", "both"], "states of %s" % key)
-		for state: String in taper.buttons:
-			(taper.buttons[state] as Button).pressed.emit()
+		var taper: StepKey = panel._settings["paint/" + key]
+		check_eq(taper._keys, ["none", "pressure", "auto", "both"] as Array[String], "states of %s" % key)
+		taper.set_value("none")
+		for state: String in ["pressure", "auto", "both", "none"]:
+			taper.key_button.pressed.emit()
 			check_eq(_setting("paint", key), state, key)
-	check_eq((panel._settings["paint/width_taper"] as ChoiceRow).buttons["pressure"].text, "Press", "pressure is called Press")
+	var width: StepKey = panel._settings["paint/width_taper"]
+	width.key_button.pressed.emit()
+	check_eq(width._word.text, "Press", "pressure is called Press, under the key")
 	check(not panel._settings.has("line/width_taper"), "the line tool has no tapers")
 
-	var directional: CheckBox = panel._settings["paint/directional"]
+	var directional: Button = panel._settings["paint/directional"]
 	directional.button_pressed = true
 	check_eq(_setting("paint", "directional"), true, "paint directional")
 	check_eq(_setting("line", "directional"), false, "line directional is its own")
-	(panel._settings["line/directional"] as CheckBox).button_pressed = true
+	(panel._settings["line/directional"] as Button).button_pressed = true
 	check_eq(_setting("line", "directional"), true, "line directional")
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
 func test_blend_mode() -> void:
 	var panel := await _panel()
-	var option: OptionButton = panel._settings["colorize/mode"]
-	var labels := []
-	for index in option.item_count:
-		labels.append(option.get_item_text(index))
+	var grid: KeyGrid = panel._settings["colorize/mode"]
+	var labels := grid.buttons.values().map(func(button: Button) -> String: return button.text)
+	check_eq(grid.columns, 3, "three to a row")
 	check_eq(labels, ["Normal (RGB)", "Darken", "Multiply", "Overlay", "Burn", "Lighten", "Screen", "Add", "Dodge", "Hue (H)", "Saturation (S)", "Color (HS)", "Luminosity (V)", "Opacity (A)"], "blend modes")
 	var modes := ["normal", "darken", "multiply", "overlay", "burn", "lighten", "screen", "add", "dodge", "hue", "saturation", "color", "luminosity", "opacity"]
+	check_eq(grid.buttons.keys(), modes, "in this order")
 	for index in range(modes.size() - 1, -1, -1):
-		option.select(index)
-		option.item_selected.emit(index)
-		check_eq(_setting("colorize", "mode"), modes[index], "mode chosen from row %d" % index)
+		(grid.buttons[modes[index]] as Button).pressed.emit()
+		check_eq(_setting("colorize", "mode"), modes[index], "mode chosen from key %d" % index)
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
 func test_option_toggles() -> void:
 	var panel := await _panel()
-	var grid: CheckBox = panel._options["show_grid"]
-	check_eq(grid.text, "Floor grid", "the guides toggle")
+	var grid: Button = panel._options["show_grid"]
+	check(grid.tooltip_text.begins_with("Floor grid"), "the guides toggle")
 	check_eq(grid.button_pressed, true, "the grid starts shown")
 	grid.button_pressed = false
 	check_eq(world.scene.options().show_grid, false, "grid switched off")
-	var blink: CheckBox = panel._options["show_stroke_at_hand"]
+	var blink: Button = panel._options["show_stroke_at_hand"]
 	check_eq(blink.button_pressed, true, "the stroke to delete blinks unless switched off")
 	blink.button_pressed = false
 	check_eq(world.scene.options().show_stroke_at_hand, false, "blink switched off")
 	for key: String in ["select_in_all_layers", "select_in_all_frames"]:
-		var toggle: CheckBox = panel._options[key]
+		var toggle: Button = panel._options[key]
 		check_eq(toggle.button_pressed, false, "%s starts off" % key)
 		toggle.button_pressed = true
 		var options: Dictionary = world.scene.options()
@@ -203,8 +207,8 @@ func test_option_toggles() -> void:
 	run({"cmd": "set_options", "values": {"show_grid": true, "select_in_all_frames": false}})
 	await frames(2)
 	check_eq(grid.button_pressed, true, "the grid toggle follows the option")
-	check_eq((panel._options["select_in_all_frames"] as CheckBox).button_pressed, false, "a selection toggle follows its option")
-	check_eq((panel._options["select_in_all_layers"] as CheckBox).button_pressed, true, "the other toggle stays")
+	check_eq((panel._options["select_in_all_frames"] as Button).button_pressed, false, "a selection toggle follows its option")
+	check_eq((panel._options["select_in_all_layers"] as Button).button_pressed, true, "the other toggle stays")
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
@@ -266,10 +270,31 @@ func test_follows_changes_made_behind_its_back() -> void:
 	check_eq(size._value.text, "100 mm", "size text")
 	check_near((panel._settings["colorize/inner"] as SliderRow).get_value(), 0.5, "hard core slider")
 	check_near((panel._settings["colorize/strength"] as SliderRow).get_value(), 0.3, "strength slider")
-	check_eq((panel._settings["colorize/mode"] as OptionButton).selected, 9, "blend mode row")
-	check_eq((panel._settings["paint/brush"] as ChoiceRow).get_value(), "cube", "brush")
-	check_eq((panel._settings["paint/width_taper"] as ChoiceRow).get_value(), "both", "width taper")
-	check_eq((panel._settings["paint/directional"] as CheckBox).button_pressed, true, "directional")
+	check_eq((panel._settings["colorize/mode"] as KeyGrid).get_value(), "hue", "blend mode key")
+	check_eq((panel._settings["paint/brush"] as KeyGrid).get_value(), "cube", "brush")
+	check_eq((panel._settings["paint/width_taper"] as StepKey).get_value(), "both", "width taper")
+	check_eq((panel._settings["paint/directional"] as Button).button_pressed, true, "directional")
 	check_near((panel._settings["paint/anim_duration"] as SliderRow).get_value(), 0.5, "animated brush duration")
 	check_eq(recorder.sent.size(), 0, "showing a change sends no commands")
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_every_tool_fits_in_the_headset_too_and_the_text_key_asks_for_text() -> void:
+	Kit.set_headset(true)
+	var panel := await _panel()
+	for tool: String in ToolsPanel.TOOLS:
+		run({"cmd": "set_tool", "tool": tool})
+		await frames(2)
+		check_fits(panel, "%s, in a headset" % tool)
+	check_eq(int(panel.pixel_size().x), int(ToolsPanel.DESIGN_SIZE.x), "full size in a headset")
+	var asked := [0]
+	panel.text_requested.connect(func() -> void: asked[0] += 1)
+	_button(panel, "Text").pressed.emit()
+	check_eq(asked[0], 1, "the Text key asks for the Text panel")
+	run({"cmd": "set_tool_settings", "values": {"symmetry": "y"}})
+	await frames(2)
+	check_eq(panel._mirror.get_value(), "y", "the mirror follows the setting")
+	panel._mirror.key_button.pressed.emit()
+	check_eq(world.scene.tool_settings().symmetry, "z", "and steps on to the next axis")
+	Kit.set_headset(false)
 	check(messages.is_empty(), "no errors: %s" % [messages])
