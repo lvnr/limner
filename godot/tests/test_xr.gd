@@ -110,7 +110,12 @@ func test_the_palette_shows_and_hides_on_the_menu_feedback() -> void:
 	check_near(tabs.position.y, XRPalette.COINS_ABOVE_HAND, "the round buttons are just above the hand")
 	check(tools.position.y - tools.metres().y * 0.5 > tabs.position.y, "the panel is above them: %s vs %s" % [tools.position, tabs.position])
 	check(tools.position.x > 0.0, "a little toward the middle of the body, right of the left hand")
-	check_eq(shell.palette.coins.size(), shell.palette.surfaces.size(), "a round button for every panel")
+	check_eq(shell.palette.coins.keys(), ["Tools", "Color", "Layers", "Transform", "Monitor", "Document", "Settings", "Performance", "Export"], "the round buttons of Quill's Navigation, painting panels first")
+	check(not shell.palette.coins.has("Layer") and not shell.palette.coins.has("Text"), "the Layer and Text panels are opened from keys of other panels")
+	for title: String in shell.palette.surfaces:
+		var sheet: XRPanelSurface = shell.palette.surfaces[title]
+		check(sheet.content.find_children("*", "ScrollContainer", true, false).is_empty(), "nothing scrolls on the %s sheet" % title)
+		check(sheet.find_children("*", "ScrollContainer", true, false).is_empty() and sheet.viewport.find_children("*", "ScrollContainer", true, false).is_empty(), "nor does the %s sheet itself" % title)
 	check_eq((shell.palette.coins["Tools"] as Button).button_pressed, true, "the one of the panel in front is down")
 	await sim.play(press)
 	check_eq(shell.palette.shown, false, "hidden after pressing it again")
@@ -451,7 +456,7 @@ func test_the_lower_button_over_a_panel_opens_nothing() -> void:
 		{"time": 0.15, "right": {"lower": false}},
 		{"time": 0.2},
 	])
-	check(not panel.layer_rows._context.visible, "no menu opens over a panel in a headset")
+	check(panel.layer_rows._context == null, "a headset's layer rows have no menu at all")
 	check(surface.viewport.get_embedded_subwindows().is_empty(), "nothing at all")
 	check_eq(_strokes(), 1, "and nothing is deleted, as it would be away from a panel")
 	check(messages.is_empty(), "no errors: %s" % [messages])

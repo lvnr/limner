@@ -18,9 +18,10 @@ signal corner_pressed
 ## The sheet changed size, because its panel needs more or less room.
 signal resized
 
-## How many of the panel's pixels make one metre of sheet: 1.1 to the millimetre, so
-## that a button is about 3 cm across, as Quill's are. Tune on real hardware.
-const PIXELS_PER_METRE := 1100.0
+## How many of the panel's pixels make one metre of sheet: 1.25 to the millimetre, so
+## that a key (`Kit.KEY`, 38 pixels) is 30 mm across, as Quill's are, and a panel of
+## 500 pixels is 40 cm wide. Tune on real hardware.
+const PIXELS_PER_METRE := 1250.0
 ## How many pixels are drawn for each of the panel's own, per side. At 1, a panel at
 ## arm's length has about 9 pixels to a degree of view, fewer than even a first-
 ## generation headset shows, so text and icons look soft; at 2 they are as sharp as
@@ -35,14 +36,11 @@ const TITLE_FONT_SIZE := 16
 const THICKNESS := 0.008
 ## Height of the tooltip line, in the panel's pixels: room for two lines of small text.
 const FOOTER_HEIGHT := 40
-## The least and, unless a sheet says otherwise, the most room the panel itself is
-## given, in pixels. A panel that needs more than the most scrolls.
+## The least room the panel itself is given, in pixels. A sheet is as tall as its
+## panel asks: panels have one fixed size, and nothing on a sheet scrolls.
 const MIN_BODY_HEIGHT := 64
-const MAX_BODY_HEIGHT := 560
 ## Space between the sheet's edge and what is on it, in pixels.
 const MARGIN := 8
-## Space between a panel and the scroll bar at its right, in pixels.
-const SCROLL_GUTTER := 6
 ## How long the sheet keeps redrawing after it was last touched or told of a change, in seconds.
 const AWAKE_SECONDS := 0.4
 ## How often an untouched sheet is redrawn anyway, in seconds.
@@ -74,9 +72,6 @@ var pixel_size := Vector2i(352, 200)
 var movable := true
 ## How long the pointer rests on a control before its tooltip is shown, in seconds.
 var tooltip_delay := TOOLTIP_DELAY
-## The most room the panel itself is given before it scrolls, in pixels. Set it
-## before the sheet enters the tree.
-var max_body_height := MAX_BODY_HEIGHT
 ## Whether presses on the panel come with Ctrl held: the modifier, which adds to a
 ## selection with a tap as Ctrl does with a mouse.
 var modifier := false
@@ -100,7 +95,8 @@ var _width := 352
 var _body_height := 0
 var _root: PanelContainer
 var _bar: PanelContainer
-var _scroll: ScrollContainer
+## The room the panel is in on the sheet: as large as the panel asks.
+var _room: MarginContainer
 var _corner: Button
 var _footer: Label
 var _quad: QuadMesh
@@ -175,24 +171,16 @@ func _init(surface_title: String, panel: Control, width: int, body_height := 0, 
 	var column := Kit.column()
 	inset.add_child(column)
 
-	_scroll = ScrollContainer.new()
-	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	# Room for the scroll bar is kept whether or not it shows. Were it to take its
-	# width only when needed, a panel whose text wraps could flip for ever between
-	# "narrower, so taller, so it scrolls" and "wider, so shorter, so it does not".
-	_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_RESERVE if chrome else ScrollContainer.SCROLL_MODE_DISABLED
-	_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	# The panel, at the size it asks for. Nothing on a sheet scrolls.
+	_room = MarginContainer.new()
+	_room.name = "Room"
+	for side: String in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
+		_room.add_theme_constant_override(side, 0)
+	_room.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	var gutter := MarginContainer.new()
-	gutter.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	gutter.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	gutter.add_theme_constant_override("margin_right", SCROLL_GUTTER if chrome else 0)
-	for side: String in ["margin_left", "margin_top", "margin_bottom"]:
-		gutter.add_theme_constant_override(side, 0)
-	gutter.add_child(panel)
-	_scroll.add_child(gutter)
-	column.add_child(_scroll)
+	_room.add_child(panel)
+	column.add_child(_room)
 
 	if chrome:
 		_footer = Form.note()
@@ -561,8 +549,8 @@ func _fit() -> void:
 	_fit_queued = false
 	var body := _body_height
 	if body <= 0:
-		body = clampi(ceili(content.get_combined_minimum_size().y), MIN_BODY_HEIGHT, max_body_height)
-	_scroll.custom_minimum_size = Vector2(0, body)
+		body = maxi(ceili(content.get_combined_minimum_size().y), MIN_BODY_HEIGHT)
+	_room.custom_minimum_size = Vector2(0, body)
 	var needed := _root.get_combined_minimum_size()
 	var fitted := Vector2i(maxi(_width, ceili(needed.x)), ceili(needed.y)).max(_pop_up_reach)
 	if fitted == pixel_size and viewport.size == fitted * TEXELS_PER_PIXEL:
@@ -596,19 +584,18 @@ func _on_node_changed(node: Node) -> void:
 		keys.mark_stale()
 
 
-## Stands the keys where the buttons are now: those under an open pop-up stay down,
-## and so do those a scrolling panel shows less than half of.
+## Stands the keys where the buttons are now: those under an open pop-up stay down.
 func _update_keys(open: Array[Window]) -> void:
 	var covers: Array[Rect2] = []
 	for window in open:
 		covers.append(Rect2(window.position, window.size))
-	var clip := Rect2(_scroll.get_global_position(), _scroll.size)
+	var clip := Rect2(_room.get_global_position(), _room.size)
 	var touch := {
 		"pixel": _last_pixel if _inside else Vector2(-1.0, -1.0),
 		"height": _tip_height / magnification,
 		"pressed": _pressed,
 	}
-	keys.update(_root, Vector2(pixel_size), _scroll, clip, covers, touch)
+	keys.update(_root, Vector2(pixel_size), _room, clip, covers, touch)
 
 
 ## Shows the tooltip of the control under the pointer once the pointer has rested on

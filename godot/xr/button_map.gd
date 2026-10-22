@@ -1,6 +1,8 @@
 class_name XRButtonMap
-extends VBoxContainer
-## The sheet that says what every control on the two controllers does.
+extends LimnerPanel
+## The sheet that says what every control on the two controllers does, a page at a
+## time: keys at its top choose the drawing hand, the other hand, the modifier, the
+## gimbal or the panels. Nothing on it scrolls.
 ##
 ## What it lists is what this build does: the rows follow the controller handling in
 ## the core (`gesture.rs` and `grab.rs` under `crates/limner-core/src/session/`) and
@@ -9,6 +11,8 @@ extends VBoxContainer
 ## Buttons are named for the hand that holds them, so the sheet rewrites itself when
 ## the drawing hand changes.
 
+## The sheet's size in design pixels (see `LimnerPanel`).
+const DESIGN_SIZE := Vector2(660, 600)
 ## Width of the column that names the control, in pixels.
 const CONTROL_WIDTH := 176
 ## The least width the column of explanations wraps to, in pixels.
@@ -64,26 +68,50 @@ const PANELS := [
 	["Tip near a panel", "Hover. Push a key or the sheet in to press; pull back to let go."],
 	["Pointing from afar", "A ray shows where. The trigger is the button; the grip still takes hold of the artwork."],
 	["Modifier held", "A press adds a key or a row to the selection."],
-	["Stick up / down", "Scroll what is under the pointer."],
-	["{lower} (lower button)", "Open the menu of what is under the pointer, as a right click does."],
+	["Stick up / down", "Step the page of a list under the pointer: the layers, the files."],
 	["Grip, tip close", "Pick the panel up and leave it anywhere in the room. The stick resizes it while held."],
 ]
 ## Names of the lower and upper face buttons on a left and on a right Touch controller.
 const FACE_BUTTONS := {"left": ["X", "Y"], "right": ["A", "B"]}
 
+## The pages, by key: the words on the key that shows it.
+const PAGES := {"drawing": "Drawing hand", "other": "Other hand", "modifier": "Modifier", "gimbal": "Gimbal", "panels": "Panels"}
+
 var _preferences: Preferences
-var _table: GridContainer
+var _pages: KeyGrid
+## The table of each page, by key: only the chosen one is shown.
+var _tables := {}
+var _shown := "drawing"
 
 
 func _init() -> void:
+	super(DESIGN_SIZE)
 	name = "ButtonMap"
 	_preferences = Preferences.shared()
-	_table = GridContainer.new()
-	_table.columns = 2
-	_table.add_theme_constant_override("h_separation", 10)
-	_table.add_theme_constant_override("v_separation", 4)
-	add_child(_table)
+	_pages = KeyGrid.new(PAGES.size())
+	for key: String in PAGES:
+		var page := _pages.add_text(key, PAGES[key], "Show what the controls do: %s" % String(PAGES[key]).to_lower())
+		page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_pages.set_value(_shown)
+	_pages.chosen.connect(show_page)
+	add_child(_pages)
+	for key: String in PAGES:
+		var table := GridContainer.new()
+		table.columns = 2
+		table.add_theme_constant_override("h_separation", 10)
+		table.add_theme_constant_override("v_separation", 4)
+		table.visible = key == _shown
+		_tables[key] = table
+		add_child(table)
 	add_child(Form.note("Buttons are named as on Touch controllers. Other controllers have them in the same places where they have them at all."))
+
+
+## Shows the page `key` (a key of `PAGES`).
+func show_page(key: String) -> void:
+	_shown = key
+	_pages.set_value(key)
+	for page: String in _tables:
+		(_tables[page] as Control).visible = page == key
 
 
 func _ready() -> void:
@@ -93,16 +121,17 @@ func _ready() -> void:
 
 ## Writes the sheet for the hand that draws now.
 func refresh() -> void:
-	for child in _table.get_children():
-		_table.remove_child(child)
-		child.queue_free()
+	for table: GridContainer in _tables.values():
+		for child in table.get_children():
+			table.remove_child(child)
+			child.queue_free()
 	var drawing := _preferences.text("dominant_hand")
 	var other := "left" if drawing == "right" else "right"
-	_section("Drawing hand (%s)" % drawing, DRAWING_HAND, drawing)
-	_section("Other hand (%s)" % other, OTHER_HAND, other)
-	_section("With the modifier held", MODIFIER, other)
-	_section("Gimbal, with the drawing hand", GIMBAL, drawing)
-	_section("Panels, with the drawing hand", PANELS, drawing)
+	_section(_tables.drawing, "Drawing hand (%s)" % drawing, DRAWING_HAND, drawing)
+	_section(_tables.other, "Other hand (%s)" % other, OTHER_HAND, other)
+	_section(_tables.modifier, "With the modifier held", MODIFIER, other)
+	_section(_tables.gimbal, "Gimbal, with the drawing hand", GIMBAL, drawing)
+	_section(_tables.panels, "Panels, with the drawing hand", PANELS, drawing)
 
 
 func _on_preference_changed(key: String) -> void:
@@ -110,12 +139,12 @@ func _on_preference_changed(key: String) -> void:
 		refresh()
 
 
-func _section(title: String, rows: Array, hand: String) -> void:
+func _section(table: GridContainer, title: String, rows: Array, hand: String) -> void:
 	var heading := Kit.heading(title)
 	heading.custom_minimum_size = Vector2(0, Kit.ROW)
 	heading.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
-	_table.add_child(heading)
-	_table.add_child(Control.new())
+	table.add_child(heading)
+	table.add_child(Control.new())
 	var faces: Array = FACE_BUTTONS[hand]
 	for row: Array in rows:
 		var control_name: String = row[0]
@@ -124,10 +153,10 @@ func _section(title: String, rows: Array, hand: String) -> void:
 		control.custom_minimum_size = Vector2(CONTROL_WIDTH, 0)
 		control.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 		control.size_flags_vertical = Control.SIZE_FILL
-		_table.add_child(control)
+		table.add_child(control)
 		var text := Kit.label(meaning, true)
 		text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		text.custom_minimum_size = Vector2(MEANING_WIDTH, 0)
 		text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		text.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-		_table.add_child(text)
+		table.add_child(text)

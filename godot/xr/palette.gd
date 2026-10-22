@@ -19,21 +19,24 @@ signal button_map_requested
 ## The panels. A panel whose script is missing is left out, so the palette works
 ## while panels are still being written. `width` and `height` are in the panel's
 ## pixels; without a height the panel gets what it asks for. `row` says where its
-## round button is: 0 the lower row (the panels used while painting), 1 the upper.
+## round button is, as in Quill: 0 the lower row (the panels used while painting), 1
+## the upper. A panel with `coin` false has none: it is shown from a key of another
+## panel (the Layer panel from a layer's kind key, Text from the Tools panel).
 const PANELS := [
 	{"title": "Tools", "script": "res://ui/tools_panel.gd", "icon": "paint", "row": 0},
 	{"title": "Color", "script": "res://ui/color_panel.gd", "icon": "colorize", "row": 0},
 	{"title": "Layers", "script": "res://ui/timeline_panel.gd", "icon": "layers", "row": 0},
 	{"title": "Transform", "script": "res://ui/transform_panel.gd", "icon": "move", "row": 0},
-	{"title": "Layer", "script": "res://ui/properties_panel.gd", "icon": "paint_layer", "row": 0},
-	{"title": "Document", "script": "res://ui/document_panel.gd", "icon": "new_file", "row": 1},
+	{"title": "Monitor", "script": "res://ui/monitor_panel.gd", "icon": "camera", "row": 0},
+	{"title": "Document", "script": "res://ui/document_panel.gd", "icon": "document", "row": 1},
+	{"title": "Settings", "script": "res://ui/settings_panel.gd", "icon": "settings", "row": 1},
+	{"title": "Performance", "script": "res://ui/performance_panel.gd", "icon": "performance", "row": 1},
 	{"title": "Export", "script": "res://ui/export_panel.gd", "icon": "export", "row": 1},
-	{"title": "Monitor", "script": "res://ui/monitor_panel.gd", "icon": "film", "row": 1},
-	{"title": "Performance", "script": "res://ui/performance_panel.gd", "icon": "chart", "row": 1},
-	{"title": "Settings", "script": "res://ui/settings_panel.gd", "icon": "gear", "row": 1},
-	{"title": "Text", "script": "res://ui/text_panel.gd", "icon": "text", "row": 1},
+	{"title": "Layer", "script": "res://ui/properties_panel.gd", "icon": "paint_layer", "coin": false},
+	{"title": "Text", "script": "res://ui/text_panel.gd", "icon": "text", "coin": false},
 ]
-## Width of a panel on the palette, in the panel's pixels: 35 cm.
+## The least width of a sheet on the palette, in the panel's pixels (31 cm); a panel
+## that is wider makes its sheet wider.
 const PANEL_WIDTH := 384
 ## Size of a round button and the gap between two, in pixels (40 and 7 mm).
 const COIN := 44
@@ -109,9 +112,10 @@ func _ready() -> void:
 		add_child(surface)
 		surfaces[title] = surface
 		_icons[title] = entry.icon
-		var coin := _make_coin(title, entry.icon)
-		coins[title] = coin
-		rows[int(entry.get("row", 0))].append(coin)
+		if entry.get("coin", true):
+			var coin := _make_coin(title, entry.icon)
+			coins[title] = coin
+			rows[int(entry.get("row", 0))].append(coin)
 		if panel.has_signal("button_map_requested"):
 			panel.connect("button_map_requested", func() -> void: button_map_requested.emit())
 		if panel.has_signal("text_requested"):

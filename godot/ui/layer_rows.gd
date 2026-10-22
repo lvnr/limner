@@ -70,9 +70,11 @@ func _init(limner_editor: LimnerEditor, rows_per_page := 10) -> void:
 	under.custom_minimum_size = Vector2(0, Kit.u(4))
 	add_child(under)
 	add_child(pager)
-	_context = PopupMenu.new()
-	_context.id_pressed.connect(_on_context)
-	add_child(_context)
+	# The right-click menu is the desktop's shortcut; a headset has no menus over panels.
+	if not Kit.headset:
+		_context = PopupMenu.new()
+		_context.id_pressed.connect(_on_context)
+		add_child(_context)
 	_make_lines(rows_per_page)
 
 
@@ -271,7 +273,7 @@ func _on_name_input(event: InputEvent, _index: int) -> void:
 	var press := event as InputEventMouseButton
 	if press != null and press.pressed:
 		_press_mode = "toggle" if press.is_command_or_control_pressed() else ("range" if press.shift_pressed else "")
-		if press.button_index == MOUSE_BUTTON_RIGHT and not Kit.headset:
+		if press.button_index == MOUSE_BUTTON_RIGHT and not Kit.headset and _context != null:
 			_open_menu(_index, press.global_position)
 
 

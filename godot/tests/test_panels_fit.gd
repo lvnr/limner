@@ -34,6 +34,17 @@ func test_transform_performance_and_settings_fit() -> void:
 	)
 
 
+func test_the_button_map_fits_every_page() -> void:
+	await _both(func(where: String) -> void:
+		var sheet: XRButtonMap = await _mount(XRButtonMap.new())
+		for page: String in XRButtonMap.PAGES:
+			sheet.show_page(page)
+			await frames(1)
+			check_fits(sheet, "%s, %s" % [page, where])
+		sheet.get_parent().queue_free()
+	)
+
+
 func test_the_layer_panel_fits_every_kind() -> void:
 	# One layer of every kind that can be made without a file, and a sound's longest
 	# settings: a frustum, with distance falloff.

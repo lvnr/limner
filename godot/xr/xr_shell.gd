@@ -44,7 +44,6 @@ const FRAME_RADIUS := 0.5
 const BUTTON_MAP_WIDTH := 620
 ## The most room the button map's rows get, in pixels: enough to show them all, so
 ## that the sheet that explains the controls needs none of them to be read.
-const BUTTON_MAP_MAX_HEIGHT := 900
 ## How far in front of the eyes the button map appears and how far below them, in
 ## metres, and how much larger than a hand-held panel it is shown, being farther off.
 const BUTTON_MAP_DISTANCE := 0.9
@@ -193,7 +192,6 @@ func _ready() -> void:
 	pointer.grabbed.connect(_on_panel_grabbed)
 	pointer.dropped.connect(_on_panel_dropped)
 	button_map = XRPanelSurface.new("Button map", XRButtonMap.new(), BUTTON_MAP_WIDTH)
-	button_map.max_body_height = BUTTON_MAP_MAX_HEIGHT
 	button_map.magnification = BUTTON_MAP_MAGNIFICATION
 	button_map.visible = false
 	rig.add_child(button_map)
