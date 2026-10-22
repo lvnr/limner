@@ -1,5 +1,5 @@
 class_name DocumentPanel
-extends VBoxContainer
+extends LimnerPanel
 ## The Document panel: the file the document is kept in, the settings that belong to
 ## the whole document, and how much is in it.
 ##
@@ -8,6 +8,9 @@ extends VBoxContainer
 ## on the desktop. Questions (save the changes first? replace that file?) are asked in
 ## the panel itself.
 
+## The panel's size in design pixels (see `LimnerPanel`).
+const DESIGN_SIZE := Vector2(560, 640)
+
 ## A document was opened from the panel. `native` is false for a Quill project,
 ## which the shell may want to frame, as it has no view of its own saved.
 signal document_opened(native: bool)
@@ -15,7 +18,10 @@ signal document_opened(native: bool)
 const RATES := [6, 8, 10, 12, 15, 24, 25, 30, 48, 50, 60]
 const RESOLUTIONS := [[1920, 1080], [1080, 1920], [1024, 1024], [2048, 2048], [3840, 2160], [4096, 4096], [7680, 4320]]
 ## The most entries the Open and Import lists show, newest first.
-const LIST_LIMIT := 30
+## How many files a page of the Open and Import lists shows; page keys reach the rest.
+const LIST_PAGE := 7
+## The longest description that can be typed: as much as the box shows whole.
+const MAX_DESCRIPTION := 200
 ## The icon of each kind of entry in those lists.
 const ENTRY_ICONS := {"limnz": "new_file", "limn": "folder_open", "quill": "folder_open", "picture": "image", "sound": "sound", "model": "model"}
 
@@ -27,6 +33,12 @@ var file_mode := ""
 var _file_note: Label
 var _file_buttons := {}
 var _drawer: VBoxContainer
+## The files listed for Open or Import, the call that takes one, and the rows and page
+## keys that show a page of them.
+var _list_entries: Array[Dictionary] = []
+var _list_chosen: Callable
+var _list_rows: VBoxContainer
+var _list_pager: Pager
 ## What to do once unsaved changes have been saved or given up.
 var _pending := Callable()
 var _save_name: TextField
@@ -61,6 +73,7 @@ var _contents: Label
 
 
 func _init(limner_editor: LimnerEditor) -> void:
+	super(DESIGN_SIZE)
 	editor = limner_editor
 	name = "Document"
 
@@ -82,8 +95,9 @@ func _init(limner_editor: LimnerEditor) -> void:
 	_drawer = Kit.column()
 	_drawer.visible = false
 	add_child(_drawer)
-	add_child(Kit.separator())
 
+	var settings_part := Kit.separator()
+	add_child(settings_part)
 	_title = TextField.new("Untitled", "The name of the piece")
 	_title.committed.connect(func(text: String) -> void: _write({"title": text}))
 	add_child(Form.row("Title", [_title]))
@@ -91,9 +105,10 @@ func _init(limner_editor: LimnerEditor) -> void:
 	add_child(Kit.label("Description"))
 	_description = TextEdit.new()
 	_description.tooltip_text = "A few words about the piece. Kept when you leave the box."
-	_description.custom_minimum_size = Vector2(0, 84)
+	_description.custom_minimum_size = Vector2(0, Kit.u(120))
 	_description.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
 	_description.focus_exited.connect(_on_description_left)
+	_description.text_changed.connect(_keep_description_short)
 	add_child(_description)
 
 	_background = ColorField.new("The colour behind everything")
@@ -141,6 +156,8 @@ func _init(limner_editor: LimnerEditor) -> void:
 	add_child(Kit.heading("Contents"))
 	_contents = Form.note()
 	add_child(_contents)
+	# The file and its lists on the left, the document's settings on the right.
+	split_columns(settings_part)
 
 
 func _ready() -> void:
@@ -470,28 +487,54 @@ func _build_confirm() -> void:
 	_drawer.add_child(buttons)
 
 
-## One button for each entry, newest first, with its date beside it. `empty` says
-## what to do when there is none; `%s` in it is the folder.
+## One key for each entry, newest first, with its date beside it, `LIST_PAGE` to a
+## page with page keys under them. `empty` says what to do when there is none; `%s`
+## in it is the folder.
 func _build_list(entries: Array[Dictionary], empty: String, chosen: Callable) -> void:
+	_list_entries = entries
+	_list_chosen = chosen
 	var where := _short(Documents.folder())
 	var heading := Form.note(empty % where if entries.is_empty() else "In %s, newest first:" % where)
 	heading.tooltip_text = Documents.folder()
 	heading.mouse_filter = Control.MOUSE_FILTER_PASS
 	_drawer.add_child(heading)
-	for entry: Dictionary in entries.slice(0, LIST_LIMIT):
+	_list_rows = Kit.column()
+	_drawer.add_child(_list_rows)
+	_list_pager = Pager.new(LIST_PAGE, false)
+	_list_pager.set_count(entries.size())
+	_list_pager.page_changed.connect(func(_first: int) -> void: _show_list_page())
+	_list_pager.visible = entries.size() > LIST_PAGE
+	_drawer.add_child(_list_pager)
+	_drawer.add_child(Kit.text_key("Close", "Puts the list away", _cancel))
+	_show_list_page()
+
+
+## Puts the entries of the page shown in the list.
+func _show_list_page() -> void:
+	for child: Node in _list_rows.get_children():
+		_list_rows.remove_child(child)
+		child.queue_free()
+	for entry: Dictionary in _list_entries.slice(_list_pager.first, _list_pager.first + LIST_PAGE):
 		var path: String = entry.path
 		var label := str(entry.name)
 		if entry.kind == "quill":
 			label += " (Quill)"
-		var button := Kit.button(label, path, chosen.bind(path), ENTRY_ICONS.get(entry.kind, "new_file"))
+		var button := Kit.text_key(label, path, _list_chosen.bind(path), ENTRY_ICONS.get(entry.kind, "new_file"))
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		button.clip_text = true
-		button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.custom_minimum_size.x = 40
+		button.custom_minimum_size.x = Kit.u(40)
 		var when := Kit.label(Documents.local_time(int(entry.time)), true)
-		when.add_theme_font_size_override("font_size", 12)
-		_drawer.add_child(Kit.row([button, when]))
-	if entries.size() > LIST_LIMIT:
-		_drawer.add_child(Form.note("And %d older, not shown." % (entries.size() - LIST_LIMIT)))
-	_drawer.add_child(Kit.button("Close", "Puts the list away", _cancel))
+		when.add_theme_font_size_override("font_size", Kit.text_size("small"))
+		_list_rows.add_child(Kit.row([button, when]))
+
+
+## Keeps the description to `MAX_DESCRIPTION` characters, so that the box shows it
+## whole: what goes past is taken back. One read from a file may be longer; it is
+## kept as it is.
+func _keep_description_short() -> void:
+	if _description.text.length() <= MAX_DESCRIPTION or _description.text.length() <= str(editor.get_info().get("description", "")).length():
+		return
+	var caret := Vector2i(_description.get_caret_column(), _description.get_caret_line())
+	_description.text = _description.text.left(MAX_DESCRIPTION)
+	_description.set_caret_line(mini(caret.y, _description.get_line_count() - 1))
+	_description.set_caret_column(mini(caret.x, _description.get_line(_description.get_caret_line()).length()))

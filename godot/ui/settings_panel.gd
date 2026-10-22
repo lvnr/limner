@@ -1,5 +1,5 @@
 class_name SettingsPanel
-extends VBoxContainer
+extends LimnerPanel
 ## The Settings panel: the preferences that belong to the person rather than to a
 ## document, and three things to ask for by hand: the sheet of controls, standing at
 ## the initial spawn area again, and carrying on in the other interface (the headset
@@ -7,6 +7,9 @@ extends VBoxContainer
 ##
 ## The preferences are the app's shared `Preferences`; a change here is saved at once
 ## and every part of the interface that listens follows it.
+
+## The panel's size in design pixels (see `LimnerPanel`).
+const DESIGN_SIZE := Vector2(470, 640)
 
 ## The user asked to see the sheet that lists what every control does.
 signal button_map_requested
@@ -33,6 +36,7 @@ var _switch_note: Label
 
 
 func _init(limner_editor: LimnerEditor) -> void:
+	super(DESIGN_SIZE)
 	editor = limner_editor
 	preferences = Preferences.shared()
 	name = "Settings"

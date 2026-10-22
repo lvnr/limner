@@ -1,10 +1,13 @@
 class_name MonitorPanel
-extends VBoxContainer
+extends LimnerPanel
 ## The Monitor panel: a viewfinder for camera layers. It shows what the chosen
 ## camera sees, live and in the shape of the document's camera resolution, and
 ## holds what goes with framing a shot: stepping between cameras, framing lines,
 ## the resolution, moving the camera by grabbing, looking through it in the main
 ## view, and saving the frame as a picture.
+
+## The panel's size in design pixels (see `LimnerPanel`).
+const DESIGN_SIZE := Vector2(470, 640)
 
 ## The framing lines offered: how many parts each way, and the name shown.
 const GRIDS := [[0, "None"], [3, "3 × 3"], [4, "4 × 4"]]
@@ -32,6 +35,7 @@ var _result: Label
 
 
 func _init(limner_editor: LimnerEditor) -> void:
+	super(DESIGN_SIZE)
 	editor = limner_editor
 	name = "Monitor"
 

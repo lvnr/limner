@@ -1,7 +1,10 @@
 class_name TransformPanel
-extends VBoxContainer
+extends LimnerPanel
 ## The Transform panel: what grabbing moves, where a layer sits as numbers that can
 ## be typed, and the options and commands of Quill's Transform toolbox.
+
+## The panel's size in design pixels (see `LimnerPanel`).
+const DESIGN_SIZE := Vector2(590, 640)
 
 const AXES := ["X", "Y", "Z"]
 const AUTO_SELECT := ["none", "layer", "group"]
@@ -42,6 +45,7 @@ var _typed_degrees: Array = []
 
 
 func _init(limner_editor: LimnerEditor) -> void:
+	super(DESIGN_SIZE)
 	editor = limner_editor
 	name = "Transform"
 
@@ -91,7 +95,8 @@ func _init(limner_editor: LimnerEditor) -> void:
 	add_child(commands)
 	add_child(Kit.separator())
 
-	add_child(Kit.heading("Options"))
+	var options := Kit.heading("Options")
+	add_child(options)
 	add_child(_option_toggle(Kit.toggle("Keep the horizon level", "Turning the view keeps the floor flat", Callable()), "level_horizon"))
 	_auto_select = Kit.choice(["None", "Its layer", "Its group"], "What moves when you grab a stroke instead of empty space", _on_auto_select)
 	add_child(Kit.label("Grabbing a stroke moves"))
@@ -121,6 +126,8 @@ func _init(limner_editor: LimnerEditor) -> void:
 	]:
 		free.add_child(_option_toggle(Kit.toggle(entry[0], entry[2], Callable()), entry[1]))
 	add_child(free)
+	# The numbers and commands on the left, the options on the right.
+	split_columns(options)
 
 
 func _ready() -> void:

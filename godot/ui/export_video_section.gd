@@ -94,7 +94,8 @@ func _init(limner_editor: LimnerEditor) -> void:
 	_sound = Kit.toggle("With sound", "Record the document's sound with the picture", Callable())
 	_sound.set_pressed_no_signal(true)
 	add_child(_sound)
-	add_child(Kit.separator())
+	var saving := Kit.separator()
+	add_child(saving)
 
 	_target = SaveTarget.new(editor, OS.get_system_dir(OS.SYSTEM_DIR_MOVIES).path_join("Limner"))
 	add_child(_target)
@@ -116,6 +117,8 @@ func _init(limner_editor: LimnerEditor) -> void:
 	add_child(_progress_row)
 	_result = Form.note("The video shows the document as it is when Render is pressed. You can keep working while it renders; later changes are not in it.")
 	add_child(_result)
+	# What to make on the left; where it goes and the key that makes it on the right.
+	LimnerPanel.columns_of(self, saving)
 
 
 func _ready() -> void:

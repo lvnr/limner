@@ -1,11 +1,14 @@
 class_name PropertiesPanel
-extends VBoxContainer
+extends LimnerPanel
 ## The Layer panel: the name and kind of the current layer, and the settings that
 ## kind of layer has.
 ##
 ## Each kind has a section of controls, built once; only the current layer's is
 ## shown. A control is tied to one field of the layer's settings (`props` in
 ## `layer_details`), named by a dotted path such as "attenuation.min".
+
+## The panel's size in design pixels (see `LimnerPanel`).
+const DESIGN_SIZE := Vector2(470, 640)
 
 const KIND_NAMES := {
 	"group": "Group",
@@ -51,6 +54,7 @@ var _editable: Array[Control] = []
 
 
 func _init(limner_editor: LimnerEditor) -> void:
+	super(DESIGN_SIZE)
 	editor = limner_editor
 	name = "Layer"
 

@@ -1,7 +1,10 @@
 class_name ExportPanel
-extends VBoxContainer
+extends LimnerPanel
 ## The Export panel: everything that leaves the application as a file. Three
 ## sections, one shown at a time: a picture, a video through a camera, a 3D file.
+
+## The panel's size in design pixels (see `LimnerPanel`).
+const DESIGN_SIZE := Vector2(560, 640)
 
 ## The sections: key, name on its button, icon, heading, what it is.
 const SECTIONS := [
@@ -20,6 +23,7 @@ var _title: Label
 
 
 func _init(limner_editor: LimnerEditor) -> void:
+	super(DESIGN_SIZE)
 	editor = limner_editor
 	name = "Export"
 	_chooser = ChoiceRow.new()

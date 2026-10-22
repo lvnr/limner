@@ -76,7 +76,8 @@ func _init(limner_editor: LimnerEditor) -> void:
 	_gltf_opacity = Kit.toggle("Animate opacity", "Write opacity keys through KHR_animation_pointer. Not every importer accepts it.", Callable())
 	_gltf_rows = Kit.column([_gltf_visibility, _gltf_opacity])
 	add_child(_gltf_rows)
-	add_child(Kit.separator())
+	var saving := Kit.separator()
+	add_child(saving)
 
 	_target = SaveTarget.new(editor, OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS).path_join("Limner"))
 	add_child(_target)
@@ -85,6 +86,8 @@ func _init(limner_editor: LimnerEditor) -> void:
 	_report = Form.note()
 	add_child(_report)
 	refresh()
+	# What to make on the left; where it goes and the key that makes it on the right.
+	LimnerPanel.columns_of(self, saving)
 
 
 ## Shows the options that apply to the format chosen.

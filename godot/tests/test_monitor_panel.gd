@@ -78,7 +78,7 @@ func test_without_a_camera_it_offers_to_add_one() -> void:
 	check_eq([panel._with_camera.visible, panel._without_camera.visible], [true, false], "which the Monitor then shows")
 	check_eq(recorder.row(panel.camera_chosen()).kind, "camera", "it is chosen")
 	check(panel.viewfinder.is_live(), "and its picture is live")
-	check(panel.get_combined_minimum_size().x <= 264.0, "the panel fits 280 wide, needs %s" % panel.get_combined_minimum_size().x)
+	check_fits(panel)
 	recorder.undo()
 	await frames(2)
 	check_eq([panel._with_camera.visible, panel.viewfinder.is_live()], [false, false], "undoing takes it away again")

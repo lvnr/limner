@@ -1,11 +1,14 @@
 class_name PerformancePanel
-extends VBoxContainer
+extends LimnerPanel
 ## The Performance panel: how heavy the scene is, held against what the kind of
 ## device it is meant for can draw, and the one tool that makes it lighter.
 ##
 ## The limits are rules of thumb for a comfortable frame rate, not measurements of
 ## any one device; they are there so that a scene does not grow past what a headset
 ## can show without anyone noticing until it stutters.
+
+## The panel's size in design pixels (see `LimnerPanel`).
+const DESIGN_SIZE := Vector2(470, 640)
 
 ## What each kind of device can take in one frame. Triangles are counted as drawn
 ## (both eyes see the same ones); draw calls are what the engine reports. Sounds are
@@ -46,6 +49,7 @@ var _warming := true
 
 
 func _init(limner_editor: LimnerEditor) -> void:
+	super(DESIGN_SIZE)
 	editor = limner_editor
 	name = "Performance"
 	add_theme_constant_override("separation", Kit.GAP)

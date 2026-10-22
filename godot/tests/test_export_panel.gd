@@ -51,7 +51,7 @@ func test_one_section_is_shown_at_a_time() -> void:
 		button.pressed.emit()
 		await frames(2)
 		check_eq([panel.image.visible, panel.video.visible, panel.model.visible], [key == "image", key == "video", key == "model"], "the %s section alone" % key)
-		check(panel.get_combined_minimum_size().x <= 264.0, "%s fits a panel 280 wide, needs %s" % [key, panel.get_combined_minimum_size().x])
+		check_fits(panel, key)
 	check_eq(panel._title.text, "CAPTURE IMAGE", "and back")
 	for icon: String in ["image", "film", "model", "export", "folder_open", "play", "camera", "left", "right"]:
 		check(Icons.has(icon), "there is an icon named %s" % icon)

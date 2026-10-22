@@ -68,7 +68,8 @@ func _init(limner_editor: LimnerEditor) -> void:
 	add_child(_quality_note)
 	_transparent = Kit.toggle("Transparent background", "Leave the background colour out, so the picture can be laid over another", Callable())
 	add_child(_transparent)
-	add_child(Kit.separator())
+	var saving := Kit.separator()
+	add_child(saving)
 
 	_target = SaveTarget.new(editor, LimnerCapture.default_folder())
 	_target.set_extension("png")
@@ -78,6 +79,8 @@ func _init(limner_editor: LimnerEditor) -> void:
 	_result = Form.note()
 	add_child(_result)
 	refresh()
+	# What to make on the left; where it goes and the key that makes it on the right.
+	LimnerPanel.columns_of(self, saving)
 
 
 ## Shows the controls that apply to the kind of picture chosen.

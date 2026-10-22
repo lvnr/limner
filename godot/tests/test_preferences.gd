@@ -80,7 +80,7 @@ func test_the_settings_panel_edits_the_preferences() -> void:
 	var panel := SettingsPanel.new(editor)
 	mount(panel, Vector2(280, 700))
 	await frames(2)
-	check(panel.get_combined_minimum_size().x <= 264.0, "fits a panel 280 wide, needs %s" % panel.get_combined_minimum_size().x)
+	check_fits(panel)
 	check_eq(panel._hand.get_value(), "right", "shows the drawing hand")
 	(panel._hand.buttons["left"] as Button).pressed.emit()
 	check_eq(preferences.text("dominant_hand"), "left", "the Left button changes it")

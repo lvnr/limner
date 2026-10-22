@@ -21,6 +21,39 @@ func _init(size_in_design_pixels := Vector2(500, 560)) -> void:
 	add_theme_constant_override("separation", Kit.u(Kit.SPACE))
 
 
+## Puts the controls added so far into two columns side by side: those before
+## `first_right` on the left, it and those after it on the right. Returns the row the
+## columns are in, the panel's last child. A panel built as one long column becomes
+## half as tall, which is what lets it keep to its size without scrolling.
+func split_columns(first_right: Control) -> HBoxContainer:
+	return columns_of(self, first_right)
+
+
+## What `split_columns` does, for any column of controls: a part of a panel, such as
+## a section of the Export panel.
+static func columns_of(container: BoxContainer, first_right: Control) -> HBoxContainer:
+	var left := Kit.key_column()
+	var right := Kit.key_column()
+	left.name = "Left"
+	right.name = "Right"
+	for column: VBoxContainer in [left, right]:
+		column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		column.add_theme_constant_override("separation", container.get_theme_constant("separation"))
+	var into := left
+	for child: Node in container.get_children():
+		if child == first_right:
+			into = right
+		container.remove_child(child)
+		into.add_child(child)
+	var columns := HBoxContainer.new()
+	columns.name = "Columns"
+	columns.add_theme_constant_override("separation", Kit.u(16))
+	columns.add_child(left)
+	columns.add_child(right)
+	container.add_child(columns)
+	return columns
+
+
 ## The panel's size in pixels of the interface in use.
 func pixel_size() -> Vector2:
 	return Vector2(Kit.u(design_size.x), Kit.u(design_size.y))
@@ -29,11 +62,16 @@ func pixel_size() -> Vector2:
 ## Whether the content needs no more room than the panel's size, and holds nothing
 ## that scrolls or opens a list. An empty list means it fits; otherwise each entry
 ## says what does not.
+##
+## The height is held to in a headset, where the panel is a sheet on the palette that
+## must never scroll. On the desktop a dock gives a panel the height it asks for, and
+## the older widgets (sliders, rows of fields) keep their pixel sizes there, so only
+## the width is held to.
 func fits() -> Array[String]:
 	var problems: Array[String] = []
 	var needs := get_minimum_size()
 	var has := pixel_size()
-	if needs.x > has.x + 0.5 or needs.y > has.y + 0.5:
+	if needs.x > has.x + 0.5 or (Kit.headset and needs.y > has.y + 0.5):
 		problems.append("%s needs %s but has %s" % [name, needs, has])
 	for node: Node in find_children("*", "Control", true, false):
 		for kind: String in FORBIDDEN:
