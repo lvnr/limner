@@ -71,6 +71,8 @@ var _h_bar: HScrollBar
 var _v_bar: VScrollBar
 var _overlay: Control
 var _fitted := false
+## Wheel or swipe toward the next page of rows, not yet enough for a step.
+var _paging := 0.0
 var _syncing := false
 ## What the pointer is doing between a press and its release. Empty when nothing.
 var _drag := {}
@@ -251,6 +253,14 @@ func pan_pixels(pixels: float) -> void:
 
 
 func scroll_rows(pixels: float) -> void:
+	if bar_size <= 0.0:
+		# The rows are the Layers panel's page: what would scroll them steps the page,
+		# once for every two rows' worth of wheel or swipe.
+		_paging += pixels
+		if absf(_paging) >= row_height * 2.0:
+			panel.layer_rows.pager.step(1 if _paging > 0.0 else -1)
+			_paging = 0.0
+		return
 	scroll_y += pixels
 	refresh()
 
@@ -724,7 +734,7 @@ func _draw_name(index: int, row: Dictionary, font: Font) -> void:
 			arrow = PackedVector2Array([Vector2(x + 1.0, middle - 3.0), Vector2(x + 10.0, middle - 3.0), Vector2(x + 5.5, middle + 4.0)])
 		draw_primitive(arrow, PackedColorArray([color, color, color]), PackedVector2Array())
 	x += 14.0
-	var icon: String = LayersPanel.KIND_ICONS.get(row.kind, "dot")
+	var icon: String = LayerRows.KIND_ICONS.get(row.kind, "dot")
 	if x + 16.0 < names_width:
 		draw_texture_rect(Icons.texture(icon, color, 16), Rect2(x, middle - 8.0, 16.0, 16.0), false)
 	x += 20.0

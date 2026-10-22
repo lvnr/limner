@@ -14,6 +14,7 @@ var wraps := false
 var _keys: Array[String] = []
 var _texts: Array[String] = []
 var _index := -1
+var _enabled := true
 var _before: Button
 var _after: Button
 var _value: Label
@@ -61,6 +62,12 @@ func set_value(key: String, text := "") -> void:
 	_show(text)
 
 
+## Lets the keys be pressed, or not; the value stays shown.
+func set_enabled(on: bool) -> void:
+	_enabled = on
+	_show(_value.text if _index < 0 else "")
+
+
 ## The key string of the choice shown, or an empty string.
 func get_value() -> String:
 	return _keys[_index] if _index >= 0 and _index < _keys.size() else ""
@@ -84,5 +91,5 @@ func _step(by: int) -> void:
 
 func _show(text := "") -> void:
 	_value.text = _texts[_index] if _index >= 0 and _index < _texts.size() else text
-	_before.disabled = _keys.is_empty() or (not wraps and _index == 0)
-	_after.disabled = _keys.is_empty() or (not wraps and _index == _keys.size() - 1)
+	_before.disabled = not _enabled or _keys.is_empty() or (not wraps and _index == 0)
+	_after.disabled = not _enabled or _keys.is_empty() or (not wraps and _index == _keys.size() - 1)

@@ -1,15 +1,42 @@
 class_name TimelinePanel
-extends VBoxContainer
-## The Timeline: playback, the working range, and every layer's clips, frames and keys.
+extends LimnerPanel
+## The Layers panel, with the timeline in it, as Quill has them: playback across the
+## top; on the left the keys that add and arrange layers and a page of layer rows
+## (`LayerRows`); on the right, when the timeline is open, the options of the tracks,
+## the commands for the current layer (they change with its kind) and the tracks
+## themselves, which `TimelineView` draws for the rows on the page, lined up with them.
 ##
-## From the top: a grip that makes the panel taller or shorter, the playback and
-## option buttons, the commands for the current layer (they change with its kind),
-## and the tracks, which `TimelineView` draws. What is selected in the tracks (a
-## clip, some keys) is kept here; everything else is read from the editor whenever
-## it says something changed.
+## Nothing scrolls: the rows show a page at a time, and time is moved with the zoom,
+## fit and page keys. Closing the timeline (painting mode) leaves the left part. What
+## is selected in the tracks (a clip, some keys) is kept here; everything else is read
+## from the editor whenever it says something changed.
 
-const DEFAULT_HEIGHT := 230.0
-const MIN_HEIGHT := 150.0
+## Asks the shell to show the Layer panel, with the settings of `layer`.
+signal settings_requested(layer: int)
+## Asks the shell to show where files are imported from (the Document panel's Import).
+signal import_requested
+
+## The widths of the layers part and of the timeline part, the height of the band of
+## keys over the rows and over the tracks, and of the ruler, in design pixels.
+const LEFT_WIDTH := 620
+const TIMELINE_WIDTH := 900
+const BAND_HEIGHT := 136
+const RULER_HEIGHT := 34
+## How many layer rows a page shows in a headset; the desktop fits them to its dock.
+const HEADSET_ROWS := 10
+const DESKTOP_ROWS := 4
+## The height the desktop gives the panel at first, and the least, in pixels.
+const DEFAULT_HEIGHT := 360.0
+const MIN_HEIGHT := 260.0
+## The new layers a key adds, in the order of the keys: [kind, icon, tooltip].
+const NEW_LAYER_KINDS := [
+	["paint", "paint_layer", "New paint layer"],
+	["group", "group", "New group"],
+	["sequence", "sequence", "New sequence: a group with a clock of its own"],
+	["viewpoint", "viewpoint", "New spawn area"],
+	["camera", "camera", "New camera"],
+	["light", "light", "New light"],
+]
 ## Frame rates always offered; the document's own is added when it is another.
 const RATES := [6, 8, 10, 12, 15, 24, 25, 30, 60]
 const INTERPS := ["step", "linear", "ease_in", "ease_out", "ease_in_out", "smooth"]
@@ -19,8 +46,10 @@ const ONION_COUNTS := [1, 2, 3, 0]
 
 var editor: LimnerEditor
 
-## The layer rows that are listed (not folded away inside a group), in list order.
+## The layer rows on the page shown, in list order: the rows the tracks draw.
 var rows: Array = []
+## The page of layer rows, with their keys.
+var layer_rows: LayerRows
 ## What the timeline draws for each layer, by layer id. See "Timeline rows" in docs/interface-api.md.
 var timeline := {}
 var info := {}
@@ -50,16 +79,22 @@ var view: TimelineView
 ## Every button and drop-down, by name.
 var controls := {}
 
-var _bar: HFlowContainer
+var _bar: HBoxContainer
+var _tools: HFlowContainer
 var _context: HFlowContainer
+var _left: VBoxContainer
+var _right: VBoxContainer
+var _opacity: SliderRow
+## The keys that add and arrange layers, by name.
+var _layer_keys := {}
 ## The run of controls being built. See `_run_of`.
 var _box: HBoxContainer
 var _grip: Control
 var _timecode: Button
-var _rate: OptionButton
+var _rate: Cycler
 var _rate_values: Array = []
-var _interp: OptionButton
-var _key_type: ChoiceRow
+var _interp: Cycler
+var _key_type: KeyGrid
 ## The buttons that show an editor option, by option name.
 var _option_buttons := {}
 ## The controls of each group of the context row, by group name.
@@ -84,28 +119,73 @@ var _read_revision := -1
 
 func _init(limner_editor: LimnerEditor) -> void:
 	editor = limner_editor
-	name = "Timeline"
-	add_theme_constant_override("separation", 4)
-	custom_minimum_size = Vector2(0, height)
+	var per_page := HEADSET_ROWS if Kit.headset else DESKTOP_ROWS
+	super(_design_size(true, per_page))
+	name = "Layers"
 
-	_grip = Control.new()
-	_grip.name = "Grip"
-	_grip.custom_minimum_size = Vector2(0, 8)
-	_grip.mouse_default_cursor_shape = Control.CURSOR_VSIZE
-	_grip.tooltip_text = "Drag to make the timeline taller or shorter"
-	_grip.draw.connect(_draw_grip)
-	_grip.gui_input.connect(_on_grip_input)
-	add_child(_grip)
+	if not Kit.headset:
+		# On the desktop a grip makes the panel taller or shorter, and the rows fill it.
+		_grip = Control.new()
+		_grip.name = "Grip"
+		_grip.custom_minimum_size = Vector2(0, 8)
+		_grip.mouse_default_cursor_shape = Control.CURSOR_VSIZE
+		_grip.tooltip_text = "Drag to make the panel taller or shorter"
+		_grip.draw.connect(_draw_grip)
+		_grip.gui_input.connect(_on_grip_input)
+		add_child(_grip)
 
-	_bar = _flow()
+	_bar = Kit.key_row()
 	add_child(_bar)
 	_build_transport()
+
+	var body := Kit.key_row()
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	add_child(body)
+	_left = Kit.key_column()
+	_left.name = "LayersPart"
+	_left.custom_minimum_size.x = Kit.u(LEFT_WIDTH)
+	body.add_child(_left)
+	var left_band := Kit.key_column()
+	left_band.name = "Band"
+	left_band.custom_minimum_size.y = Kit.u(BAND_HEIGHT)
+	_left.add_child(left_band)
+	_build_layer_keys(left_band)
+	layer_rows = LayerRows.new(editor, per_page)
+	layer_rows.header_height = Kit.u(RULER_HEIGHT)
+	layer_rows.settings_requested.connect(func(layer: int) -> void: settings_requested.emit(layer))
+	layer_rows.page_changed.connect(_on_page_changed)
+	_left.add_child(layer_rows)
+
+	_right = Kit.key_column()
+	_right.name = "TimelinePart"
+	_right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.add_child(_right)
+	var right_band := Kit.key_column()
+	right_band.name = "Band"
+	right_band.custom_minimum_size.y = Kit.u(BAND_HEIGHT)
+	_right.add_child(right_band)
+	_tools = _flow()
+	right_band.add_child(_tools)
 	_build_options()
 	_context = _flow()
-	add_child(_context)
+	right_band.add_child(_context)
 	_build_context()
 	view = TimelineView.new(self)
-	add_child(view)
+	view.show_names = false
+	view.bar_size = 0.0
+	view.row_height = LayerRows.pitch()
+	view.ruler_height = Kit.u(RULER_HEIGHT)
+	view.custom_minimum_size = Vector2(Kit.u(200), view.ruler_height + view.row_height * per_page)
+	_right.add_child(view)
+	if not Kit.headset:
+		set_height(height)
+
+
+## The panel's size in design pixels, with the timeline open or not and `per_page` rows.
+static func _design_size(open: bool, per_page: int) -> Vector2:
+	var rows := float(Kit.KEY + 4) * per_page
+	var height := Kit.KEY + Kit.SPACE + BAND_HEIGHT + Kit.SPACE + RULER_HEIGHT + rows + 4 + Kit.KEY + Kit.SPACE
+	return Vector2(LEFT_WIDTH + (Kit.SPACE + TIMELINE_WIDTH if open else 0), height)
 
 
 func _ready() -> void:
@@ -117,7 +197,8 @@ func _ready() -> void:
 
 func _process(_delta: float) -> void:
 	# Only the playhead is followed here; everything else waits for a signal.
-	if not is_visible_in_tree():
+	if not view.is_visible_in_tree():
+		_show_time_only()
 		return
 	var status := editor.status
 	var time := int(status.get("time", 0))
@@ -154,7 +235,8 @@ func refresh() -> void:
 	if painting != collapsed:
 		_show_collapsed(painting)
 	var all := editor.get_rows()
-	rows = all.filter(func(row: Dictionary) -> bool: return not row.hidden_in_list)
+	layer_rows.refresh()
+	rows = layer_rows.page_rows()
 	_parents = {}
 	for row: Dictionary in all:
 		_parents[int(row.id)] = -1 if row.parent == null else int(row.parent)
@@ -182,6 +264,20 @@ func reload(settings := false) -> void:
 	_prune_selection()
 	_update_controls()
 	view.refresh()
+
+
+## The page of rows changed: the tracks draw the rows now shown.
+func _on_page_changed() -> void:
+	rows = layer_rows.page_rows()
+	if view != null:
+		view.refresh()
+
+
+## With the timeline closed, the time readout still follows the playhead.
+func _show_time_only() -> void:
+	var status := editor.status
+	if int(status.get("time", 0)) != _shown_time or status.get("playing", false) != _shown_playing:
+		_show_playhead()
 
 
 func _on_document_replaced() -> void:
@@ -236,7 +332,7 @@ func _show_playhead() -> void:
 	_shown_playing = status.get("playing", false)
 	_timecode.text = time_text()
 	var play: Button = controls.play
-	play.icon = Icons.texture("pause" if _shown_playing else "play", Kit.TEXT, 20)
+	Kit.set_key_icon(play, "pause" if _shown_playing else "play")
 	play.tooltip_text = "Stop" if _shown_playing else "Play"
 	view.set_playhead(_shown_time, true)
 
@@ -407,25 +503,25 @@ func _prune_selection() -> void:
 
 func _flow() -> HFlowContainer:
 	var flow := HFlowContainer.new()
-	flow.add_theme_constant_override("h_separation", 9)
-	flow.add_theme_constant_override("v_separation", 3)
+	flow.add_theme_constant_override("h_separation", Kit.u(12))
+	flow.add_theme_constant_override("v_separation", Kit.u(Kit.SPACE))
 	return flow
 
 
 ## Starts a run of controls that stay side by side when the row wraps. With `group`,
 ## the run belongs to that group of the context row, and `heading` names the group.
-func _run_of(flow: HFlowContainer, group := "", heading := "") -> void:
+func _run_of(container: Container, group := "", heading := "") -> void:
 	_box = HBoxContainer.new()
-	_box.add_theme_constant_override("separation", 3)
-	flow.add_child(_box)
+	_box.add_theme_constant_override("separation", Kit.u(4))
+	container.add_child(_box)
 	if group == "":
 		return
 	if not _groups.has(group):
 		_groups[group] = []
 	_groups[group].append(_box)
 	if heading != "":
-		var label := Kit.heading(heading)
-		label.custom_minimum_size = Vector2(0, Kit.BUTTON)
+		var label := Kit.caption(heading)
+		label.custom_minimum_size = Vector2(0, Kit.u(Kit.KEY))
 		_box.add_child(label)
 
 
@@ -436,14 +532,14 @@ func _add(key: String, control: Control) -> Control:
 
 
 func _button(key: String, icon: String, tooltip: String, action: Callable) -> Button:
-	var button := Kit.icon_button(icon, tooltip, action)
+	var button := Kit.key(icon, tooltip, action)
 	_add(key, button)
 	return button
 
 
-## A button that stays down while something is on. `action` is called with the new state.
+## A key that stays down while something is on. `action` is called with the new state.
 func _toggle(key: String, icon: String, tooltip: String, action: Callable) -> Button:
-	var button := Kit.icon_button(icon, tooltip, Callable(), true)
+	var button := Kit.key(icon, tooltip, Callable(), true)
 	button.toggled.connect(action)
 	_add(key, button)
 	return button
@@ -464,55 +560,108 @@ func _build_transport() -> void:
 	var record := _option_toggle("recording", "record", "Record: while on, moving a layer or changing its opacity writes a key at the playhead")
 	record.add_theme_stylebox_override("pressed", Kit._box(Kit.DANGER))
 	record.add_theme_stylebox_override("hover_pressed", Kit._box(Kit.DANGER_TEXT))
+	record.add_theme_color_override("icon_normal_color", Kit.DANGER_TEXT)
+	record.add_theme_color_override("icon_hover_color", Kit.DANGER_TEXT)
+	record.add_theme_color_override("icon_pressed_color", Kit.TEXT_ON_ACCENT)
+	record.add_theme_color_override("icon_hover_pressed_color", Kit.TEXT_ON_ACCENT)
 	_button("next_frame", "next_frame", "Go to the next frame", func() -> void: editor.run({"cmd": "step_frames", "frames": 1}))
 	_button("fast_forward", "forward", "Forward to the next chapter, or the end of the range", func() -> void: editor.run({"cmd": "fast_forward"}))
 
 	_run_of(_bar)
-	_timecode = Kit.button("0:00:00.00", "Time at the playhead as hours, minutes, seconds and frames. Press to show the frame number instead.", _on_timecode_pressed)
-	_timecode.custom_minimum_size = Vector2(98, Kit.BUTTON)
+	_timecode = Kit.text_key("0:00:00.00", "Time at the playhead as hours, minutes, seconds and frames. Press to show the frame number instead.", _on_timecode_pressed)
+	_timecode.custom_minimum_size = Vector2(Kit.u(118), Kit.u(Kit.KEY))
 	_add("timecode", _timecode)
-	_rate = Kit.option([], "Frames per second of the document", _on_rate_selected)
-	_rate.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	_rate.custom_minimum_size = Vector2(86, Kit.BUTTON)
+	_rate = Cycler.new("Frames per second of the document")
+	_rate.custom_minimum_size.x = Kit.u(180)
+	_rate.chosen.connect(_on_rate_chosen)
 	_add("rate", _rate)
 
 	_run_of(_bar)
+	_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_box.alignment = BoxContainer.ALIGNMENT_END
+	var timeline_key := Kit.key("timeline", "Close the timeline: painting mode", func() -> void: set_collapsed(not collapsed), true)
+	_add("collapse", timeline_key)
+
+
+func _build_options() -> void:
+	_run_of(_tools)
 	_option_toggle("mute", "mute", "Mute all sounds")
 	_option_toggle("show_extras", "tl_extras", "Show the extras: the outlines of spawn areas, cameras, lights and sounds")
 	_option_toggle("preview_spawn_area", "viewpoint", "Preview the spawn area: watch from the initial spawn area while playing")
 
-	_run_of(_bar)
+	_run_of(_tools)
+	_option_toggle("onion_skin", "onion", "Onion skin: show the frames around the current one faintly")
+	var count := Kit.text_key("1", "How many frames the onion skin shows each way: 1, 2, 3 or all", _on_onion_count)
+	_add("onion_frames", count)
+
+	_run_of(_tools)
 	_button("zoom_out", "tl_zoom_out", "Show more time", func() -> void: view.zoom_by(1.0 / 1.5))
 	_button("zoom_in", "tl_zoom_in", "Show less time, larger", func() -> void: view.zoom_by(1.5))
 	_button("fit", "tl_fit", "Show everything", func() -> void: view.fit())
+	_button("earlier", "left", "Show earlier: the view steps back most of its width", func() -> void: _page_time(-1))
+	_button("later", "right", "Show later: the view steps on most of its width", func() -> void: _page_time(1))
 
-
-func _build_options() -> void:
-	_run_of(_bar)
-	_option_toggle("onion_skin", "onion", "Onion skin: show the frames around the current one faintly")
-	var count := Kit.button("1", "How many frames the onion skin shows each way: 1, 2, 3 or all", _on_onion_count)
-	count.custom_minimum_size = Vector2(40, Kit.BUTTON)
-	_add("onion_frames", count)
-
-	_run_of(_bar)
+	_run_of(_tools)
 	_button("range_start", "tl_range_start", "Start the working range at the playhead", _on_range_start)
 	_button("range_end", "tl_range_end", "End the working range at the playhead", _on_range_end)
 	_button("range_all", "tl_range_all", "Make the working range the whole piece", _on_range_all)
 	_button("range_clip", "tl_range_clip", "Make the working range the selected clip", _on_range_clip)
 	_option_toggle("loop_range", "loop", "Play the working range over and over")
 
-	_run_of(_bar)
+	_run_of(_tools)
 	_option_toggle("snap_to_clips", "snap", "Snap to clips: what is dragged sticks to the playhead and to the ends of clips")
 	_option_toggle("snap_to_frames", "tl_snap_frames", "Snap to frames: the playhead, clips and keys stay on whole frames")
 	_option_toggle("create_layers_at_playhead", "tl_layer_at_playhead", "New layers begin at the playhead instead of at the start")
 
-	_run_of(_bar)
-	_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_box.alignment = BoxContainer.ALIGNMENT_END
-	var resize := _button("resize", "tl_resize", "Drag up or down to make the timeline taller or shorter", Callable())
-	resize.mouse_default_cursor_shape = Control.CURSOR_VSIZE
-	resize.gui_input.connect(_on_grip_input)
-	_button("collapse", "tl_chevron_down", "Put the timeline away: painting mode", func() -> void: set_collapsed(not collapsed))
+
+## The keys over the layer rows: new layers of each kind and an import, then rename,
+## duplicate, delete, move up and down, group, merge and flatten, then the opacity of
+## the current layer.
+func _build_layer_keys(band: VBoxContainer) -> void:
+	var adding := Kit.key_row()
+	for entry: Array in NEW_LAYER_KINDS:
+		var kind: String = entry[0]
+		_layer_key(adding, "add_" + kind, entry[1], entry[2], func() -> void: editor.run({"cmd": "add_layer", "kind": kind}))
+	_layer_key(adding, "import", "import", "Import a picture, a model, a sound or another project as a new layer", func() -> void: import_requested.emit())
+	band.add_child(adding)
+	var arranging := Kit.key_row()
+	_layer_key(arranging, "rename", "rename", "Rename the current layer", func() -> void: layer_rows.start_rename())
+	_layer_key(arranging, "duplicate", "duplicate", "Duplicate the selected layers", func() -> void: _on_selected_layers("duplicate_layers"))
+	_layer_key(arranging, "delete", "delete", "Delete the selected layers", func() -> void: _on_selected_layers("delete_layers"))
+	_layer_key(arranging, "up", "up", "Move the current layer up (into and out of groups)", func() -> void: _on_layer("step_layer", {"up": true}))
+	_layer_key(arranging, "down", "down", "Move the current layer down (into and out of groups)", func() -> void: _on_layer("step_layer", {"up": false}))
+	_layer_key(arranging, "group", "group", "Put the selected layers in a new group", func() -> void: _on_selected_layers("group_layers"))
+	_layer_key(arranging, "merge", "merge", "Merge the current paint layer into the one below", func() -> void: _on_layer("merge_down"))
+	_layer_key(arranging, "flatten", "flatten", "Flatten the current group into one paint layer", func() -> void: _on_layer("flatten_group"))
+	band.add_child(arranging)
+	_opacity = SliderRow.new("Opacity", 0.0, 1.0, 0.01, "Opacity of the current layer (volume, for a sound)")
+	_opacity.drag_started.connect(func() -> void: editor.begin("Change layer opacity"))
+	_opacity.changed.connect(func(value: float) -> void: editor.run({"cmd": "set_layer", "layer": editor.current_layer(), "opacity": value}))
+	_opacity.drag_ended.connect(editor.commit)
+	band.add_child(_opacity)
+
+
+func _layer_key(row: HBoxContainer, key: String, icon: String, tooltip: String, action: Callable) -> void:
+	var button := Kit.key(icon, tooltip, action)
+	_layer_keys[key] = button
+	controls[key] = button
+	row.add_child(button)
+
+
+## Runs a command on every selected layer.
+func _on_selected_layers(command: String) -> void:
+	var ids: Array = []
+	for row: Dictionary in editor.get_rows():
+		if row.selected:
+			ids.append(int(row.id))
+	if not ids.is_empty():
+		_run({"cmd": command, "layers": ids})
+
+
+## Moves the view along time by most of its width: -1 earlier, 1 later.
+func _page_time(direction: int) -> void:
+	var area := view.tracks_rect()
+	view.pan_pixels(direction * area.size.x * 0.8)
 
 
 func _build_context() -> void:
@@ -548,6 +697,7 @@ func _build_context() -> void:
 		}[action]
 		var mark := Kit.button(action.capitalize(), tooltip, func() -> void: _run({"cmd": "set_action", "action": action}))
 		mark.icon = Icons.texture("tl_flag", TimelineView.MARK_COLORS[action], 18)
+		mark.custom_minimum_size.y = Kit.u(Kit.KEY)
 		_add("mark_" + action, mark)
 	_button("mark_remove", "tl_flag_remove", "Remove the chapter mark at the playhead", func() -> void: _run({"cmd": "set_action", "action": null}))
 
@@ -559,7 +709,7 @@ func _build_context() -> void:
 	_button("clip_duplicate", "tl_clip_duplicate", "Show the selected clip again, starting at the playhead", _on_clip_duplicate)
 
 	_run_of(flow, "keys", "Keys")
-	_key_type = ChoiceRow.new()
+	_key_type = KeyGrid.new(3)
 	_key_type.add_icon("transform", "move", "Transform keys: where the layer is, how it is turned and how large")
 	_key_type.add_icon("opacity", "tl_opacity", "Opacity keys")
 	_key_type.add_icon("action", "tl_flag", "Chapter marks (the root layer only)")
@@ -572,11 +722,12 @@ func _build_context() -> void:
 	_button("key_delete", "tl_key_delete", "Delete the selected keys, or the key at the playhead", _on_key_delete)
 	_button("key_next", "tl_key_next", "Go to the next key", func() -> void: _on_layer("go_to_key", {"track": key_track, "forward": true}))
 	_run_of(flow, "keys")
-	_interp = Kit.option(INTERP_NAMES, "How a value moves on from a key to the next: applied to the selected keys, and used for new keys", _on_key_interp)
-	_interp.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	_interp.custom_minimum_size = Vector2(108, Kit.BUTTON)
-	_interp.fit_to_longest_item = false
-	_interp.clip_text = true
+	var easings: Array = []
+	for index in INTERPS.size():
+		easings.append([INTERPS[index], INTERP_NAMES[index]])
+	_interp = Cycler.new("How a value moves on from a key to the next: applied to the selected keys, and used for new keys", easings)
+	_interp.custom_minimum_size.x = Kit.u(210)
+	_interp.chosen.connect(func(interp: String) -> void: _on_key_interp(INTERPS.find(interp)))
 	_add("key_interp", _interp)
 	_toggle("key_select_range", "bbox", "Select keys by dragging across the tracks. While this is on, clips stay where they are.", func(on: bool) -> void: select_range = on)
 	_button("key_select_all", "tl_key_select_all", "Select all keys of this kind on the layer", _on_key_select_all)
@@ -603,15 +754,14 @@ func _update_controls() -> void:
 		return
 	for key: String in _option_buttons:
 		Kit.set_quiet(_option_buttons[key], bool(options.get(key, false)))
-	var recording: bool = options.get("recording", false)
-	(controls.recording as Button).icon = Icons.texture("record", Kit.TEXT_ON_ACCENT if recording else Kit.DANGER_TEXT, 20)
-	(controls.mute as Button).icon = Icons.texture("mute" if options.get("mute", false) else "sound", Kit.TEXT, 20)
+	Kit.set_key_icon(controls.mute, "mute" if options.get("mute", false) else "sound")
 	var onion := int(options.get("onion_frames", 1))
 	(controls.onion_frames as Button).text = "All" if onion == 0 else str(onion)
 	_show_rates()
 	_enable("range_clip", selected_clip_layer >= 0 and timeline.has(selected_clip_layer))
-	(controls.collapse as Button).icon = Icons.texture("tl_chevron_up" if collapsed else "tl_chevron_down", Kit.TEXT, 20)
-	(controls.collapse as Button).tooltip_text = "Bring the timeline back and leave painting mode" if collapsed else "Put the timeline away: painting mode, in which the other hand's stick leaves frames and playback alone"
+	(controls.collapse as Button).tooltip_text = "Open the timeline and leave painting mode" if collapsed else "Close the timeline: painting mode, in which the other hand's stick leaves frames and playback alone"
+	Kit.set_quiet(controls.collapse, not collapsed)
+	_update_layer_keys()
 
 	var current := editor.row(editor.current_layer())
 	var has := not current.is_empty()
@@ -697,8 +847,8 @@ func _update_controls() -> void:
 	var copied: Variant = editor.status.get("copied_keys")
 	_enable("key_paste", editable and copied != null and (copied != "action" or is_root))
 	_enable("key_reverse", most >= 2)
-	_interp.disabled = key_track == "action"
-	Kit.set_quiet(_interp, maxi(INTERPS.find(_shown_interp()), 0))
+	_interp.set_enabled(key_track != "action")
+	_interp.set_value(_shown_interp())
 
 
 ## The easing the drop-down shows: that of the selected keys when they agree,
@@ -737,10 +887,26 @@ func _show_rates() -> void:
 		values.sort_custom(func(a: Array, b: Array) -> bool: return float(a[0]) / a[1] < float(b[0]) / b[1])
 	if values != _rate_values:
 		_rate_values = values
-		_rate.clear()
+		var choices: Array = []
 		for value: Array in values:
-			_rate.add_item("%d fps" % value[0] if value[1] == 1 else "%.3f fps" % (float(value[0]) / value[1]))
-	_rate.select(values.find(own))
+			choices.append(["%d/%d" % value, "%d fps" % value[0] if value[1] == 1 else "%.3f fps" % (float(value[0]) / value[1])])
+		_rate.set_choices(choices)
+	_rate.set_value("%d/%d" % own)
+
+
+## Which keys over the layer rows can act on the current layer and the selection.
+func _update_layer_keys() -> void:
+	var current := editor.row(editor.current_layer())
+	var has := not current.is_empty()
+	var is_root: bool = has and current.parent == null
+	for key: String in ["duplicate", "delete", "up", "down", "group"]:
+		(_layer_keys[key] as Button).disabled = not has or is_root
+	(_layer_keys.rename as Button).disabled = not has
+	(_layer_keys.merge as Button).disabled = not has or current.kind != "paint"
+	(_layer_keys.flatten as Button).disabled = not has or is_root or current.kind not in ["group", "sequence"]
+	_opacity.set_editable(has and not current.locked)
+	if has:
+		_opacity.set_value(current.opacity)
 
 
 func _draw_grip() -> void:
@@ -750,16 +916,27 @@ func _draw_grip() -> void:
 
 # ---- the size of the panel ----
 
-## Sets the height the panel takes while it is not collapsed.
+## Sets the height the panel takes on the desktop; the rows on a page fill it.
 func set_height(value: float) -> void:
 	height = maxf(value, MIN_HEIGHT)
-	if not collapsed:
-		custom_minimum_size.y = height
+	if Kit.headset:
+		return
+	custom_minimum_size.y = height
+	var fixed := _design_size(false, 0).y * Kit.DESKTOP_SCALE + 8.0
+	var per_page := maxi(floori((height - fixed) / LayerRows.pitch()), 1)
+	layer_rows.set_per_page(per_page)
+	view.custom_minimum_size.y = view.ruler_height + view.row_height * per_page
+	design_size = _desktop_size(not collapsed, per_page)
 
 
-## Hides everything under the rows of buttons, or shows it again. With the tracks
-## put away the editor is in painting mode: the other hand's stick and its click
-## leave frames and playback alone, so that nothing is animated by accident.
+## The panel's size in design pixels on the desktop, which adds the grip at its top.
+func _desktop_size(open: bool, per_page: int) -> Vector2:
+	return _design_size(open, per_page) + Vector2(0.0, (_grip.custom_minimum_size.y + Kit.u(Kit.SPACE)) / Kit.DESKTOP_SCALE)
+
+
+## Closes the timeline, leaving the layers, or opens it again. With it closed the
+## editor is in painting mode: the other hand's stick and its click leave frames and
+## playback alone, so that nothing is animated by accident.
 func set_collapsed(on: bool) -> void:
 	_show_collapsed(on)
 	_update_controls()
@@ -769,9 +946,10 @@ func set_collapsed(on: bool) -> void:
 
 func _show_collapsed(on: bool) -> void:
 	collapsed = on
-	_context.visible = not on
-	view.visible = not on
-	custom_minimum_size.y = 0.0 if on else height
+	_right.visible = not on
+	design_size = _design_size(not on, layer_rows.pager.per_page) if Kit.headset else _desktop_size(not on, layer_rows.pager.per_page)
+	if Kit.headset:
+		custom_minimum_size = pixel_size()
 
 
 func _on_grip_input(event: InputEvent) -> void:
@@ -819,8 +997,8 @@ func _on_timecode_pressed() -> void:
 	_timecode.tooltip_text = "Frame at the playhead. Press to show the time instead." if show_frames else "Time at the playhead as hours, minutes, seconds and frames. Press to show the frame number instead."
 
 
-func _on_rate_selected(index: int) -> void:
-	var value: Array = _rate_values[index]
+func _on_rate_chosen(key: String) -> void:
+	var value: Array = [int(key.get_slice("/", 0)), int(key.get_slice("/", 1))]
 	var rate: Dictionary = info.get("rate", {})
 	if int(rate.get("num", 0)) != value[0] or int(rate.get("den", 0)) != value[1]:
 		_run({"cmd": "set_document", "rate": {"num": value[0], "den": value[1]}})

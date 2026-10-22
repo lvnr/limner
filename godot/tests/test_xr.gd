@@ -415,51 +415,45 @@ func test_the_keyboard_types_into_the_layer_name() -> void:
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
-func test_the_stick_scrolls_a_list_under_the_pointer() -> void:
+func test_the_stick_pages_the_layer_rows_under_the_pointer() -> void:
 	if not await _start():
 		return
 	for index in 30:
 		run({"cmd": "add_layer", "kind": "paint", "name": "Extra %d" % index})
+	run({"cmd": "select_layers", "layers": [int(row_named("Paint").id)]})
 	var surface := await _open("Layers")
-	var panel: LayersPanel = surface.content
-	var tree := panel._tree
-	check_eq(tree.get_scroll().y, 0.0, "the list starts at its top")
+	var panel: TimelinePanel = surface.content
+	var rows := panel.layer_rows
+	check_eq(rows.pager.first, 0, "the rows start at the first page")
 	var before: float = world.scene.tool_settings()["paint"]["size"]
+	var name_key: Button = rows._lines[2].name
 	await sim.play([
-		{"time": 0.0, "right": {"tip": _point(surface, tree) + _normal(surface) * 0.03}},
+		{"time": 0.0, "right": {"tip": _point(surface, name_key) + _normal(surface) * 0.03}},
 		{"time": 0.1, "right": {"stick": Vector2(0.0, -1.0)}},
 		{"time": 0.6, "right": {"stick": Vector2.ZERO}},
 		{"time": 0.7},
 	])
-	check(tree.get_scroll().y > 20.0, "pulling the stick down scrolled the list: %s" % tree.get_scroll().y)
+	check(rows.pager.first > 0, "pulling the stick down stepped the page: %d" % rows.pager.first)
 	var after: float = world.scene.tool_settings()["paint"]["size"]
 	check_near(after, before, "and did not resize the brush", 1e-6)
 
 
-func test_the_lower_button_opens_a_context_menu_over_a_panel() -> void:
+func test_the_lower_button_over_a_panel_opens_nothing() -> void:
 	if not await _start():
 		return
 	LimnerDemo.stroke(world.scene, [Vector3(0, 1, -1), Vector3(0.1, 1, -1)])
 	var surface := await _open("Layers")
-	var panel: LayersPanel = surface.content
-	var tree := panel._tree
-	var row := tree.get_root().get_child(tree.get_root().get_child_count() - 1)
-	var rect := tree.get_item_area_rect(row, 0)
-	var pixel := tree.get_global_transform() * (rect.position + Vector2(40.0, rect.size.y * 0.5))
+	var panel: TimelinePanel = surface.content
+	var name_key: Button = panel.layer_rows._lines[2].name
 	await sim.play([
-		{"time": 0.0, "right": {"tip": surface.world_point(pixel) + _normal(surface) * 0.03}},
+		{"time": 0.0, "right": {"tip": _point(surface, name_key) + _normal(surface) * 0.03}},
 		{"time": 0.1, "right": {"lower": true}},
 		{"time": 0.15, "right": {"lower": false}},
 		{"time": 0.2},
 	])
-	check_eq(panel._context.visible, true, "the lower button opens the menu of the row under the tip")
-	check_eq(panel._context.is_embedded(), true, "inside the panel")
-	check_eq(_strokes(), 1, "and deletes nothing, as it would away from a panel")
-	# A press beside the menu puts it away without pressing what is there.
-	var beside := surface.world_point(Vector2(surface.pixel_size.x - 30.0, surface.pixel_size.y - 60.0))
-	await sim.play(sim.poke_steps(RIGHT, beside, _normal(surface)))
-	await frames(2)
-	check_eq(panel._context.visible, false, "a press beside a menu closes it")
+	check(not panel.layer_rows._context.visible, "no menu opens over a panel in a headset")
+	check(surface.viewport.get_embedded_subwindows().is_empty(), "nothing at all")
+	check_eq(_strokes(), 1, "and nothing is deleted, as it would be away from a panel")
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 

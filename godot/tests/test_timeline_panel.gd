@@ -104,20 +104,23 @@ func test_option_buttons_show_and_switch_the_options() -> void:
 	check_eq(shown, [[2, "2"], [3, "3"], [0, "All"], [1, "1"]], "the onion skin count steps through 1, 2, 3, all")
 
 
-func test_frame_rate_menu_sets_the_document_rate() -> void:
+func test_frame_rate_cycler_sets_the_document_rate() -> void:
 	var panel := await _panel()
-	var menu: OptionButton = panel.controls.rate
-	check_eq(menu.get_item_text(menu.selected), "24 fps", "rate shown")
-	check_eq(menu.item_count, TimelinePanel.RATES.size(), "the usual rates")
-	menu.item_selected.emit(TimelinePanel.RATES.find(12))
+	var rate: Cycler = panel.controls.rate
+	check_eq(rate._value.text, "24 fps", "rate shown")
+	check_eq(rate._keys.size(), TimelinePanel.RATES.size(), "the usual rates")
+	rate._before.pressed.emit()
+	await frames(2)
+	check_eq(editor.get_info().rate, {"num": 15, "den": 1}, "a step back from 24 is 15")
+	rate.chosen.emit("12/1")
 	await frames(2)
 	check_eq(editor.get_info().rate, {"num": 12, "den": 1}, "rate after choosing 12")
-	check_eq(menu.get_item_text(menu.selected), "12 fps", "rate shown after choosing")
+	check_eq(rate._value.text, "12 fps", "rate shown after choosing")
 	# A rate that is not on the list is offered while the document has it.
 	run({"cmd": "set_document", "rate": {"num": 24000, "den": 1001}})
 	await frames(2)
-	check_eq(menu.item_count, TimelinePanel.RATES.size() + 1, "the document's own rate is added")
-	check_eq(menu.get_item_text(menu.selected), "23.976 fps", "and shown")
+	check_eq(rate._keys.size(), TimelinePanel.RATES.size() + 1, "the document's own rate is added")
+	check_eq(rate._value.text, "23.976 fps", "and shown")
 	check_eq(panel.view.axis.frame_start(1), int(editor.get_info().frame_duration), "the frame grid agrees with the document")
 
 
@@ -207,8 +210,12 @@ func test_time_and_pixels_convert_both_ways_at_any_zoom() -> void:
 
 
 func test_rows_follow_the_layer_list() -> void:
-	var panel := await _panel(Vector2(900, 420))
+	var panel := await _panel(Vector2(1300, 700))
+	panel.set_height(600.0)
+	await frames(2)
 	var view := panel.view
+	var rows := panel.layer_rows
+	check(rows.pager.per_page >= 6, "a 600 pixel panel has room for six rows or more: %d" % rows.pager.per_page)
 	check_eq(panel.rows.map(func(row: Dictionary) -> String: return row.name), ["Root", "Spawn Area", "Paint"], "rows of a new document")
 	var group: Dictionary = run({"cmd": "add_layer", "kind": "group", "name": "Body"})
 	run({"cmd": "add_layer", "kind": "paint", "parent": int(group.layer), "name": "Arm"})
@@ -216,22 +223,36 @@ func test_rows_follow_the_layer_list() -> void:
 	check_eq(panel.rows.size(), 5, "rows after adding a group with a layer in it")
 	check_eq(view.row_of(int(row_named("Arm").id)), 4, "the new layer is listed inside its group")
 	check_eq(view.row_index_at(view.row_top(3) + 5.0), 3, "rows are found by where they are drawn")
+	check_eq(view.row_top(0), rows.header_height, "the first track is level with the first row of keys")
+	check_eq(view.row_height, LayerRows.pitch(), "and every track is as tall as a row")
 
 	# Pressing a name makes that layer the current one.
-	view.press(Vector2(70.0, view.row_top(1) + 10.0))
+	(rows._lines[1].name as Button).pressed.emit()
 	await frames(2)
 	check_eq(editor.current_layer(), int(row_named("Spawn Area").id), "the layer pressed is current")
 
-	# Folding a group takes what is inside it off the list, here as in the layer list.
+	# Folding a group takes what is inside it off the list.
 	var body := view.row_of(int(group.layer))
-	view.press(Vector2(5.0 + TimelineView.INDENT + 5.0, view.row_top(body) + 15.0))
+	var fold: Button = rows._lines[body].fold
+	check(fold.visible, "a group has a fold key")
+	fold.pressed.emit()
 	await frames(2)
-	check_eq(row_named("Body").collapsed, true, "the arrow folds the group")
+	check_eq(row_named("Body").collapsed, true, "the key folds the group")
 	check_eq(panel.rows.size(), 4, "rows with the group folded")
 	check_eq(view.row_of(int(row_named("Arm").id)), -1, "the folded layer has no row")
 	run({"cmd": "delete_layers", "layers": [int(group.layer)]})
 	await frames(2)
 	check_eq(panel.rows.size(), 3, "rows after deleting the group")
+
+	# Fewer rows to a page: the page holds the current layer, and the tracks follow.
+	rows.set_per_page(2)
+	run({"cmd": "select_layers", "layers": [_paint()]})
+	await frames(2)
+	check_eq(panel.rows.map(func(row: Dictionary) -> String: return row.name), ["Paint"], "the page with the current layer")
+	check_eq(view.row_of(_paint()), 0, "drawn on the first track")
+	rows.pager.step(-1)
+	await frames(1)
+	check_eq(panel.rows.map(func(row: Dictionary) -> String: return row.name), ["Root", "Spawn Area"], "the page before")
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
@@ -301,51 +322,56 @@ func test_zoom_fit_and_scroll() -> void:
 	_press(panel, "fit")
 	check(view.x_of(0) >= area.position.x and view.x_of(10 * SECOND) <= area.end.x, "fit shows everything again")
 
-	# With many layers the rows scroll, and only those in view are looked at.
+	# Earlier and later step the view along time by most of its width.
+	start = view.axis.start
+	_press(panel, "later")
+	check(view.axis.start > start, "later shows later times")
+	_press(panel, "earlier")
+	check_near(view.axis.start, start, "earlier goes back", 0.001)
+
+	# With many layers the rows show a page at a time; nothing scrolls.
 	for number in 12:
 		run({"cmd": "add_layer", "kind": "paint", "name": "Extra %d" % number})
 	await frames(2)
-	check_eq(panel.rows.size(), 15, "rows")
-	view.scroll_rows(10000.0)
-	check_near(view.row_top(14) + TimelineView.ROW, view.tracks_rect().end.y, "the last row sits at the bottom when scrolled all the way", 0.5)
+	var per_page := panel.layer_rows.pager.per_page
+	check_eq(panel.layer_rows.listed.size(), 15, "layers listed")
+	check_eq(panel.rows.size(), mini(per_page, 15 - panel.layer_rows.pager.first), "a page of them drawn")
+	check_eq(view.scroll_y, 0.0, "and the tracks never scroll")
+	run({"cmd": "select_layers", "layers": [_paint()]})
+	await frames(2)
+	var first := panel.layer_rows.pager.first
 	wheel.ctrl_pressed = false
 	wheel.meta_pressed = false
 	wheel.shift_pressed = true
-	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
-	var scrolled := view.scroll_y
-	view._gui_input(wheel)
-	check(view.scroll_y < scrolled, "Shift and the wheel scroll the rows")
+	wheel.button_index = MOUSE_BUTTON_WHEEL_DOWN
+	for notch in 3:
+		view._gui_input(wheel)
+	check(panel.layer_rows.pager.first > first, "Shift and the wheel step to the next page")
 
 
-func test_panel_fits_narrow_and_wide_and_can_be_resized_and_collapsed() -> void:
-	var panel := await _panel(Vector2(480, 600))
-	check(panel.size.x <= 480.0, "the panel is no wider than its dock: %s" % panel.size.x)
+func test_panel_fits_and_its_timeline_closes() -> void:
+	var panel := await _panel(Vector2(1400, 600))
+	check_fits(panel, "desktop, timeline open")
 	for key: String in panel.controls:
 		var control: Control = panel.controls[key]
-		if not control.is_visible_in_tree():
-			continue
-		var rect := control.get_global_rect()
-		var inside := panel.get_global_rect().grow(0.5)
-		check(rect.position.x >= inside.position.x and rect.end.x <= inside.end.x, "%s is inside the panel at 480 px" % key)
-		check(control.size.y >= Kit.ROW, "%s is tall enough to press" % key)
-	check(panel.view.tracks_rect().size.x > 150.0, "the tracks have room at 480 px")
-	panel.get_parent().size = Vector2(1400, 260)
-	await frames(3)
-	panel.get_parent().size = Vector2(1400, 100)
-	await frames(3)
-	check_near(panel.size.y, TimelinePanel.DEFAULT_HEIGHT, "default height when there is room", 16.0)
-
-	panel.set_height(400.0)
+		if control.is_visible_in_tree():
+			check(control.size.y >= Kit.u(Kit.KEY) - 0.5, "%s is tall enough to press" % key)
+	check(panel.view.tracks_rect().size.x > 150.0, "the tracks have room")
+	var rows_before := panel.layer_rows.pager.per_page
+	panel.set_height(600.0)
 	await frames(2)
-	check(panel.size.y >= 400.0, "taller after set_height")
-	check(panel.view.size.y > 250.0, "the extra height goes to the tracks")
+	check(panel.size.y >= 600.0, "taller after set_height")
+	check(panel.layer_rows.pager.per_page > rows_before, "the extra height goes to more rows")
+	check_eq(panel.view.custom_minimum_size.y, panel.view.ruler_height + panel.view.row_height * panel.layer_rows.pager.per_page, "and the tracks as tall as them")
+
 	_press(panel, "collapse")
 	await frames(2)
-	check(not panel.view.is_visible_in_tree(), "collapsed: no tracks")
-	check(not (panel.controls.key_set as Control).is_visible_in_tree(), "collapsed: no layer commands")
-	check((panel.controls.play as Control).is_visible_in_tree(), "collapsed: playback stays")
-	check(panel.get_combined_minimum_size().y < 80.0, "collapsed: one row high")
-	check_eq(world.scene.options().painting_mode, true, "put away, the editor is in painting mode")
+	check(not panel.view.is_visible_in_tree(), "closed: no tracks")
+	check(not (panel.controls.key_set as Control).is_visible_in_tree(), "closed: no layer commands")
+	check((panel.controls.play as Control).is_visible_in_tree(), "closed: playback stays")
+	check((panel.layer_rows as Control).is_visible_in_tree(), "closed: the layers stay")
+	check_eq(world.scene.options().painting_mode, true, "closed, the editor is in painting mode")
+	check_fits(panel, "desktop, timeline closed")
 	run({"cmd": "set_options", "values": {"painting_mode": false}})
 	await frames(2)
 	check(panel.view.is_visible_in_tree(), "leaving painting mode elsewhere brings the tracks back")
@@ -355,7 +381,25 @@ func test_panel_fits_narrow_and_wide_and_can_be_resized_and_collapsed() -> void:
 	_press(panel, "collapse")
 	await frames(2)
 	check(panel.view.is_visible_in_tree(), "shown again")
-	check_eq(panel.custom_minimum_size.y, 400.0, "at the height it had")
+
+
+func test_in_a_headset_it_has_a_fixed_size_with_ten_rows() -> void:
+	Kit.set_headset(true)
+	var panel := TimelinePanel.new(editor)
+	mount(panel, Vector2(2000, 1200))
+	await frames(3)
+	check_eq(panel.layer_rows.pager.per_page, TimelinePanel.HEADSET_ROWS, "ten rows a page")
+	check_fits(panel, "headset, timeline open")
+	check_eq(panel.pixel_size(), TimelinePanel._design_size(true, TimelinePanel.HEADSET_ROWS), "full size")
+	check(panel._grip == null, "no grip to resize it")
+	_press(panel, "collapse")
+	await frames(2)
+	check_fits(panel, "headset, timeline closed")
+	check_eq(panel.pixel_size().x, float(TimelinePanel.LEFT_WIDTH), "only the layers' width")
+	var left_band: Control = panel._left.get_node("Band")
+	var right_band: Control = panel._right.get_node("Band")
+	check_eq(left_band.get_combined_minimum_size().y, right_band.get_combined_minimum_size().y, "the two bands over the rows and tracks are as tall")
+	Kit.set_headset(false)
 
 
 # ---- frames ----
@@ -756,13 +800,13 @@ func test_key_commands() -> void:
 	# The easing menu changes the selected keys and what new keys get.
 	_press(panel, "key_select_all")
 	check_eq(panel.selected_keys, {paint: [SECOND, 3 * SECOND]}, "all keys of the layer selected")
-	var easing: OptionButton = panel.controls.key_interp
-	check_eq(easing.get_item_text(easing.selected), "Linear", "the easing of the selected keys")
-	easing.item_selected.emit(TimelinePanel.INTERPS.find("ease_out"))
+	var easing: Cycler = panel.controls.key_interp
+	check_eq(easing._value.text, "Linear", "the easing of the selected keys")
+	easing.chosen.emit("ease_out")
 	await frames(2)
 	check_eq(panel.timeline[paint].transform_keys.map(func(key: Dictionary) -> String: return key.interp), ["ease_out", "ease_out"], "easing of the selected keys")
 	check_eq(world.scene.options().default_interp, "ease_out", "and of keys made from now on")
-	check_eq(easing.get_item_text(easing.selected), "Ease out", "the menu shows it")
+	check_eq(easing._value.text, "Ease out", "the cycler shows it")
 	check_eq(_status().undo_label, "Change key easing", "as an undo step")
 
 	# Copy, paste at the playhead, reverse.
@@ -785,13 +829,13 @@ func test_key_commands() -> void:
 	check_eq(_times(panel.timeline[paint].transform_keys), [SECOND, 7 * SECOND], "the key at the playhead deleted")
 
 	# Opacity keys are their own kind.
-	(panel.controls.key_type as ChoiceRow).buttons.opacity.pressed.emit()
+	(panel.controls.key_type as KeyGrid).buttons.opacity.pressed.emit()
 	check_eq(panel.key_track, "opacity", "key type chosen")
 	_press(panel, "key_set")
 	await frames(2)
 	check_eq(_times(panel.timeline[paint].opacity_keys), [5 * SECOND], "an opacity key")
 	check_eq(_times(panel.timeline[paint].transform_keys), [SECOND, 7 * SECOND], "transform keys untouched")
-	check((panel.controls.key_type as ChoiceRow).buttons.action.disabled, "chapter marks are for the root only")
+	check((panel.controls.key_type as KeyGrid).buttons.action.disabled, "chapter marks are for the root only")
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
@@ -1227,7 +1271,7 @@ func test_the_view_scrolls_by_itself_when_a_drag_nears_an_edge() -> void:
 	check(messages.is_empty(), "no errors: %s" % [messages])
 
 
-func test_selecting_keys_scrolls_the_rows_too() -> void:
+func test_selecting_keys_across_the_rows_of_a_page() -> void:
 	var panel := await _panel()
 	var view := panel.view
 	var last := -1
@@ -1235,24 +1279,21 @@ func test_selecting_keys_scrolls_the_rows_too() -> void:
 		var added: Dictionary = run({"cmd": "add_layer", "kind": "paint", "name": "Extra %d" % number})
 		last = int(added.layer)
 	run({"cmd": "set_key", "layer": last, "track": "transform", "time": 2 * SECOND})
+	run({"cmd": "select_layers", "layers": [last]})
 	await frames(2)
-	view.scroll_rows(-10000.0)
-	var area := view.tracks_rect()
-	check(view.row_top(view.row_of(last)) > area.end.y, "the last row is out of view")
+	check(view.row_of(last) >= 0, "the current layer's row is on the page shown")
+	# Every row of this page has a clip under the press: Select range makes a drag that
+	# starts on a clip select keys instead of moving it.
+	_switch(panel, "key_select_range", true)
 	var from := Vector2(view.x_of(SECOND), view.row_top(0) + 5.0)
 	view.press(from)
-	var below := Vector2(view.x_of(3 * SECOND), area.end.y + 40.0)
-	view.drag(below)
+	var to := Vector2(view.x_of(3 * SECOND), view.row_top(view.row_of(last)) + view.row_height - 2.0)
+	view.drag(to)
 	check_eq(view.drag_kind(), "band", "a drag over empty track space selects")
-	var steps := 0
-	while view.auto_scroll(0.1) and steps < 500:
-		steps += 1
-	check(view.scroll_y > 0.0, "the rows scrolled down")
-	check_near(view.row_top(view.row_of(last)) + TimelineView.ROW, view.tracks_rect().end.y, "as far as the last row", 0.5)
-	check_near(view._band.position.y, view.row_top(0) + 5.0, "the rectangle still starts where it was pressed")
 	check_eq(panel.selected_keys.get(last, []), [2 * SECOND], "and reaches the key on the last row")
-	view.release(below)
+	view.release(to)
 	check_eq(panel.selected_keys.get(last, []), [2 * SECOND], "which stays selected")
+	check_eq(view.scroll_y, 0.0, "and nothing scrolled")
 
 
 func test_escape_puts_back_what_a_drag_did() -> void:
@@ -1350,11 +1391,6 @@ func test_trackpad_pinch_and_two_finger_pan() -> void:
 	view._gui_input(_pinch(at, 0.0))
 	view._gui_input(_pinch(at, -1.0))
 	check_near(view.axis.zoom, zoom, "a factor that makes no sense is left alone", 0.001)
-	var middle := area.get_center().x
-	under = view.time_at(middle)
-	view._gui_input(_pinch(Vector2(40.0, at.y), 1.5))
-	check_near(view.axis.zoom, zoom * 1.5, "over the names it zooms too", 0.001)
-	check(absi(view.time_at(middle) - under) < SECOND / 100, "about the middle of the tracks")
 	view.fit()
 
 	# Two fingers: a positive delta shows later times and lower rows, as a wheel turned down does.
@@ -1365,18 +1401,21 @@ func test_trackpad_pinch_and_two_finger_pan() -> void:
 	check_near(view.axis.start, start + unit / view.axis.zoom, "sideways moves along time", 0.0001)
 	view._gui_input(_pan(at, Vector2(-1000.0, 0.0)))
 	check_eq(view.axis.start, 0.0, "no further back than the start")
-	view._gui_input(_pan(at, Vector2(0.0, 1.0)))
-	check_near(view.scroll_y, unit, "up and down scrolls the rows")
+	run({"cmd": "select_layers", "layers": [paint]})
+	await frames(2)
+	var first := panel.layer_rows.pager.first
+	for swipe in 4:
+		view._gui_input(_pan(at, Vector2(0.0, 1.0)))
+	check(panel.layer_rows.pager.first > first, "up and down steps the page of rows")
+	check_eq(view.scroll_y, 0.0, "the tracks themselves never scroll")
 	var both := _pan(at, Vector2(0.5, 0.5))
 	view._gui_input(both)
 	check_near(view.axis.start, 0.5 * unit / view.axis.zoom, "both at once, as in a scroll view", 0.0001)
-	check_near(view.scroll_y, unit * 1.5, "both at once, the rows too")
 	var shifted := _pan(at, Vector2(1.0, 0.0))
 	shifted.shift_pressed = true
 	start = view.axis.start
 	view._gui_input(shifted)
-	check_near(view.scroll_y, unit * 2.5, "with Shift only the rows scroll")
-	check_eq(view.axis.start, start, "and time stays")
+	check_eq(view.axis.start, start, "with Shift time stays")
 	var zooming := _pan(at, Vector2(0.0, -1.0))
 	zooming.meta_pressed = true
 	under = view.time_at(at.x)
@@ -1393,13 +1432,12 @@ func test_trackpad_pinch_and_two_finger_pan() -> void:
 	get_viewport().push_input(_pinch(global, 1.5))
 	check_near(view.axis.zoom, zoom * 1.5, "a pinch from the window reaches the tracks", 0.001)
 	check(absi(view.time_at(at.x) - under) < SECOND / 100, "at the place under the fingers")
-	start = view.axis.start
-	var bar: Control = view._h_bar
-	get_viewport().push_input(_pan(bar.get_global_rect().get_center(), Vector2(1.0, 0.0)))
-	check(view.axis.start > start, "two fingers over the scroll bar move the tracks")
+	check(not view._h_bar.visible and not view._v_bar.visible, "there are no scroll bars")
 	view.fit()
 
 	# A pan in the middle of a drag carries what is dragged along with the pointer.
+	panel.layer_rows.pager.show_item(0)
+	await frames(1)
 	var from := view.clip_center(paint, 0)
 	var from_time := view.time_at(from.x)
 	view.press(from)

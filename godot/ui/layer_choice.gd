@@ -74,7 +74,7 @@ func refresh() -> void:
 			add_item(_first)
 			set_item_metadata(0, -1)
 		for row: Dictionary in rows:
-			add_icon_item(Icons.texture(LayersPanel.KIND_ICONS.get(row.kind, "dot"), Kit.TEXT, 16), row.name)
+			add_icon_item(Icons.texture(LayerRows.KIND_ICONS.get(row.kind, "dot"), Kit.TEXT, 16), row.name)
 			set_item_metadata(item_count - 1, int(row.id))
 	var found := -1
 	for index in item_count:

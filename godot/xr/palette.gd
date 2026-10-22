@@ -23,8 +23,7 @@ signal button_map_requested
 const PANELS := [
 	{"title": "Tools", "script": "res://ui/tools_panel.gd", "icon": "paint", "row": 0},
 	{"title": "Color", "script": "res://ui/color_panel.gd", "icon": "colorize", "row": 0},
-	{"title": "Layers", "script": "res://ui/layers_panel.gd", "icon": "stack", "height": 420, "row": 0},
-	{"title": "Timeline", "script": "res://ui/timeline_panel.gd", "icon": "timeline", "width": 640, "row": 0},
+	{"title": "Layers", "script": "res://ui/timeline_panel.gd", "icon": "layers", "row": 0},
 	{"title": "Transform", "script": "res://ui/transform_panel.gd", "icon": "move", "row": 0},
 	{"title": "Layer", "script": "res://ui/properties_panel.gd", "icon": "paint_layer", "row": 0},
 	{"title": "Document", "script": "res://ui/document_panel.gd", "icon": "new_file", "row": 1},
@@ -117,6 +116,10 @@ func _ready() -> void:
 			panel.connect("button_map_requested", func() -> void: button_map_requested.emit())
 		if panel.has_signal("text_requested"):
 			panel.connect("text_requested", func() -> void: show_panel("Text"))
+		if panel.has_signal("settings_requested"):
+			panel.connect("settings_requested", func(_layer: int) -> void: show_panel("Layer"))
+		if panel.has_signal("import_requested"):
+			panel.connect("import_requested", _show_import)
 		if current == "":
 			current = title
 	var cluster := _make_cluster(rows)
@@ -313,6 +316,16 @@ func _detach(surface: XRPanelSurface) -> void:
 
 
 # ---- inside ----
+
+## Shows the Document panel at the list of files that can be imported.
+func _show_import() -> void:
+	if not surfaces.has("Document"):
+		return
+	show_panel("Document")
+	var document: Object = (surfaces["Document"] as XRPanelSurface).content
+	if document.has_method("show_file_part"):
+		document.call("show_file_part", "import")
+
 
 ## Makes the panel an entry of `PANELS` names, or returns `null` when its script is
 ## not there or does not load.

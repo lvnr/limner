@@ -55,7 +55,6 @@ var camera: Camera3D
 var cursor: ToolCursor
 ## The root of the interface. Hidden with Tab for an unobstructed view.
 var ui: Control
-var layers_panel: LayersPanel
 ## Clicks, and the sounds of undo, redo, picking a colour and deleting.
 var sounds: Sounds
 var autosave: Autosave
@@ -191,8 +190,6 @@ func _build_interface() -> void:
 	left_dock.add_child(Kit.separator())
 	left_dock.add_child(ColorPanel.new(editor))
 
-	layers_panel = LayersPanel.new(editor)
-	right_dock.add_child(layers_panel)
 	details = TabContainer.new()
 	details.name = "Details"
 	details.custom_minimum_size = Vector2(0, 330)
@@ -220,6 +217,12 @@ func _build_interface() -> void:
 		details.set_tab_icon(index, Icons.texture(entry[1], Kit.TEXT, 18))
 		details.set_tab_tooltip(index, panel.name)
 	right_dock.add_child(details)
+	# The kind key of a layer row shows that layer's settings; Import shows where from.
+	timeline.settings_requested.connect(func(_layer: int) -> void: show_details("Layer"))
+	timeline.import_requested.connect(func() -> void:
+		show_details("Document")
+		document.show_file_part("import")
+	)
 
 	_toast = Kit.label("")
 	_toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -603,7 +606,7 @@ func _on_edit_menu(id: int) -> void:
 		EditMenu.REDO:
 			editor.redo()
 		EditMenu.RENAME:
-			layers_panel.start_rename()
+			timeline.layer_rows.start_rename()
 		EditMenu.DUPLICATE:
 			if editor.current_layer() >= 0:
 				editor.run({"cmd": "duplicate_layers", "layers": [editor.current_layer()]})

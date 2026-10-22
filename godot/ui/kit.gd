@@ -360,7 +360,7 @@ static func _gather(node: Node, into: Array[Node]) -> void:
 		_gather(child, into)
 
 
-const _COLOR_NAMES := ["font_color", "font_hover_color", "font_pressed_color", "font_disabled_color", "font_outline_color", "font_placeholder_color"]
+const _COLOR_NAMES := ["font_color", "font_hover_color", "font_pressed_color", "font_disabled_color", "font_outline_color", "font_placeholder_color", "icon_normal_color", "icon_hover_color", "icon_pressed_color", "icon_hover_pressed_color", "icon_disabled_color"]
 const _BOX_NAMES := ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus", "panel", "background", "fill", "read_only"]
 
 

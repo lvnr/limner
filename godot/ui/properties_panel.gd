@@ -103,7 +103,7 @@ func refresh() -> void:
 	if details.is_empty():
 		return
 	var kind: String = details.kind
-	_icon.texture = Icons.texture(LayersPanel.KIND_ICONS.get(kind, "dot"), Kit.TEXT, 20)
+	_icon.texture = Icons.texture(LayerRows.KIND_ICONS.get(kind, "dot"), Kit.TEXT, 20)
 	_name.set_value(details.name)
 	_kind.text = "%s%s" % [KIND_NAMES.get(kind, kind.capitalize()), ", locked" if details.locked else ""]
 	_path.text = details.path
