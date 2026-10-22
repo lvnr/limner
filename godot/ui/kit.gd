@@ -8,6 +8,18 @@ const ROW := 30
 const GAP := 6
 const BUTTON := 32
 
+## Sizes of the Quill-style panels, in design pixels (see `u`): a key with an icon,
+## the transport's bigger keys, the small keys of a title bar, the room between keys,
+## and the margin inside a panel.
+const KEY := 38
+const KEY_BIG := 52
+const KEY_SMALL := 26
+const SPACE := 8
+const MARGIN := 14
+## How much smaller the desktop builds a panel than the headset does. Text keeps its
+## own sizes (see `text_size`), so that it stays readable on a screen.
+const DESKTOP_SCALE := 0.8
+
 ## The colour schemes the interface can be shown in. Each gives every role below a
 ## colour; `use_scheme` makes one of them current, and from then on `Kit.TEXT` and
 ## the rest have its values. Nothing in a panel names a colour of its own: it reads
@@ -274,6 +286,28 @@ static func set_headset(on: bool) -> void:
 	events.scheme_changed.emit()
 
 
+## A size in design pixels as pixels of the interface in use: as it is in a headset,
+## where a design pixel is 0.8 mm, and `DESKTOP_SCALE` of it on the desktop.
+static func u(pixels: float) -> int:
+	return roundi(pixels * (1.0 if headset else DESKTOP_SCALE))
+
+
+## The size of text in a role, for the interface in use: "title" (a panel's own
+## heading, such as the tool's name), "body", "caption" (the word or two over a group
+## of keys), "small" (the setting written under a key), "big" (the timecode).
+static func text_size(role: String) -> int:
+	match role:
+		"title":
+			return 18 if headset else 15
+		"caption":
+			return 13 if headset else 12
+		"small":
+			return 11 if headset else 10
+		"big":
+			return 22 if headset else 17
+	return 15 if headset else 14
+
+
 ## `color` as the same role in the scheme in use: a colour that one of the `RECOGNISED`
 ## roles had in any scheme comes back as that role's colour now, keeping its own alpha.
 ## Any other colour comes back as it is.
@@ -418,6 +452,25 @@ static func make_theme() -> Theme:
 		theme.set_color("font_focus_color", kind, TEXT)
 		theme.set_color("font_disabled_color", kind, TEXT_DISABLED)
 		theme.set_color("icon_disabled_color", kind, Color(1, 1, 1, 0.3))
+	# Keys (see `key`): buttons whose icon is drawn white and tinted here for each
+	# state, so that a change of scheme reaches them with the theme, and with little
+	# room around the icon.
+	# Text keys are the same with room for a word.
+	for variation: String in ["Key", "TextKey"]:
+		theme.set_type_variation(variation, "Button")
+		for state: String in ["normal", "hover", "pressed", "hover_pressed", "disabled"]:
+			var key_box: StyleBoxFlat = (theme.get_stylebox(state, "Button") as StyleBoxFlat).duplicate()
+			key_box.set_content_margin_all(2)
+			if variation == "TextKey":
+				key_box.content_margin_left = u(8)
+				key_box.content_margin_right = u(8)
+			theme.set_stylebox(state, variation, key_box)
+		theme.set_color("icon_normal_color", variation, TEXT)
+		theme.set_color("icon_hover_color", variation, TEXT_STRONG)
+		theme.set_color("icon_focus_color", variation, TEXT)
+		theme.set_color("icon_pressed_color", variation, TEXT_ON_PRESSED)
+		theme.set_color("icon_hover_pressed_color", variation, TEXT_ON_PRESSED)
+		theme.set_color("icon_disabled_color", variation, TEXT_DISABLED)
 	# Narrow buttons (see `narrow`) are buttons with less room at their sides.
 	for margin in [1, 2, 3]:
 		var narrow_kind := "NarrowButton%d" % margin
@@ -429,6 +482,9 @@ static func make_theme() -> Theme:
 			theme.set_stylebox(state, narrow_kind, box)
 
 	theme.set_stylebox("panel", "PanelContainer", _box(BG, 6, 1, BORDER, 8))
+	# A sunken box that shows a value (the value of a `Cycler`, a page count).
+	theme.set_type_variation("Well", "PanelContainer")
+	theme.set_stylebox("panel", "Well", _box(BG_SUNKEN, 5, 1, BORDER, 4))
 	theme.set_stylebox("panel", "Panel", _box(BG, 6, 1))
 	theme.set_stylebox("panel", "PopupMenu", _box(BG_POPUP, 6, 1, BORDER, 6))
 	theme.set_stylebox("hover", "PopupMenu", _box(PRESSED, 4))
@@ -681,6 +737,76 @@ static func icon_button(icon: String, tooltip: String, on_pressed: Callable, tog
 	node.focus_mode = Control.FOCUS_NONE
 	if on_pressed.is_valid():
 		node.pressed.connect(on_pressed)
+	return node
+
+
+## A key: a square button showing an icon, the building block of the Quill-style
+## panels. `size` is in design pixels (see `u`); `toggle` makes it stay down when
+## pressed. Its icon is drawn white and tinted by the theme for each state.
+static func key(icon: String, tooltip: String, on_pressed: Callable, toggle := false, size := KEY) -> Button:
+	var node := Button.new()
+	node.theme_type_variation = "Key"
+	node.icon = Icons.texture(icon, Color.WHITE, u(size * 0.58))
+	node.tooltip_text = tooltip
+	node.toggle_mode = toggle
+	node.custom_minimum_size = Vector2(u(size), u(size))
+	node.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	node.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
+	node.focus_mode = Control.FOCUS_NONE
+	if on_pressed.is_valid():
+		node.pressed.connect(on_pressed)
+	return node
+
+
+## Gives `node` (a key) the icon `icon`, drawn the way `key` draws them.
+static func set_key_icon(node: Button, icon: String, size := KEY) -> void:
+	node.icon = Icons.texture(icon, Color.WHITE, u(size * 0.58))
+
+
+## A key with a word on it, and an icon before the word when `icon` is given. As tall
+## as a key; a word too long for it is cut short, with the whole of it in the tooltip.
+static func text_key(text: String, tooltip: String, on_pressed: Callable, icon := "", toggle := false) -> Button:
+	var node := Button.new()
+	node.theme_type_variation = "TextKey"
+	node.text = text
+	node.tooltip_text = tooltip if tooltip != "" else text
+	node.toggle_mode = toggle
+	node.custom_minimum_size = Vector2(u(KEY), u(KEY))
+	node.clip_text = true
+	node.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	node.focus_mode = Control.FOCUS_NONE
+	if icon != "":
+		node.icon = Icons.texture(icon, Color.WHITE, u(KEY * 0.5))
+	if on_pressed.is_valid():
+		node.pressed.connect(on_pressed)
+	return node
+
+
+## The word or two over a group of keys.
+static func caption(text: String) -> Label:
+	var node := label(text, true)
+	node.add_theme_font_size_override("font_size", text_size("caption"))
+	return node
+
+
+## A panel's heading inside it, such as the name of the tool in use.
+static func title(text: String) -> Label:
+	var node := label(text)
+	node.add_theme_font_size_override("font_size", text_size("title"))
+	return node
+
+
+## A row of keys, `SPACE` apart.
+static func key_row(children: Array = []) -> HBoxContainer:
+	var node := row(children)
+	node.add_theme_constant_override("separation", u(SPACE))
+	return node
+
+
+## A column of groups, `SPACE` apart.
+static func key_column(children: Array = []) -> VBoxContainer:
+	var node := column(children)
+	node.add_theme_constant_override("separation", u(SPACE))
 	return node
 
 

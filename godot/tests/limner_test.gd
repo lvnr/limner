@@ -44,6 +44,13 @@ func mount(panel: Control, size := Vector2(300, 700)) -> Control:
 	return panel
 
 
+## Checks that a Quill-style panel keeps to its size and holds nothing that scrolls or
+## opens a list, as it is now; `state` names what it is showing, for the report.
+func check_fits(panel: LimnerPanel, state := "") -> void:
+	for problem: String in panel.fits():
+		failures.append("%s%s" % [problem, " (%s)" % state if state != "" else ""])
+
+
 func check(condition: bool, what: String) -> void:
 	if not condition:
 		failures.append(what)
