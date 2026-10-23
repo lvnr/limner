@@ -842,3 +842,17 @@ func test_every_action_the_rig_reads_is_made_and_bound() -> void:
 func test_bare_hands_count_only_when_asked_for() -> void:
 	check_eq(Preferences.DEFAULTS["hand_tracking"], false, "bare hands are off unless asked for")
 	check(OpenXRRig.HAND_PROFILES.has("/interaction_profiles/khr/simple_controller"), "the simple controller, the profile a hand is given, counts as a bare hand")
+
+
+func test_the_window_gets_its_own_size_back_from_the_headset() -> void:
+	# Marked for a headset, the window's viewport takes the headset's size (here, with
+	# no headset, none at all) and does not take its own back when the mark goes.
+	var window := get_window()
+	var own := Vector2i(window.get_visible_rect().size)
+	window.use_xr = true
+	await frames(2)
+	check(Vector2i(window.get_visible_rect().size) != own, "marked for a headset, the viewport is not the window's size")
+	OpenXRRig.give_back(window)
+	await frames(2)
+	check_eq(window.use_xr, false, "the window is no longer drawn for the headset")
+	check_eq(Vector2i(window.get_visible_rect().size), own, "and its viewport is the window's size again")

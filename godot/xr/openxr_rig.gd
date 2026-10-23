@@ -109,14 +109,29 @@ func stop(viewport: Viewport) -> void:
 			var callable: Callable = connection.callable
 			if callable.get_object() == self:
 				connected.disconnect(callable)
-	viewport.use_xr = false
-	# While it drew for the headset the renderer gave the viewport the headset's size
-	# and two eyes, and turning that off does not give the old ones back: until its
-	# size is set again it draws nothing (seen on a Mac, where it is left with none).
-	var drawn := Vector2i(viewport.get_visible_rect().size)
-	RenderingServer.viewport_set_size(viewport.get_viewport_rid(), drawn.x, drawn.y)
+	give_back(viewport)
 	DisplayServer.window_set_vsync_mode(int(ProjectSettings.get_setting("display/window/vsync/vsync_mode", DisplayServer.VSYNC_ENABLED)))
 	Engine.max_fps = int(ProjectSettings.get_setting("application/run/max_fps", 0))
+
+
+## Takes `viewport` off the headset and gives it back its own size and pictures.
+static func give_back(viewport: Viewport) -> void:
+	viewport.use_xr = false
+	# While it drew for the headset the viewport took the headset's size and two eyes,
+	# and its render buffers were made while it drew into the headset's images.
+	# Turning that off gives none of it back, and the window does not lay its viewport
+	# out again until it is resized. On Windows, with a Quest 3 over Link, the desktop's
+	# 3D view then showed old pictures of the headset's panels where the scene should
+	# be. So the viewport's pictures are made anew, at a size they cannot have now, and
+	# the window then lays the viewport out as a resize would (setting a content
+	# scale does that, even to the same value).
+	var rid := viewport.get_viewport_rid()
+	RenderingServer.viewport_set_size(rid, 2, 2)
+	var window := viewport as Window
+	if window != null:
+		window.content_scale_size = window.content_scale_size
+	var drawn := Vector2i(viewport.get_visible_rect().size)
+	RenderingServer.viewport_set_size(rid, drawn.x, drawn.y)
 
 
 ## The OpenXR session's state, one of `OpenXRInterface.SessionState`; unknown in a
