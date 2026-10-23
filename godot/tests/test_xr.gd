@@ -811,3 +811,34 @@ func test_the_palette_hand_shows_the_layer_the_frame_and_the_stick() -> void:
 	check_eq(dial.layer_name, row_named("Group").get("name", "?"), "the tag follows the current layer")
 	check_eq(dial.frame_text, "", "a group has no frame number")
 	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_every_action_the_rig_reads_is_made_and_bound() -> void:
+	# Godot renames the pose actions as it makes them ("grip_pose" becomes "grip") and
+	# then refuses an action whose name is taken, with every binding to it. A grip
+	# action called "grip" was refused so, and no grip worked in a headset.
+	var map := load("res://xr/action_map.tres") as OpenXRActionMap
+	var renamed := {"default_pose": "default", "aim_pose": "aim", "grip_pose": "grip"}
+	var made: Array[String] = []
+	for action_set: OpenXRActionSet in map.action_sets:
+		for action: OpenXRAction in action_set.actions:
+			var stored: String = renamed.get(action.resource_name, action.resource_name)
+			check(not made.has(stored), "the action %s is made as %s, a name already taken" % [action.resource_name, stored])
+			made.append(stored)
+	var read: Array[StringName] = [OpenXRRig.ACTION_TRIGGER, OpenXRRig.ACTION_GRIP, OpenXRRig.ACTION_STICK, OpenXRRig.ACTION_STICK_CLICK, OpenXRRig.ACTION_STICK_TOUCH, OpenXRRig.ACTION_TRACKPAD, OpenXRRig.ACTION_TRACKPAD_CLICK, OpenXRRig.ACTION_LOWER, OpenXRRig.ACTION_UPPER, OpenXRRig.ACTION_MENU, OpenXRRig.ACTION_HAPTIC, &"aim", &"grip"]
+	for wanted: StringName in read:
+		check(made.has(String(wanted)), "the rig reads %s and the action map makes it" % wanted)
+	# Every controller has its grip bound; a bare hand's profile need not.
+	for profile: OpenXRInteractionProfile in map.interaction_profiles:
+		if OpenXRRig.HAND_PROFILES.has(profile.interaction_profile_path):
+			continue
+		var bound := false
+		for binding: OpenXRIPBinding in profile.bindings:
+			if binding.action != null and binding.action.resource_name == String(OpenXRRig.ACTION_GRIP):
+				bound = true
+		check(bound, "%s binds the grip" % profile.interaction_profile_path)
+
+
+func test_bare_hands_count_only_when_asked_for() -> void:
+	check_eq(Preferences.DEFAULTS["hand_tracking"], false, "bare hands are off unless asked for")
+	check(OpenXRRig.HAND_PROFILES.has("/interaction_profiles/khr/simple_controller"), "the simple controller, the profile a hand is given, counts as a bare hand")

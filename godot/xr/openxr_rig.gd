@@ -15,9 +15,12 @@ const REFRESH_RATES := [120.0, 90.0, 72.0]
 ## How close a rate the headset offers must be to one of those to count as it, in hertz.
 const RATE_TOLERANCE := 0.5
 
-## Names of the actions in the action map.
+## Names of the actions in the action map. None may be "aim", "grip", "palm" or
+## "default": Godot gives those names to the pose actions ("aim_pose" and so on), and
+## an action of the same name is then refused, with every binding to it. The grip
+## was once called "grip", and no grip worked in a headset.
 const ACTION_TRIGGER := &"trigger"
-const ACTION_GRIP := &"grip"
+const ACTION_GRIP := &"squeeze"
 const ACTION_STICK := &"stick"
 const ACTION_STICK_CLICK := &"stick_click"
 const ACTION_STICK_TOUCH := &"stick_touch"
@@ -27,6 +30,16 @@ const ACTION_LOWER := &"lower_button"
 const ACTION_UPPER := &"upper_button"
 const ACTION_MENU := &"menu_button"
 const ACTION_HAPTIC := &"haptic"
+
+## The interaction profiles a runtime gives a bare hand, seen by the headset's
+## cameras, in place of a controller. A hand on one of these does nothing unless the
+## `hand_tracking` preference is on: put the controllers down and the hands must not
+## start painting.
+const HAND_PROFILES := [
+	"/interaction_profiles/khr/simple_controller",
+	"/interaction_profiles/ext/hand_interaction_ext",
+	"/interaction_profiles/microsoft/hand_interaction",
+]
 
 var interface: OpenXRInterface
 ## The node OpenXR measures everything from. It stays at the room's origin.
@@ -119,6 +132,8 @@ func poll(delta: float) -> float:
 		var controller: XRController3D = aims[side]
 		var state := states[side]
 		state.tracked = has_attention and controller.get_is_active() and controller.get_has_tracking_data()
+		if state.tracked and is_bare_hand(side) and not Preferences.shared().flag("hand_tracking"):
+			state.tracked = false
 		if not state.tracked:
 			state.release_all()
 			continue
@@ -135,6 +150,17 @@ func poll(delta: float) -> float:
 		state.upper = controller.is_button_pressed(ACTION_UPPER)
 		state.menu = controller.is_button_pressed(ACTION_MENU)
 	return delta
+
+
+## Whether the hand on `side` is seen by the headset's cameras instead of holding a
+## controller: the runtime says so by the interaction profile it binds to the hand,
+## or, where it can tell, by where the hand tracker's data comes from.
+func is_bare_hand(side: int) -> bool:
+	var controller := XRServer.get_tracker(StringName("%s_hand" % SIDE_NAMES[side])) as XRPositionalTracker
+	if controller != null and HAND_PROFILES.has(controller.profile):
+		return true
+	var hand := XRServer.get_tracker(StringName("/user/hand_tracker/%s" % SIDE_NAMES[side])) as XRHandTracker
+	return hand != null and hand.has_tracking_data and hand.hand_tracking_source == XRHandTracker.HAND_TRACKING_SOURCE_UNOBSTRUCTED
 
 
 func pulse(side: int, strength: float, seconds: float) -> void:

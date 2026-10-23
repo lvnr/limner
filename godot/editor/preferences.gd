@@ -15,6 +15,9 @@ signal changed(key: String)
 ##
 ## - `dominant_hand`: the hand that draws, "right" or "left".
 ## - `haptics`: whether controllers vibrate.
+## - `hand_tracking`: whether a bare hand that the headset sees, with no controller
+##   in it, works as one (pinching for the trigger). Off: a controller put down
+##   leaves its hand doing nothing.
 ## - `ui_volume`: loudness of interface sounds, 0 (silent) to 1.
 ## - `show_button_map_at_start`: whether the sheet of controls is shown when a headset session starts.
 ## - `show_gimbal_by_default`: whether a new session starts with the gimbal showing.
@@ -31,6 +34,7 @@ signal changed(key: String)
 const DEFAULTS := {
 	"dominant_hand": "right",
 	"haptics": true,
+	"hand_tracking": false,
 	"ui_volume": 0.5,
 	"show_button_map_at_start": true,
 	"show_gimbal_by_default": false,

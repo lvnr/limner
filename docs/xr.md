@@ -138,7 +138,11 @@ Over a panel the drawing hand's controls mean something else, and the core sees 
 
 ### Bindings
 
-`godot/xr/action_map.tres` has one action set, `limner`, with these actions for both hands: `aim_pose`, `grip_pose`, `trigger`, `grip`, `stick`, `stick_click`, `trackpad`, `trackpad_click`, `lower_button`, `upper_button`, `menu_button`, `haptic`.
+`godot/xr/action_map.tres` has one action set, `limner`, with these actions for both hands: `aim_pose`, `grip_pose`, `trigger`, `squeeze` (the grip), `stick`, `stick_click`, `stick_touch`, `trackpad`, `trackpad_click`, `lower_button`, `upper_button`, `menu_button`, `haptic`.
+
+No action may be called `aim`, `grip` or `default`. Godot names the pose actions so as it makes them (`aim_pose` becomes `aim`, `grip_pose` becomes `grip`) and then refuses any later action with a name already taken, together with every binding to it, with no more than a line in the log. In 0.2.0 the grip action was called `grip`: in the first real headset (a Quest 3 over Link) no grip did anything, so the artwork, a selection, a layer and the panels could not be grabbed. `test_every_action_the_rig_reads_is_made_and_bound` in `test_xr.gd` reads the action map the way Godot does and fails on such a clash.
+
+**Bare hands.** A headset that tracks hands with its cameras, as a Quest does, can hand them to the app as controllers when the controllers are put down: the runtime binds them to `khr/simple_controller` (pinching is its select, our trigger) or to a hand-interaction profile. Unless the `hand_tracking` preference ("Bare hands as controllers" in Settings) is on, `OpenXRRig` treats a hand bound to one of `OpenXRRig.HAND_PROFILES`, or one whose hand tracker says its data comes from the cameras, as not tracked: it does nothing and is not drawn into the core. A controller that only offers the simple profile needs the preference on.
 
 | Controller (OpenXR profile) | Lower | Upper | Menu | Notes |
 |---|---|---|---|---|
@@ -150,7 +154,7 @@ Over a panel the drawing hand's controls mean something else, and the core sees 
 | Windows Mixed Reality (`microsoft/motion_controller`) | trackpad press | menu button | none | Grip is a click |
 | HP Reverb G2 (`hp/mixed_reality_controller`) | X / A | Y / B | menu button | |
 | Generic controller (`khr/generic_controller`, OpenXR 1.1) | primary | secondary | none | |
-| Khronos simple controller (`khr/simple_controller`) | none | menu | none | Select is the trigger. Enough to paint and open the palette, no more |
+| Khronos simple controller (`khr/simple_controller`) | none | menu | none | Select is the trigger. Enough to paint and open the palette, no more. Runtimes give it to bare hands, so it is ignored unless "Bare hands as controllers" is on |
 
 Where a controller has no lower button, deleting with a button and toggling the Selection tool are not available on it; where it has no menu button, the button map is opened from Settings. The Steam Frame controller has no profile here because its inputs could not be checked offline; SteamVR's own rebinding should cover it.
 

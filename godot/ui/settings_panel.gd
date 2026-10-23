@@ -24,6 +24,7 @@ var preferences: Preferences
 
 var _hand: ChoiceRow
 var _haptics: CheckBox
+var _hands: CheckBox
 var _volume: SliderRow
 var _button_map_at_start: CheckBox
 var _gimbal: CheckBox
@@ -50,6 +51,8 @@ func _init(limner_editor: LimnerEditor) -> void:
 	add_child(Form.row("Drawing hand", [_hand], "The hand that paints. The other one holds the palette and the modifier."))
 	_haptics = Kit.toggle("Controller vibration", "Whether the controllers give a small buzz on strokes and button presses", func(on: bool) -> void: preferences.set_value("haptics", on))
 	add_child(_haptics)
+	_hands = Kit.toggle("Bare hands as controllers", "Whether a hand the headset sees without a controller in it works as one, pinching for the trigger. Off, putting the controllers down leaves the hands doing nothing.", func(on: bool) -> void: preferences.set_value("hand_tracking", on))
+	add_child(_hands)
 
 	add_child(Kit.heading("Sound"))
 	_volume = SliderRow.new("Volume", 0.0, 1.0, 0.01, "How loud the interface's clicks, ticks and painting hiss are. All the way down is silent.")
@@ -97,6 +100,7 @@ func _ready() -> void:
 func refresh() -> void:
 	_hand.set_value(preferences.text("dominant_hand"))
 	Kit.set_quiet(_haptics, preferences.flag("haptics"))
+	Kit.set_quiet(_hands, preferences.flag("hand_tracking"))
 	_volume.set_value(preferences.number("ui_volume"))
 	Kit.set_quiet(_button_map_at_start, preferences.flag("show_button_map_at_start"))
 	Kit.set_quiet(_gimbal, preferences.flag("show_gimbal_by_default"))
