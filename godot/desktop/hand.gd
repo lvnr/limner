@@ -7,8 +7,9 @@ extends Node
 ## a pen. Shift and Ctrl stand in for the other hand's trigger, the modifier.
 ##
 ## Over a handle of the gimbal the left button takes hold of the handle instead, as
-## a grip does: it moves or turns what the gimbal is on. With Alt held it does what
-## the trigger does there: moves the pivot, or turns a ring in steps.
+## a grip does: it moves or turns what the gimbal is on. With Alt held it moves the
+## pivot (the trigger with the modifier held, in a headset), or turns a ring in steps
+## (the trigger).
 
 const MIN_DEPTH := 0.15
 const MAX_DEPTH := 20.0
@@ -25,6 +26,8 @@ var _pressure := 1.0
 ## The press now held began on a handle of the gimbal, and with Alt.
 var _on_handle := false
 var _pivot_mode := false
+## The press with Alt began on a ring, which turns in steps rather than moving the pivot.
+var _on_ring := false
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -35,6 +38,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			var gimbal := world.scene.gimbal()
 			_on_handle = not gimbal.is_empty() and gimbal.hovered[0] != ""
 			_pivot_mode = _on_handle and Input.is_key_pressed(KEY_ALT)
+			_on_ring = _on_handle and str(gimbal.hovered[0]).begins_with("ring")
 	elif event is InputEventMouseMotion:
 		# A pen reports how hard it presses; a mouse reports nothing and counts as full pressure.
 		_pressure = event.pressure if event.pressure > 0.0 else 1.0
@@ -63,7 +67,9 @@ func _process(delta: float) -> void:
 		scene.input_hand(0, tip, rotation, trigger, grip, Vector2.ZERO, 0)
 		# The hand cannot reach into the scene, so handles are picked along the line of sight.
 		scene.input_hand_ray(0, origin, direction)
-	scene.input_hand(1, Vector3.ZERO, Quaternion.IDENTITY, _modifier(), 0.0, Vector2.ZERO, 0)
+	# The pivot moves under the trigger with the modifier held.
+	var modifier := 1.0 if _pressed and _pivot_mode and not _on_ring else _modifier()
+	scene.input_hand(1, Vector3.ZERO, Quaternion.IDENTITY, modifier, 0.0, Vector2.ZERO, 0)
 	scene.input_head(camera.global_position)
 	for feedback: Dictionary in scene.input_commit(delta):
 		if feedback.type == "message":

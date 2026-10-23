@@ -57,11 +57,11 @@ const MODIFIER := [
 ]
 ## What the drawing hand does on the gimbal.
 const GIMBAL := [
-	["Trigger: arrow, centre", "Move the gimbal: the pivot moves, the thing stays. On a square, in its plane."],
-	["Trigger: ring", "Turn in snapped steps (Rotation snap steps, in Transform)."],
-	["Grip: arrow / square", "Move along that axis / in that plane."],
+	["Grip or trigger: arrow / square", "Move along that axis / in that plane."],
 	["Grip: ring", "Turn about that axis."],
-	["Grip: centre", "Move freely."],
+	["Trigger: ring", "Turn in snapped steps (Rotation snap steps, in Transform)."],
+	["Grip or trigger: centre", "Move freely."],
+	["Modifier + trigger", "On an arrow, a square or the centre: move the pivot; the thing stays."],
 ]
 ## How the panels are worked. These belong to the drawing hand.
 const PANELS := [

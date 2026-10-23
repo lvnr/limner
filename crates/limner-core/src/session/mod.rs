@@ -1356,6 +1356,12 @@ impl Session {
                 json!({ "selected": self.selection.count() })
             }
             Command::Deselect => {
+                // A gimbal shown for the selection goes with it, rather than jumping
+                // to a layer.
+                if self.gimbal_subject() == Some(Subject::Selection) {
+                    self.options.show_gimbal = false;
+                    self.touch_state();
+                }
                 self.deselect();
                 Value::Null
             }
@@ -1389,6 +1395,12 @@ impl Session {
                     if id == self.doc.root() || self.doc.layer(id).is_none() {
                         return Err(CommandError::invalid("that layer cannot be moved"));
                     }
+                }
+                // Giving the transform object back to the view puts its gimbal away,
+                // rather than moving it to the current layer.
+                if layer.is_none() && self.transform_target.is_some() && self.options.show_gimbal {
+                    self.options.show_gimbal = false;
+                    self.touch_state();
                 }
                 self.transform_target = layer;
                 Value::Null

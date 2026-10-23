@@ -117,12 +117,14 @@ With the modifier (the other hand's trigger) held:
 
 On the gimbal, with the drawing hand:
 
-| Handle | Trigger | Grip |
-|---|---|---|
-| Arrow | Move the gimbal (the pivot) along it | Move along that axis |
-| Square | Move the gimbal (the pivot) in that plane | Move in that plane |
-| Ring | Turn in snapped steps (`rotation_snap_steps`) | Turn about that axis |
-| Centre | Move the gimbal (the pivot) freely | Move freely |
+| Handle | Grip | Trigger | Trigger with the modifier |
+|---|---|---|---|
+| Arrow | Move along that axis | The same | Move the pivot along it |
+| Square | Move in that plane | The same | Move the pivot in that plane |
+| Ring | Turn about that axis | Turn in snapped steps (`rotation_snap_steps`) | Turn a copy in steps |
+| Centre | Move and turn freely, as a grab does | Move freely | Move the pivot freely |
+
+Until 0.2.1 the trigger on an arrow, a square or the centre moved the pivot. With the grip not working in a headset (see Bindings), that was all a tester could do to a gimbal, and it looked broken: the gimbal moved and the thing did not.
 
 Over a panel the drawing hand's controls mean something else, and the core sees none of them:
 

@@ -715,6 +715,35 @@ fn with_gimbal() -> (Session, LayerId, Gimbal) {
 }
 
 #[test]
+fn the_gimbal_goes_when_its_layer_or_selection_is_let_go() {
+    let (mut session, _layer, _gimbal) = with_gimbal();
+    run(
+        &mut session,
+        json!({"cmd": "set_transform_target", "layer": null}),
+    );
+    assert!(
+        session.gimbal().is_none(),
+        "giving the transform object back to the view puts the gimbal away"
+    );
+    assert!(!session.options.show_gimbal);
+
+    let (mut session, _layer) = one_of_two_selected();
+    run(
+        &mut session,
+        json!({"cmd": "set_options", "values": {"show_gimbal": true}}),
+    );
+    assert_eq!(
+        session.gimbal().map(|g| g.subject),
+        Some(Subject::Selection)
+    );
+    run(&mut session, json!({"cmd": "deselect"}));
+    assert!(
+        session.gimbal().is_none(),
+        "the selection's gimbal does not jump to the layer"
+    );
+}
+
+#[test]
 fn the_gimbal_sits_at_the_pivot_and_knows_which_handle_a_hand_is_at() {
     let (mut session, layer, gimbal) = with_gimbal();
     assert_eq!(gimbal.subject, Subject::Layer(layer));
@@ -1065,7 +1094,7 @@ fn gripping_a_ring_turns_about_the_pivot_and_the_trigger_turns_in_steps() {
 }
 
 #[test]
-fn the_trigger_on_an_arrow_moves_the_pivot_and_leaves_the_layer_alone() {
+fn the_trigger_on_an_arrow_moves_the_layer_and_with_the_modifier_the_pivot() {
     let (mut session, layer, gimbal) = with_gimbal();
     let on_arrow = gimbal.position + DVec3::Y * (0.6 * gimbal.size);
     let before = local(&session, layer);
@@ -1075,10 +1104,39 @@ fn the_trigger_on_an_arrow_moves_the_pivot_and_leaves_the_layer_alone() {
             ..at(position)
         })
     };
+    // The trigger moves the layer along the arrow, as the grip does.
     session.update(&trigger(on_arrow, 0.0));
     session.update(&trigger(on_arrow, 1.0));
     session.update(&trigger(on_arrow + DVec3::new(0.03, 0.1, 0.0), 1.0));
     session.update(&trigger(on_arrow + DVec3::new(0.03, 0.1, 0.0), 0.0));
+    assert!(
+        close(
+            local(&session, layer).translation,
+            before.translation + DVec3::new(0.0, 0.1, 0.0)
+        ),
+        "only along Y"
+    );
+    assert_eq!(session.history().undo_label(), Some("Move layer"));
+    assert!(
+        strokes(&session, layer).is_empty(),
+        "the trigger did not paint"
+    );
+    session.undo();
+
+    // With the modifier held it moves the pivot and leaves the layer alone.
+    let with_modifier = |position: DVec3, trigger: f32| {
+        both(
+            HandInput {
+                trigger,
+                ..at(position)
+            },
+            alt(),
+        )
+    };
+    session.update(&with_modifier(on_arrow, 0.0));
+    session.update(&with_modifier(on_arrow, 1.0));
+    session.update(&with_modifier(on_arrow + DVec3::new(0.03, 0.1, 0.0), 1.0));
+    session.update(&with_modifier(on_arrow + DVec3::new(0.03, 0.1, 0.0), 0.0));
     assert_eq!(local(&session, layer), before);
     assert!(close(
         session.doc().layer(layer).unwrap().pivot.translation,
@@ -1167,12 +1225,16 @@ fn the_selection_has_a_gimbal_square_to_the_world_and_a_pivot_that_can_be_moved(
             < 1e-9
     );
 
-    // The trigger on the middle moves the pivot; nothing is selected or deselected by it.
+    // The trigger on the middle, with the modifier, moves the pivot; nothing is
+    // selected or deselected by it.
     let trigger = |position: DVec3, trigger: f32| {
-        main_only(HandInput {
-            trigger,
-            ..at(position)
-        })
+        both(
+            HandInput {
+                trigger,
+                ..at(position)
+            },
+            alt(),
+        )
     };
     let lifted = gimbal.position + DVec3::Y * 0.2;
     session.update(&trigger(gimbal.position, 0.0));

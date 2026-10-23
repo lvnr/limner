@@ -1,8 +1,10 @@
 //! The gimbal: handles around the pivot of whatever is being transformed, for moving
 //! it along one axis or in one plane, and for turning it about one axis.
 //!
-//! A grip on a handle moves the thing. The trigger on an arrow or on the middle moves
-//! the pivot instead, and on a ring it turns the thing in fixed steps.
+//! A grip on a handle moves the thing, and so does the trigger, except that on a ring
+//! the trigger turns it in fixed steps. With the modifier held, the trigger on an
+//! arrow, a square or the middle moves the pivot instead, and on a ring it turns a
+//! copy.
 
 use super::grab::{Carried, Subject};
 use super::input::{HandInput, InputFrame};
@@ -342,7 +344,7 @@ impl HandleDrag {
     }
 }
 
-/// Where a pivot was when the trigger began to move it.
+/// Where a pivot was when the trigger, with the modifier, began to move it.
 pub(crate) enum PivotStart {
     Layer {
         id: LayerId,
@@ -357,26 +359,32 @@ pub(crate) enum PivotStart {
 
 /// The trigger at work on a handle.
 pub(crate) enum HandleGesture {
-    /// A ring turned in steps.
-    Turn {
+    /// The thing moved along an arrow, in a plane or freely by the middle, as the
+    /// grip moves it, or turned by a ring in `steps` to the full turn.
+    Carry {
         carried: Carried,
         drag: HandleDrag,
-        steps: u32,
+        steps: Option<u32>,
         motion: Xform,
     },
-    /// The pivot moved along an arrow, in a plane, or freely by the middle.
+    /// With the modifier held: the pivot moved along an arrow, in a plane, or freely
+    /// by the middle.
     Pivot { drag: HandleDrag, start: PivotStart },
 }
 
 impl HandleGesture {
-    /// The name of the undo step the trigger on `handle` makes.
-    pub(crate) fn label(subject: Subject, handle: GimbalHandle, duplicate: bool) -> &'static str {
-        match (handle.part(), subject, duplicate) {
-            (Part::Ring(_), Subject::Selection, false) => "Turn strokes",
-            (Part::Ring(_), Subject::Selection, true) => "Duplicate strokes",
-            (Part::Ring(_), _, false) => "Turn layer",
-            (Part::Ring(_), _, true) => "Duplicate layer",
-            _ => "Move pivot",
+    /// The name of the undo step the trigger on `handle` makes, with the modifier
+    /// held or not.
+    pub(crate) fn label(subject: Subject, handle: GimbalHandle, modifier: bool) -> &'static str {
+        let selection = subject == Subject::Selection;
+        match (handle.part(), modifier, selection) {
+            (Part::Ring(_), false, true) => "Turn strokes",
+            (Part::Ring(_), true, true) => "Duplicate strokes",
+            (Part::Ring(_), false, false) => "Turn layer",
+            (Part::Ring(_), true, false) => "Duplicate layer",
+            (_, false, true) => "Move strokes",
+            (_, false, false) => "Move layer",
+            (_, true, _) => "Move pivot",
         }
     }
 
@@ -388,12 +396,15 @@ impl HandleGesture {
     ) -> Result<Self, String> {
         let drag = HandleDrag::begin(gimbal, handle, &input.main, input.head);
         session.pin_gimbal_pivot(gimbal.subject);
-        if matches!(handle.part(), Part::Ring(_)) {
-            let carried = Carried::begin(session, gimbal.subject, input.alt() > 0.5)?;
-            return Ok(HandleGesture::Turn {
+        let modifier = input.alt() > 0.5;
+        let ring = matches!(handle.part(), Part::Ring(_));
+        if ring || !modifier {
+            // On a ring the modifier turns a copy; elsewhere it is for the pivot.
+            let carried = Carried::begin(session, gimbal.subject, ring && modifier)?;
+            return Ok(HandleGesture::Carry {
                 carried,
                 drag,
-                steps: session.options.rotation_snap_steps,
+                steps: ring.then_some(session.options.rotation_snap_steps),
                 motion: Xform::IDENTITY,
             });
         }
@@ -421,29 +432,29 @@ impl HandleGesture {
         Ok(HandleGesture::Pivot { drag, start })
     }
 
-    /// What a ring turned by the trigger carries.
+    /// What the trigger moves, unless it is moving the pivot.
     pub(crate) fn carried(&self) -> Option<&Carried> {
         match self {
-            HandleGesture::Turn { carried, .. } => Some(carried),
+            HandleGesture::Carry { carried, .. } => Some(carried),
             HandleGesture::Pivot { .. } => None,
         }
     }
 
     pub(crate) fn handle(&self) -> GimbalHandle {
         match self {
-            HandleGesture::Turn { drag, .. } | HandleGesture::Pivot { drag, .. } => drag.handle,
+            HandleGesture::Carry { drag, .. } | HandleGesture::Pivot { drag, .. } => drag.handle,
         }
     }
 
     pub(crate) fn update(&mut self, session: &mut Session, input: &InputFrame) -> bool {
         match self {
-            HandleGesture::Turn {
+            HandleGesture::Carry {
                 carried,
                 drag,
                 steps,
                 motion,
             } => {
-                *motion = drag.motion(&input.main, Some(*steps));
+                *motion = drag.motion(&input.main, *steps);
                 carried.apply(session, motion);
             }
             HandleGesture::Pivot { drag, start } => {
@@ -471,7 +482,7 @@ impl HandleGesture {
     }
 
     pub(crate) fn end(self, session: &mut Session) {
-        if let HandleGesture::Turn { carried, .. } = self {
+        if let HandleGesture::Carry { carried, .. } = self {
             carried.finish(session);
             session.pending_repeat = carried.repeat(session);
         }
