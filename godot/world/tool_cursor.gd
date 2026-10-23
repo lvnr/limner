@@ -2,8 +2,10 @@ class_name ToolCursor
 extends Node3D
 ## The tool preview at the drawing hand, in viewer space.
 ##
-## Paint and Line show the brush: a ball of the paint colour, as wide and as opaque as
-## the stroke will be. Every other tool shows its sphere of influence, with the inner
+## Paint and Line show the brush's tip in the paint colour, as wide and as opaque as
+## the stroke will be, and of its shape: a ball for the round brushes, flattened for
+## the ellipses, a flat disc or plate for the ribbons, a cube for the cube, turned
+## with the hand as the stroke's cross-section will be. Every other tool shows its sphere of influence, with the inner
 ## sphere of full effect for the tools that have one. With mirrored working on, a
 ## fainter twin of the preview shows where the tool also acts, at the mirror image
 ## of the hand.
@@ -17,6 +19,19 @@ const SHADER := preload("res://shaders/cursor.gdshader")
 const TWIN_STRENGTH := 0.55
 ## The rim of a preview whose trigger would do nothing.
 const BLOCKED_RIM := Color(0.5, 0.5, 0.5, 0.75)
+## The brush's tip, by brush: "ball" or "box", and its size along the hand's X, Y and
+## Z as fractions of the brush's radius. Z is the way the controller points, which is
+## the stroke points' normal: the cross-sections in `tess/frame.rs` are round, an
+## ellipse 0.3 as thick along it, a flat ribbon square to it, and a square.
+const TIPS := {
+	"capped_cylinder": ["ball", Vector3(1.0, 1.0, 1.0)],
+	"cylinder": ["ball", Vector3(1.0, 1.0, 1.0)],
+	"capped_ellipse": ["ball", Vector3(1.0, 1.0, 0.3)],
+	"ellipse": ["ball", Vector3(1.0, 1.0, 0.3)],
+	"rounded_ribbon": ["ball", Vector3(1.0, 1.0, 0.04)],
+	"ribbon": ["box", Vector3(1.0, 1.0, 0.04)],
+	"cube": ["box", Vector3(1.0, 1.0, 1.0)],
+}
 
 var scene: LimnerScene
 
@@ -33,17 +48,21 @@ class Look:
 	var brush_material: ShaderMaterial
 	var sphere_material: ShaderMaterial
 	var inner_material: ShaderMaterial
+	var ball: Mesh
+	var box: Mesh
 
-	func _init(parent: Node3D, ball: Mesh, name: String) -> void:
+	func _init(parent: Node3D, ball_mesh: Mesh, box_mesh: Mesh, name: String) -> void:
+		ball = ball_mesh
+		box = box_mesh
 		root = Node3D.new()
 		root.name = name
 		parent.add_child(root)
 		brush_material = _material()
 		sphere_material = _material()
 		inner_material = _material()
-		brush = _instance(ball, brush_material)
-		sphere = _instance(ball, sphere_material)
-		inner = _instance(ball, inner_material)
+		brush = _instance(ball_mesh, brush_material)
+		sphere = _instance(ball_mesh, sphere_material)
+		inner = _instance(ball_mesh, inner_material)
 
 	func _material() -> ShaderMaterial:
 		var material := ShaderMaterial.new()
@@ -70,17 +89,21 @@ class Look:
 		brush.visible = paints
 		sphere.visible = not paints
 		inner.visible = not paints and not blocked and cursor.inner != null and cursor.inner > radius * 0.02
+		if paints:
+			var tip: Array = TIPS.get(str(cursor.get("brush", "")), TIPS.ellipse)
+			brush.mesh = box if tip[0] == "box" else ball
+			brush.basis = Basis(cursor.rotation as Quaternion) * Basis.from_scale((tip[1] as Vector3) * radius)
 		if blocked:
 			# A hollow grey ring: nothing would happen here.
 			var shown := brush if paints else sphere
 			var material := brush_material if paints else sphere_material
-			shown.scale = Vector3.ONE * radius
+			if not paints:
+				shown.scale = Vector3.ONE * radius
 			material.set_shader_parameter("fill", Color(BLOCKED_RIM.r, BLOCKED_RIM.g, BLOCKED_RIM.b, 0.0))
 			material.set_shader_parameter("rim", Color(BLOCKED_RIM.r, BLOCKED_RIM.g, BLOCKED_RIM.b, BLOCKED_RIM.a * strength))
 			return
 		if paints:
 			var color: Color = cursor.color
-			brush.scale = Vector3.ONE * radius
 			brush_material.set_shader_parameter("fill", Color(color.r, color.g, color.b, clampf(cursor.opacity, 0.15, 1.0) * strength))
 			brush_material.set_shader_parameter("rim", Color(color.r, color.g, color.b, strength))
 			return
@@ -100,8 +123,10 @@ func _ready() -> void:
 	ball.height = 2.0
 	ball.radial_segments = 32
 	ball.rings = 16
-	_hand = Look.new(self, ball, "AtHand")
-	_twin = Look.new(self, ball, "AtMirror")
+	var box := BoxMesh.new()
+	box.size = Vector3(2.0, 2.0, 2.0)
+	_hand = Look.new(self, ball, box, "AtHand")
+	_twin = Look.new(self, ball, box, "AtMirror")
 
 
 func _process(_delta: float) -> void:
@@ -126,6 +151,13 @@ func _process(_delta: float) -> void:
 ## True when the preview shows that the trigger would do nothing.
 func is_blocked() -> bool:
 	return visible and String(scene.tool_cursor().get("blocked", "")) != ""
+
+
+## The brush's tip as it is shown now, for tests: its mesh's kind ("ball" or "box")
+## and its size along the hand's three axes, in metres.
+func brush_tip() -> Dictionary:
+	var node := _hand.brush
+	return {"mesh": "box" if node.mesh == _hand.box else "ball", "size": node.basis.get_scale()}
 
 
 ## The colour the brush ball is filled with now, for tests.

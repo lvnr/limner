@@ -65,3 +65,24 @@ func test_a_hollow_grey_ring_where_the_trigger_would_do_nothing() -> void:
 	await frames(2)
 	check(not cursor.is_blocked(), "a group takes a new paint layer")
 	cursor.free()
+
+
+func test_the_brush_shows_the_shape_of_its_tip() -> void:
+	var cursor := _cursor()
+	run({"cmd": "set_tool", "tool": "paint"})
+	var radius: float = world.scene.tool_settings().paint.size
+	var shapes := {
+		"cylinder": ["ball", Vector3(1.0, 1.0, 1.0)],
+		"ellipse": ["ball", Vector3(1.0, 1.0, 0.3)],
+		"rounded_ribbon": ["ball", Vector3(1.0, 1.0, 0.04)],
+		"ribbon": ["box", Vector3(1.0, 1.0, 0.04)],
+		"cube": ["box", Vector3(1.0, 1.0, 1.0)],
+	}
+	for brush: String in shapes:
+		editor.set_tool_setting("paint", "brush", brush)
+		_hand_at(Vector3(0.2, 1.2, -0.7))
+		await frames(2)
+		var tip := cursor.brush_tip()
+		check_eq(tip.mesh, shapes[brush][0], "%s: the kind of shape" % brush)
+		check((tip.size as Vector3).is_equal_approx((shapes[brush][1] as Vector3) * radius), "%s: its size, flat along the way the hand points: %s" % [brush, tip.size])
+	cursor.free()

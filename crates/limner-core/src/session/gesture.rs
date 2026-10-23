@@ -12,7 +12,7 @@ use super::input::{Edge, Feedback, InputFrame, Latch, FLICK, PRESS, RELEASE, RES
 use super::tools::paint::{LineGesture, PaintGesture};
 use super::tools::select::SelectGesture;
 use super::tools::sphere::{GrabGesture, SphereGesture};
-use super::tools::ToolKind;
+use super::tools::{BrushStyle, ToolKind};
 use super::Session;
 use crate::model::{DrawingId, LayerId};
 use glam::{DQuat, DVec3};
@@ -106,6 +106,8 @@ pub struct Cursor {
     pub position: DVec3,
     pub rotation: DQuat,
     pub tool: ToolKind,
+    /// The brush Paint or Line would lay down, for showing its shape.
+    pub brush: Option<BrushStyle>,
     /// Half-width of the brush for Paint and Line; radius of the sphere for the others. Viewer-space metres.
     pub radius: f32,
     /// Radius of the inner sphere, for the tools that have one.
@@ -151,6 +153,11 @@ impl Session {
             position: hand.position,
             rotation: hand.rotation,
             tool: tools.tool,
+            brush: match tools.tool {
+                ToolKind::Paint => Some(tools.paint.brush),
+                ToolKind::Line => Some(tools.line.brush),
+                _ => None,
+            },
             radius: tools.size(),
             inner: tools.inner().map(|fraction| fraction * tools.size()),
             color: tools.color,

@@ -664,6 +664,7 @@ impl LimnerScene {
             "mirror_position" => &mirror,
             "rotation" => rotation,
             "tool" => &variant_from_json(&serde_json::to_value(cursor.tool).unwrap_or_default()),
+            "brush" => &variant_from_json(&serde_json::to_value(cursor.brush).unwrap_or_default()),
             "radius" => cursor.radius,
             "inner" => &inner,
             "color" => color_from_linear(cursor.color),
