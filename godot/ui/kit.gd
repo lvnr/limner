@@ -287,7 +287,8 @@ static func set_headset(on: bool) -> void:
 
 
 ## A size in design pixels as pixels of the interface in use: as it is in a headset,
-## where a design pixel is 0.8 mm, and `DESKTOP_SCALE` of it on the desktop.
+## where a design pixel is two thirds of a millimetre, and `DESKTOP_SCALE` of it on
+## the desktop.
 static func u(pixels: float) -> int:
 	return roundi(pixels * (1.0 if headset else DESKTOP_SCALE))
 

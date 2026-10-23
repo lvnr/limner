@@ -17,10 +17,15 @@ const KEY_HEIGHT := 36
 const ROWS := ["1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm.,"]
 ## The symbols on the bottom row, beside the space bar.
 const SYMBOLS := ["#", "-", "_", "/", "'"]
+## How many characters of a long line show before the caret and after it.
+const SHOWN_BEFORE := 30
+const SHOWN_AFTER := 10
 
 ## The viewport whose text box gets the keys.
 var target: Viewport
 
+## What has been typed, over the keys, so that the eyes can stay on the keyboard.
+var _typed: Label
 var _shift: Button
 var _letters: Array[Button] = []
 
@@ -28,6 +33,12 @@ var _letters: Array[Button] = []
 func _init() -> void:
 	name = "Keyboard"
 	add_theme_constant_override("separation", 3)
+	_typed = Kit.label("")
+	_typed.add_theme_stylebox_override("normal", Kit._box(Kit.BG_SUNKEN, 4, 1, Kit.BORDER, 8))
+	_typed.custom_minimum_size = Vector2(0, KEY_HEIGHT)
+	_typed.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_typed.clip_text = true
+	add_child(_typed)
 	for index in ROWS.size():
 		var row := _row()
 		var keys: String = ROWS[index]
@@ -55,6 +66,30 @@ func _init() -> void:
 	bottom.add_child(_key("", "Enter", _press.bind(KEY_ENTER), "enter"))
 	bottom.add_child(_key("", "Put the keyboard away", func() -> void: done.emit(), "check"))
 	add_child(bottom)
+
+
+## Shows the text of `box` over the keys, with a bar where the caret is: of a text
+## area, the line the caret is on; of a long line, the part about the caret.
+func show_text(box: Control) -> void:
+	var row := ""
+	var caret := 0
+	var line := box as LineEdit
+	var area := box as TextEdit
+	if line != null:
+		row = line.text
+		caret = line.caret_column
+	elif area != null:
+		row = area.get_line(area.get_caret_line())
+		caret = area.get_caret_column()
+	var before := row.substr(0, caret)
+	var after := row.substr(caret)
+	if before.length() > SHOWN_BEFORE:
+		before = "…" + before.right(SHOWN_BEFORE)
+	if after.length() > SHOWN_AFTER:
+		after = after.left(SHOWN_AFTER) + "…"
+	var text := before + "|" + after
+	if _typed.text != text:
+		_typed.text = text
 
 
 func _row() -> HBoxContainer:

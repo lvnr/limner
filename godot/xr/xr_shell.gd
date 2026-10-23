@@ -171,6 +171,7 @@ func _ready() -> void:
 	palette = XRPalette.new()
 	palette.name = "Palette"
 	palette.editor = editor
+	palette.eyes = rig.head
 	rig.add_child(palette)
 	palette.button_map_requested.connect(toggle_button_map)
 	dial = XRHandDial.new()

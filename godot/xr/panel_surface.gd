@@ -18,10 +18,11 @@ signal corner_pressed
 ## The sheet changed size, because its panel needs more or less room.
 signal resized
 
-## How many of the panel's pixels make one metre of sheet: 1.25 to the millimetre, so
-## that a key (`Kit.KEY`, 38 pixels) is 30 mm across, as Quill's are, and a panel of
-## 500 pixels is 40 cm wide. Tune on real hardware.
-const PIXELS_PER_METRE := 1250.0
+## How many of the panel's pixels make one metre of sheet: 1.5 to the millimetre, so
+## that a key (`Kit.KEY`, 38 pixels) is 25 mm across and a panel of 500 pixels is
+## 33 cm wide. It was 1.25 (keys of 30 mm, as Quill's measured), and the first tester
+## in a headset found the panels too large. Tune on real hardware.
+const PIXELS_PER_METRE := 1500.0
 ## How many pixels are drawn for each of the panel's own, per side. At 1, a panel at
 ## arm's length has about 9 pixels to a degree of view, fewer than even a first-
 ## generation headset shows, so text and icons look soft; at 2 they are as sharp as

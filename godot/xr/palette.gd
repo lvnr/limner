@@ -8,7 +8,7 @@ extends Node3D
 ## right of its title bar) leaves it where it is in the room, and so does picking it
 ## up with the grip and putting it down somewhere; the same key, or its round
 ## button, sends it back. When a text box in any panel is being typed into, a
-## keyboard appears beside that panel.
+## keyboard appears in front of the user, low, like a laptop's.
 ##
 ## This node follows the hand. Pinned panels and the keyboard are its children too,
 ## but keep their own place in the room.
@@ -35,10 +35,10 @@ const PANELS := [
 	{"title": "Layer", "script": "res://ui/properties_panel.gd", "icon": "paint_layer", "coin": false},
 	{"title": "Text", "script": "res://ui/text_panel.gd", "icon": "text", "coin": false},
 ]
-## The least width of a sheet on the palette, in the panel's pixels (31 cm); a panel
+## The least width of a sheet on the palette, in the panel's pixels (26 cm); a panel
 ## that is wider makes its sheet wider.
 const PANEL_WIDTH := 384
-## Size of a round button and the gap between two, in pixels (40 and 7 mm).
+## Size of a round button and the gap between two, in pixels.
 const COIN := 44
 const COIN_GAP := 8
 ## Size of the icon on a round button, in pixels.
@@ -67,10 +67,14 @@ const MESSAGE_SECONDS := 2.5
 const PROBLEM_SECONDS := 4.5
 ## Height of the message text in the room, in metres per pixel of a 28-pixel font.
 const MESSAGE_PIXEL := 0.0005
-## Gap between a panel and the keyboard beside it, in metres.
-const KEYBOARD_GAP := 0.012
-## How far the keyboard turns in toward the user from the plane of its panel, in degrees.
-const KEYBOARD_TURN_DEGREES := 20.0
+## Where the keyboard stands when typing starts, in metres from the eyes: ahead of
+## them, and below them. It faces the eyes from there and stays put in the room until
+## typing ends, so that it holds still under the drawing hand while the other hand
+## moves. (Beside the panel, riding on the palette, it was found awkward to reach.)
+const KEYBOARD_AHEAD := 0.42
+const KEYBOARD_BELOW := 0.26
+## How much larger than a panel's the keyboard's pixels are.
+const KEYBOARD_MAGNIFICATION := 1.2
 ## Where the palette waits, in the room, until the hand that holds it is first seen.
 const REST_POSITION := Vector3(-0.2, 1.1, -0.45)
 
@@ -87,8 +91,12 @@ var tabs: XRPanelSurface
 var coins := {}
 ## The keyboard's sheet. Visible only while a text box is being typed into.
 var keyboard: XRPanelSurface
+## The eyes, from which the keyboard is placed. Set by the shell.
+var eyes: Node3D
 
 var _keys: XRKeyboard
+## The text box the keyboard was placed for.
+var _keys_for: Control
 var _icons := {}
 var _pinned: Array[String] = []
 var _message: Label3D
@@ -134,6 +142,9 @@ func _ready() -> void:
 
 	_keys = XRKeyboard.new()
 	keyboard = XRPanelSurface.new("Keyboard", _keys, PANEL_WIDTH, 0, false)
+	# Its keys are hit in quick succession, so they are kept a little larger than a
+	# panel's: about 26 mm wide.
+	keyboard.magnification = KEYBOARD_MAGNIFICATION
 	keyboard.movable = false
 	keyboard.top_level = true
 	keyboard.visible = false
@@ -464,8 +475,8 @@ func _follow_hovered_coin() -> void:
 		_tag.text = coin.tooltip_text.get_slice(" (", 0)
 
 
-## Shows the keyboard beside the panel that is being typed into, level with the text
-## box, on the side away from the hand that holds the palette.
+## Shows the keyboard while a text box is being typed into, placed in front of the
+## eyes when typing in that box starts.
 func _place_keyboard() -> void:
 	var typing: XRPanelSurface = null
 	for candidate in touchable():
@@ -477,19 +488,35 @@ func _place_keyboard() -> void:
 			keyboard.pointer_leave()
 			keyboard.visible = false
 		_keys.target = null
+		_keys_for = null
 		return
 	var box := typing.typing_control()
 	_keys.target = box.get_viewport()
+	_keys.show_text(box)
 	keyboard.visible = true
-	var size := typing.metres() * typing.magnification
-	var keys_size := keyboard.metres()
-	var box_height := (typing.pixel_size.y * 0.5 - typing.pixel_of(box).y) / XRPanelSurface.PIXELS_PER_METRE * typing.magnification
-	var reach := maxf(0.0, (size.y - keys_size.y) * 0.5)
-	var hinge := Transform3D(
-		Basis(Vector3.UP, -_side * deg_to_rad(KEYBOARD_TURN_DEGREES)),
-		Vector3(_side * (size.x * 0.5 + KEYBOARD_GAP), clampf(box_height, -reach, reach), 0.0)
-	)
-	keyboard.place(typing.global_transform.orthonormalized() * hinge * Transform3D(Basis.IDENTITY, Vector3(_side * keys_size.x * 0.5, 0.0, 0.0)))
+	if box != _keys_for:
+		_keys_for = box
+		keyboard.place(keyboard_pose(typing))
+
+
+## Where the keyboard goes for typing into a box on `typing`: ahead of the eyes and
+## below them, the way they face but level, turned to face them. Without the eyes,
+## below the panel.
+func keyboard_pose(typing: XRPanelSurface) -> Transform3D:
+	if eyes == null:
+		var below := typing.metres().y * typing.magnification * 0.5 + keyboard.metres().y * 0.5 + TAB_GAP
+		return typing.global_transform.orthonormalized() * Transform3D(Basis.IDENTITY, Vector3(0.0, -below, 0.0))
+	var eye := eyes.global_position
+	var ahead := -eyes.global_basis.z
+	ahead.y = 0.0
+	if ahead.length() < 0.1:
+		# Looking straight up or down: toward the panel instead.
+		ahead = typing.global_position - eye
+		ahead.y = 0.0
+	ahead = ahead.normalized() if ahead.length() > 1e-3 else Vector3.FORWARD
+	var spot := eye + ahead * KEYBOARD_AHEAD + Vector3.DOWN * KEYBOARD_BELOW
+	# A sheet faces along its +Z; looking_at points -Z at its target.
+	return Transform3D(Basis.looking_at(spot - eye, Vector3.UP), spot)
 
 
 func _stop_typing() -> void:

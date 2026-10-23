@@ -399,17 +399,27 @@ func test_the_keyboard_types_into_the_layer_name() -> void:
 	check_eq(field.is_editing(), true, "poking the box starts typing in it")
 	var keyboard := shell.palette.keyboard
 	check_eq(keyboard.visible, true, "and brings up the keyboard")
-	check(keyboard.global_position.x > surface.global_position.x, "beside the panel, away from the hand that holds it")
+	var eyes := sim.head.global_position
+	check(keyboard.global_position.y < eyes.y - 0.2, "low, in front of the eyes")
+	check(keyboard.global_basis.z.dot((eyes - keyboard.global_position).normalized()) > 0.99, "facing them")
+	var placed := keyboard.global_transform
+	# It stays where it is while the hand that holds the palette moves.
+	await sim.play([{"time": 0.0, "left": {"tip": Vector3(-0.3, 1.05, -0.32)}}, {"time": 0.1}])
+	check(keyboard.global_transform.is_equal_approx(placed), "it holds still in the room")
 	for caption: String in ["space", "Capital letter next", "T", "w", "o", "2"]:
 		await _poke(keyboard, _key(caption))
 	check_eq(field.text, "Paint Two2", "the keys type into the box")
+	check_eq(shell.palette._keys._typed.text, "Paint Two2|", "and what is typed shows over the keys")
 	await _poke(keyboard, _key("Delete the character before the caret"))
 	check_eq(field.text, "Paint Two", "backspace takes one away")
 	await _poke(keyboard, _key("Enter"))
 	await frames(3)
 	check_eq(row_named("Paint Two").get("kind"), "paint", "Enter renames the layer")
 	check_eq(keyboard.visible, false, "and the keyboard goes when typing ends")
-	# The key that puts the keyboard away ends typing without Enter.
+	# The key that puts the keyboard away ends typing without Enter. (The panel moved
+	# with the hand.)
+	rect = field.get_global_rect()
+	at = surface.world_point(Vector2(rect.position.x + rect.size.x * 0.85, rect.get_center().y))
 	await sim.play(sim.poke_steps(RIGHT, at, _normal(surface)))
 	await frames(3)
 	check_eq(keyboard.visible, true, "it comes back for the next edit")
