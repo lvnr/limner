@@ -2,7 +2,7 @@
 
 Limner is an open-source successor to Quill 2.9 (VR painting and animation). "Limner" is a provisional name. This file is the project's memory: session memory does not travel between machines, so anything a future session needs belongs here or in `docs/`.
 
-Everything in the plan is built. It was built on a Mac with no headset, so nothing has run in a headset, on Windows or on a Quest. The next work is to prove it on real hardware: start with `docs/handoff.md`.
+Everything in the plan is built. It was built on a Mac with no headset; it now runs on Windows, and one tester has tried it in a Quest 3 over Link (what worked, what did not and what was fixed: `docs/handoff.md`, "The first headset tester"). It has not run on a Quest by itself. The next work is to prove the fixes on real hardware: start with `docs/handoff.md`.
 
 ## Read first
 
@@ -85,6 +85,7 @@ On Windows the project starts OpenXR whenever the app starts. Put `--xr-mode off
 
 - Every change to a document is a `Command` (`crates/limner-core/src/session/command.rs`) run through `Session::exec`, so it is undoable, scriptable and testable. A drag or gesture is one transaction and one undo step. New behaviour goes in the core with a test first; the Godot side only presents it.
 - Interface code never touches the document: it calls `editor.run({...})`, reads the cached queries on `LimnerEditor`, and redraws on its signals. Panels are built in code with `Kit` and `Icons` (`godot/ui/`).
+- Panels follow Quill's rules: a `LimnerPanel` of one fixed size in design pixels (`Kit.u`), nothing that scrolls or opens a list (no `ScrollContainer`, `OptionButton`, `ItemList`, `Tree`), keys first; long lists page with `Pager`, choices use `KeyGrid` or `Cycler`. Every new state of a panel gets a `check_fits` in `test_panels_fit.gd`. See rule 8 in `docs/interface-api.md`.
 - GDScript is fully typed. A variable whose type would be inferred from a Variant is an error in this project; write the type.
 - A new script with `class_name` is not seen by tests until `--import` has run once.
 - A new document's layers have ids 1 (root), 2 (spawn area), 4 (paint layer); 3 is the paint layer's drawing. The next layer added is 5.
