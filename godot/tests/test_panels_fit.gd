@@ -82,7 +82,7 @@ func test_the_document_panel_fits_every_file_part() -> void:
 		editor.save_document(path)
 	await _both(func(where: String) -> void:
 		var panel: DocumentPanel = await _mount(DocumentPanel.new(editor))
-		for mode: String in ["", "save_as", "confirm", "open", "import"]:
+		for mode: String in ["", "save_as", "save_folder", "confirm", "open", "import"]:
 			panel.show_file_part(mode)
 			await frames(2)
 			check_fits(panel, "file part \"%s\", %s" % [mode, where])

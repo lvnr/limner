@@ -14,6 +14,8 @@ const MODELS := ["obj", "glb", "gltf", "fbx"]
 
 ## Set by tests, so that they neither read nor fill the user's own folder.
 static var _folder_override := ""
+## The folder last browsed to in the Document panel, for this run; empty for `folder()`.
+static var last_folder := ""
 
 
 ## Where documents are kept. Not made until something is saved there.
@@ -29,6 +31,70 @@ static func folder() -> String:
 ## Uses another folder from now on; an empty string goes back to the usual one.
 static func use_folder(path: String) -> void:
 	_folder_override = path
+	last_folder = ""
+
+
+## The folder the Document panel shows first: the one last browsed to, while it is
+## still there, or else `folder()`.
+static func browsing() -> String:
+	if last_folder != "" and DirAccess.dir_exists_absolute(last_folder):
+		return last_folder
+	return folder()
+
+
+## The usual places to start looking, as [path, name] pairs: the documents folder,
+## the user's own folders that exist, and on Windows each drive. On a standalone
+## headset, only the documents folder.
+static func places() -> Array[Array]:
+	var found: Array[Array] = [[folder(), "Limner documents"]]
+	if OS.has_feature("android") or _folder_override != "":
+		return found
+	var own := [
+		[OS.get_system_dir(OS.SYSTEM_DIR_DOCUMENTS), "Documents"],
+		[OS.get_system_dir(OS.SYSTEM_DIR_DESKTOP), "Desktop"],
+		[OS.get_system_dir(OS.SYSTEM_DIR_DOWNLOADS), "Downloads"],
+		[OS.get_system_dir(OS.SYSTEM_DIR_PICTURES), "Pictures"],
+		[OS.get_system_dir(OS.SYSTEM_DIR_MOVIES), "Videos"],
+		[OS.get_environment("USERPROFILE") if OS.get_name() == "Windows" else OS.get_environment("HOME"), "Home"],
+	]
+	for place: Array in own:
+		var path: String = place[0]
+		if path != "" and DirAccess.dir_exists_absolute(path):
+			found.append([path.simplify_path(), place[1]])
+	if OS.get_name() == "Windows":
+		for index in DirAccess.get_drive_count():
+			var drive := DirAccess.get_drive_name(index)
+			found.append([drive + "/", "Drive %s" % drive])
+	return found
+
+
+## The folder above `path`, or `path` itself at the top of a drive.
+static func parent_of(path: String) -> String:
+	var up := path.simplify_path().get_base_dir()
+	if up == "" or up == path:
+		return path
+	# "C:" is the drive's current folder to Windows, not its top.
+	if up.ends_with(":"):
+		up += "/"
+	return up
+
+
+## The folders in `in_folder` that can be gone into: not hidden, and not projects
+## (which `projects` lists), by name, as `{path, name, time, kind}` with `kind`
+## "folder".
+static func folders(in_folder: String) -> Array[Dictionary]:
+	var found: Array[Dictionary] = []
+	if not DirAccess.dir_exists_absolute(in_folder):
+		return found
+	for sub: String in DirAccess.get_directories_at(in_folder):
+		if sub.begins_with(".") or sub.begins_with("$"):
+			continue
+		var path := in_folder.path_join(sub)
+		if FileAccess.file_exists(path.path_join("limn.json")) or FileAccess.file_exists(path.path_join("Quill.json")):
+			continue
+		found.append({"path": path, "name": sub, "time": 0, "kind": "folder"})
+	found.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return str(a.name).naturalnocasecmp_to(str(b.name)) < 0)
+	return found
 
 
 ## The file a document named `title` is saved as in `in_folder`: a packed `.limnz`,

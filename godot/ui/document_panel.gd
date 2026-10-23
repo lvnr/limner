@@ -4,9 +4,10 @@ extends LimnerPanel
 ## the whole document, and how much is in it.
 ##
 ## Its File section saves, saves as, starts, opens and imports without any system
-## dialog, in the documents folder (see `Documents`), so that it works in a headset as
-## on the desktop. Questions (save the changes first? replace that file?) are asked in
-## the panel itself.
+## dialog, so that it works in a headset as on the desktop: in the documents folder
+## (see `Documents`) at first, and in any other folder browsed to in the panel
+## (`FolderBrowser`). Questions (save the changes first? replace that file?) are
+## asked in the panel itself.
 
 ## The panel's size in design pixels (see `LimnerPanel`).
 const DESIGN_SIZE := Vector2(560, 640)
@@ -23,7 +24,6 @@ const LIST_PAGE := 7
 ## The longest description that can be typed: as much as the box shows whole.
 const MAX_DESCRIPTION := 200
 ## The icon of each kind of entry in those lists.
-const ENTRY_ICONS := {"limnz": "new_file", "limn": "folder_open", "quill": "folder_open", "picture": "image", "sound": "sound", "model": "model"}
 
 var editor: LimnerEditor
 
@@ -35,10 +35,10 @@ var _file_buttons := {}
 var _drawer: VBoxContainer
 ## The files listed for Open or Import, the call that takes one, and the rows and page
 ## keys that show a page of them.
-var _list_entries: Array[Dictionary] = []
-var _list_chosen: Callable
-var _list_rows: VBoxContainer
-var _list_pager: Pager
+## The folder list of Open, Import or choosing where to save, when one is shown.
+var browser: FolderBrowser
+## The folder Save as saves in; empty for the one last browsed to.
+var _save_folder := ""
 ## What to do once unsaved changes have been saved or given up.
 var _pending := Callable()
 var _save_name: TextField
@@ -83,10 +83,10 @@ func _init(limner_editor: LimnerEditor) -> void:
 	var actions := HFlowContainer.new()
 	for entry: Array in [
 		["save", "Save", "save", "Saves the document where it was last saved. The first time, it asks for a name.", save],
-		["save_as", "Save as", "save", "Saves the document under a new name in the documents folder", _choose.bind("save_as")],
+		["save_as", "Save as", "save", "Saves the document under a new name, in the documents folder or one chosen", _choose.bind("save_as")],
 		["new", "New", "new_file", "Starts a new, empty document", start_new],
-		["open", "Open", "folder_open", "Opens a project from the documents folder", _choose.bind("open")],
-		["import", "Import", "import", "Brings a picture, a sound, a model or another project from the documents folder in as a new layer", _choose.bind("import")],
+		["open", "Open", "folder_open", "Opens a project: from the documents folder, or any other", _choose.bind("open")],
+		["import", "Import", "import", "Brings a picture, a sound, a model or another project in as a new layer, from any folder", _choose.bind("import")],
 	]:
 		var button := Kit.button(entry[1], entry[3], entry[4], entry[2])
 		_file_buttons[entry[0]] = button
@@ -309,12 +309,12 @@ func save() -> bool:
 	return false
 
 
-## Saves the document as `title`.limnz in the documents folder, which is made if it
-## is missing. A file of that name already there is replaced only when asked twice.
-## Then does what was waiting for the changes to be saved, if anything was. Returns
-## whether it saved.
+## Saves the document as `title`.limnz in the folder chosen for it (at first the one
+## last browsed to, or the documents folder), which is made if it is missing. A file
+## of that name already there is replaced only when asked twice. Then does what was
+## waiting for the changes to be saved, if anything was. Returns whether it saved.
 func save_as(title: String) -> bool:
-	var target := Documents.path_for(title)
+	var target := Documents.path_for(title, save_folder())
 	if target == "":
 		_tell_save("Type a name for the file first.")
 		return false
@@ -351,9 +351,14 @@ func import_entry(path: String) -> int:
 	return layer
 
 
+## The folder Save as saves in.
+func save_folder() -> String:
+	return _save_folder if _save_folder != "" else Documents.browsing()
+
+
 ## Shows what a file action needs under the File buttons: "save_as" (a name),
-## "confirm" (save the changes first?), "open" or "import" (the documents folder's
-## list), or "" for nothing.
+## "save_folder" (where to save), "confirm" (save the changes first?), "open" or
+## "import" (a folder's list, to browse), or "" for nothing.
 func show_file_part(mode: String) -> void:
 	file_mode = mode
 	# What was there goes at the end of the frame: the button pressed to get here may
@@ -361,20 +366,24 @@ func show_file_part(mode: String) -> void:
 	for child: Node in _drawer.get_children():
 		(child as Control).visible = false
 		child.queue_free()
+	var typed := _save_name.text if _save_name != null else ""
 	_save_name = null
 	_save_note = null
 	_save_button = null
+	browser = null
 	_replace = false
 	_drawer.visible = mode != ""
 	match mode:
 		"save_as":
-			_build_save_as()
+			_build_save_as(typed)
+		"save_folder":
+			_build_save_folder(typed)
 		"confirm":
 			_build_confirm()
 		"open":
-			_build_list(Documents.projects(), "No projects in %s yet. Projects saved from this panel go there.", open_project)
+			_build_browser(Documents.projects, "No projects in %s. Projects saved from this panel go to the Limner documents folder unless another is chosen.", open_project)
 		"import":
-			_build_list(Documents.importable(), "Nothing to import in %s. Pictures (PNG, JPEG), sounds (WAV, Ogg, MP3), models (OBJ, glTF, FBX) and projects put there can be brought in.", import_entry)
+			_build_browser(Documents.importable, "Nothing to import in %s. Pictures (PNG, JPEG), sounds (WAV, Ogg, MP3), models (OBJ, glTF, FBX) and projects can be brought in.", import_entry)
 
 
 ## A File button: shows its part, or puts it away when it is showing already. What
@@ -438,10 +447,10 @@ func _save_then_continue() -> void:
 		_pending = waiting
 
 
-func _build_save_as() -> void:
-	_save_name = TextField.new("Name", "The name of the project file. It is saved in the documents folder.")
+func _build_save_as(typed := "") -> void:
+	_save_name = TextField.new("Name", "The name of the project file. It is saved in the folder said under it.")
 	_save_name.select_all_on_focus = true
-	_save_name.set_value(editor.title())
+	_save_name.set_value(typed if typed != "" else editor.title())
 	_save_name.text_changed.connect(func(_text: String) -> void:
 		_replace = false
 		_show_save_target()
@@ -452,17 +461,48 @@ func _build_save_as() -> void:
 	_drawer.add_child(_save_note)
 	_save_button = Kit.button("Save", "Saves the project under this name", func() -> void: save_as(_save_name.text), "save")
 	_save_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var where := Kit.button("Folder", "Choose the folder it is saved in", func() -> void: _keep_pending(show_file_part.bind("save_folder")), "folder_open")
+	where.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var cancel := Kit.button("Cancel", "Leaves the document as it is", _cancel)
 	cancel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_drawer.add_child(Kit.row([_save_button, cancel]))
+	_drawer.add_child(Kit.row([_save_button, where, cancel]))
 	_show_save_target()
+
+
+## Where to save: the folders, a page at a time, and a key to save in the one shown.
+## Either way it goes back to the name, as it was typed.
+func _build_save_folder(typed: String) -> void:
+	browser = FolderBrowser.new(save_folder(), LIST_PAGE, Callable(), "Save here")
+	browser.chosen.connect(func(path: String) -> void:
+		_save_folder = path
+		Documents.last_folder = path
+		_keep_pending(_back_to_name.bind(typed))
+	)
+	_drawer.add_child(browser)
+	_drawer.add_child(Kit.text_key("Back", "Back to the name, with the folder as it was", func() -> void: _keep_pending(_back_to_name.bind(typed))))
+
+
+## Goes back to Save as with the name that was typed.
+func _back_to_name(typed: String) -> void:
+	show_file_part("save_as")
+	if _save_name != null and typed != "":
+		_save_name.set_value(typed)
+		_show_save_target()
+
+
+## Does `action`, which changes the part shown, keeping what was waiting for the
+## document to be saved.
+func _keep_pending(action: Callable) -> void:
+	var waiting := _pending
+	action.call()
+	_pending = waiting
 
 
 ## Says which file the name typed becomes.
 func _show_save_target() -> void:
 	if _save_name == null:
 		return
-	var target := Documents.path_for(_save_name.text)
+	var target := Documents.path_for(_save_name.text, save_folder())
 	if target == "":
 		_tell_save("Type a name for the file.")
 	else:
@@ -487,45 +527,17 @@ func _build_confirm() -> void:
 	_drawer.add_child(buttons)
 
 
-## One key for each entry, newest first, with its date beside it, `LIST_PAGE` to a
-## page with page keys under them. `empty` says what to do when there is none; `%s`
-## in it is the folder.
-func _build_list(entries: Array[Dictionary], empty: String, chosen: Callable) -> void:
-	_list_entries = entries
-	_list_chosen = chosen
-	var where := _short(Documents.folder())
-	var heading := Form.note(empty % where if entries.is_empty() else "In %s, newest first:" % where)
-	heading.tooltip_text = Documents.folder()
-	heading.mouse_filter = Control.MOUSE_FILTER_PASS
-	_drawer.add_child(heading)
-	_list_rows = Kit.column()
-	_drawer.add_child(_list_rows)
-	_list_pager = Pager.new(LIST_PAGE, false)
-	_list_pager.set_count(entries.size())
-	_list_pager.page_changed.connect(func(_first: int) -> void: _show_list_page())
-	_list_pager.visible = entries.size() > LIST_PAGE
-	_drawer.add_child(_list_pager)
+## A folder's list to browse, from the folder last browsed to: its folders, then
+## what `lister` finds in it, newest first, a page at a time. `empty` says what to
+## do when there is nothing; `%s` in it is the folder. A file chosen goes to `chosen`.
+func _build_browser(lister: Callable, empty: String, chosen: Callable) -> void:
+	browser = FolderBrowser.new(Documents.browsing(), LIST_PAGE, lister)
+	browser.empty_text = empty
+	browser.show_folder(browser.folder)
+	browser.folder_changed.connect(func(path: String) -> void: Documents.last_folder = path)
+	browser.chosen.connect(chosen)
+	_drawer.add_child(browser)
 	_drawer.add_child(Kit.text_key("Close", "Puts the list away", _cancel))
-	_show_list_page()
-
-
-## Puts the entries of the page shown in the list.
-func _show_list_page() -> void:
-	for child: Node in _list_rows.get_children():
-		_list_rows.remove_child(child)
-		child.queue_free()
-	for entry: Dictionary in _list_entries.slice(_list_pager.first, _list_pager.first + LIST_PAGE):
-		var path: String = entry.path
-		var label := str(entry.name)
-		if entry.kind == "quill":
-			label += " (Quill)"
-		var button := Kit.text_key(label, path, _list_chosen.bind(path), ENTRY_ICONS.get(entry.kind, "new_file"))
-		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.custom_minimum_size.x = Kit.u(40)
-		var when := Kit.label(Documents.local_time(int(entry.time)), true)
-		when.add_theme_font_size_override("font_size", Kit.text_size("small"))
-		_list_rows.add_child(Kit.row([button, when]))
 
 
 ## Keeps the description to `MAX_DESCRIPTION` characters, so that the box shows it

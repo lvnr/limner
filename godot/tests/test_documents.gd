@@ -209,7 +209,93 @@ func test_import_brings_a_file_from_the_folder_in_as_a_layer() -> void:
 	check_eq(int(editor.get_info().layers), layers + 1, "the sound is a new layer")
 	check_eq(row_named("tone").kind, "sound", "of its kind")
 	check_eq(panel.file_mode, "", "and the list goes")
+	# A picture and a model, as a tester in a headset tried.
+	LayerTestKit.write(folder.path_join("box.obj"), "v 0 0 0
+v 1 0 0
+v 0 1 0
+f 1 2 3
+".to_utf8_buffer())
+	await _press(panel._file_buttons.import)
+	await _press(_drawer_buttons(panel)["sky.png"])
+	check_eq(row_named("sky").kind, "picture", "the picture is a picture layer")
+	await _press(panel._file_buttons.import)
+	await _press(_drawer_buttons(panel)["box.obj"])
+	check_eq(row_named("box").kind, "model", "the model is a model layer")
 	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_the_lists_browse_folders_and_save_as_chooses_one() -> void:
+	var panel := await _panel()
+	var inner := folder.path_join("Sketches")
+	DirAccess.make_dir_recursive_absolute(inner)
+	await _paint()
+	panel.save_as("Top")
+	editor.new_document()
+	await frames(2)
+	await _paint()
+	check(editor.save_document(inner.path_join("Deep.limnz")), "a project saved in a folder inside")
+	editor.new_document()
+	await frames(2)
+
+	await _press(panel._file_buttons.open)
+	var entries := _drawer_buttons(panel)
+	check(entries.has("Sketches") and entries.has("Top"), "the list has the folder inside and the project: %s" % [entries.keys()])
+	check(not entries.has("Deep"), "but not what is in the folder inside")
+	await _press(entries["Sketches"])
+	check_eq(panel.browser.folder, inner, "pressing a folder goes into it")
+	entries = _drawer_buttons(panel)
+	check(entries.has("Deep") and not entries.has("Top"), "and lists what is there: %s" % [entries.keys()])
+	await _press(panel.browser._up)
+	check_eq(panel.browser.folder, folder, "Up goes back to the folder it is in")
+	await _press(_drawer_buttons(panel)["Sketches"])
+	await _press(_drawer_buttons(panel)["Deep"])
+	check_eq(editor.path, inner.path_join("Deep.limnz"), "a project in the folder inside opens")
+	await frames(2)
+
+	# Save as starts in the folder last browsed to, and another can be chosen.
+	editor.new_document()
+	await frames(2)
+	await _paint()
+	await _press(panel._file_buttons.save)
+	check_eq(panel.save_folder(), inner, "Save as starts where the browsing left off")
+	panel._save_name.text = "Moved"
+	await _press(_drawer_buttons(panel)["Folder"])
+	check_eq(panel.file_mode, "save_folder", "Folder shows where to save")
+	await _press(panel.browser._up)
+	await _press(_drawer_buttons(panel)["Save here"])
+	check_eq(panel.file_mode, "save_as", "Save here goes back to the name")
+	check_eq(panel._save_name.text, "Moved", "as it was typed")
+	await _press(_drawer_buttons(panel)["Save"])
+	check(FileAccess.file_exists(folder.path_join("Moved.limnz")), "saved in the folder chosen")
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
+func test_in_a_headset_an_export_folder_is_chosen_among_the_places() -> void:
+	Documents.use_folder("")
+	Kit.set_headset(true)
+	var usual := ProjectSettings.globalize_path("user://exports")
+	var target := SaveTarget.new(editor, usual)
+	mount(target, Vector2(600, 200))
+	await frames(2)
+	check(target._places.is_visible_in_tree(), "the places are on a cycler")
+	check(not target._browse.is_visible_in_tree(), "with no key for a system dialog")
+	check_eq(target.path("png").get_base_dir(), usual, "files go to the usual folder at first")
+	target._places._step(1)
+	await frames(1)
+	check_eq(target.folder, Documents.places()[0][0], "the next choice is the Limner documents folder")
+	check_eq(target.path("png").get_base_dir(), Documents.folder(), "and files go there")
+	Kit.set_headset(false)
+
+
+func test_places_and_parents() -> void:
+	Documents.use_folder("")
+	var places := Documents.places()
+	check(not places.is_empty() and places[0][0] == Documents.folder(), "the Limner documents folder is the first place")
+	if OS.get_name() == "Windows":
+		check(places.any(func(place: Array) -> bool: return String(place[1]).begins_with("Drive")), "the drives are places")
+		check_eq(Documents.parent_of("C:/"), "C:/", "the top of a drive has nothing above it")
+		check_eq(Documents.parent_of("C:/Users"), "C:/", "a folder at the top of a drive has the drive above it")
+	check_eq(Documents.parent_of("/a/b"), "/a", "the folder above")
 
 
 func test_dates_are_shown_as_the_clock_shows_them() -> void:
