@@ -71,6 +71,7 @@ func _process(delta: float) -> void:
 	var modifier := 1.0 if _pressed and _pivot_mode and not _on_ring else _modifier()
 	scene.input_hand(1, Vector3.ZERO, Quaternion.IDENTITY, modifier, 0.0, Vector2.ZERO, 0)
 	scene.input_head(camera.global_position)
+	scene.input_head_facing(-camera.global_basis.z)
 	for feedback: Dictionary in scene.input_commit(delta):
 		if feedback.type == "message":
 			editor.message.emit(feedback.text, true)

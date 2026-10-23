@@ -73,6 +73,8 @@ pub struct InputFrame {
     pub dt: f64,
     /// Where the eyes are, in viewer space.
     pub head: DVec3,
+    /// Which way the eyes look, in viewer space.
+    pub facing: DVec3,
     /// The drawing hand.
     pub main: HandInput,
     /// The other hand.
@@ -84,6 +86,7 @@ impl Default for InputFrame {
         Self {
             dt: 1.0 / 90.0,
             head: DVec3::new(0.0, 1.6, 0.0),
+            facing: DVec3::NEG_Z,
             main: HandInput::default(),
             off: HandInput::default(),
         }

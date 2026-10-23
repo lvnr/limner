@@ -269,6 +269,7 @@ func _process(delta: float) -> void:
 	else:
 		scene.input_hand_absent(1)
 	scene.input_head(rig.head.global_position)
+	scene.input_head_facing(-rig.head.global_basis.z)
 	for feedback: Dictionary in scene.input_commit(step):
 		_react(feedback, main_side, off_side)
 	sounds.follow_tool(scene)

@@ -127,7 +127,9 @@ grab:     {size, inner, strength}
 thicken:  {size, inner, strength}
 nudge:    {size, inner, strength}
 optimize: {size, threshold}
-symmetry: "off" | "x" | "y" | "z"     mirrored working, across the pivot of the paint layer
+symmetry: "off" | "x" | "y" | "z"     mirrored working, across the pivot of the paint layer; turned on for a layer whose
+                                      pivot is not set, it sets one 0.45 m ahead of the eyes and 0.25 m below them, square
+                                      to the way they face, as its own undo step ("Place the mirror")
 ```
 
 - `brush`: `"capped_cylinder"`, `"capped_ellipse"`, `"rounded_ribbon"`, `"cylinder"`, `"ellipse"`, `"ribbon"`, `"cube"` (the order of the Tools panel).
@@ -263,7 +265,7 @@ Only one shell runs at a time, but which one can change while the app runs (`Lim
 |---|---|
 | `input_hand(which, position, rotation, trigger, grip, stick, buttons)` | One hand this frame, in viewer space. `which` 0 is the drawing hand. |
 | `input_hand_ray(which, origin, direction)` | For a hand steered from a screen: the line of sight through the pointer. Call after `input_hand`. Handles of the gimbal are then picked along it. |
-| `input_hand_absent(which)`, `input_head(position)` | |
+| `input_hand_absent(which)`, `input_head(position)`, `input_head_facing(forward)` | Where the eyes are and which way they look, in viewer space; the facing is kept until given again (it places the mirror). |
 | `input_commit(delta) -> Array` | Applies the frame. Returns feedback: `{type: "haptic", main, strength, seconds}`, `{type: "sound", name}`, `{type: "message", text}`, `{type: "menu"}`. |
 | `input_cancel()` | Abandons the gesture or grab under way and undoes what it did. |
 | `tool_cursor() -> Dictionary` | `{tracked, position, mirror_position, rotation, tool, radius, inner, color, opacity, active, painting, blocked, grid_snap, alt, at_handle}`. `active`: the trigger is working the tool or a handle. `painting`: Paint or Line is laying down a stroke. `blocked`: the message the trigger would give because the current layer is not one the tool can work on, or `""`; `ToolCursor` then draws a hollow grey ring. `grid_snap`: the Line tool is in hand with the modifier held. |

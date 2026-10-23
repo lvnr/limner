@@ -5,9 +5,16 @@
 //! animated, possibly mirrored) placement in the world.
 
 use crate::eval::{Content, RenderFrame};
+use crate::math::Xform;
 use crate::model::{DrawingId, LayerId};
 use crate::session::Session;
-use glam::{DAffine3, DVec3};
+use glam::{DAffine3, DMat3, DQuat, DVec3};
+
+/// Where the mirror of mirrored working is stood when it is turned on for a paint
+/// layer whose pivot has not been set: this far ahead of the eyes and this far below
+/// them, in viewer-space metres (see [`Session::place_mirror`]).
+pub const MIRROR_AHEAD: f64 = 0.45;
+pub const MIRROR_BELOW: f64 = 0.25;
 
 #[derive(Clone, Copy, Debug)]
 pub struct LayerSpace {
@@ -58,6 +65,57 @@ impl Session {
                 .mul(&crate::math::Xform::from_flip(flip))
                 .mul(&pivot.inverse()),
         )
+    }
+
+    /// Turning mirrored working on for a paint layer whose pivot has not been set
+    /// stands the mirror in front of the viewer, square to the way they face, rather
+    /// than through the layer's origin: in a headset that is the middle of the room's
+    /// floor, which may be well away from where the user stands and turned any way,
+    /// so that the twin of a stroke appeared somewhere unexpected. Sets the layer's
+    /// pivot there, in an undo step of its own; the mirror goes through the pivot, so
+    /// it moves with it. A pivot that was set already is kept.
+    pub(crate) fn place_mirror(&mut self) {
+        let Some(id) = self.paint_layer() else {
+            return;
+        };
+        if self
+            .doc
+            .layer(id)
+            .is_none_or(|l| l.locked || !l.pivot.is_identity())
+        {
+            return;
+        }
+        let frame = self.evaluate();
+        let Some(space) = self.layer_space(&frame, id) else {
+            return;
+        };
+        let head = self.last_input.head;
+        let level = DVec3::new(self.last_input.facing.x, 0.0, self.last_input.facing.z);
+        let ahead = level.try_normalize().unwrap_or(DVec3::NEG_Z);
+        let spot = head + ahead * MIRROR_AHEAD - DVec3::Y * MIRROR_BELOW;
+        // The pivot's own axes in the layer's space: -Z the way the viewer faces, Y up.
+        let to_layer = |v: DVec3| space.layer_from_viewer.transform_vector3(v).try_normalize();
+        let (Some(back), Some(up)) = (to_layer(-ahead), to_layer(DVec3::Y)) else {
+            return;
+        };
+        let Some(right) = up.cross(back).try_normalize() else {
+            return;
+        };
+        let up = back.cross(right);
+        let pivot = Xform {
+            translation: space.layer_from_viewer.transform_point3(spot),
+            rotation: DQuat::from_mat3(&DMat3::from_cols(right, up, back)).normalize(),
+            ..Xform::IDENTITY
+        };
+        if !pivot.is_finite() {
+            return;
+        }
+        let _ = self.edit("Place the mirror", |session| {
+            if let Some(layer) = session.doc_mut().layer_mut(id) {
+                layer.pivot = pivot;
+            }
+            Ok(())
+        });
     }
 
     /// Where the mirror plane is in viewer space, for drawing it: a point on it, and

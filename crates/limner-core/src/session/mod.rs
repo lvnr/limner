@@ -1421,7 +1421,12 @@ impl Session {
             Command::SetToolSettings { values } => {
                 let mut tools = patched(&self.tools, &values).map_err(CommandError::Invalid)?;
                 tools.sanitize();
+                let mirror_on = tools.symmetry != tools::Symmetry::Off
+                    && self.tools.symmetry == tools::Symmetry::Off;
                 self.tools = tools;
+                if mirror_on {
+                    self.place_mirror();
+                }
                 Value::Null
             }
             Command::SetColor { color } => {

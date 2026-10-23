@@ -596,6 +596,14 @@ impl LimnerScene {
         self.input.head = dvec3(position);
     }
 
+    /// Which way the eyes look, in viewer space. Kept until it is given again.
+    #[func]
+    fn input_head_facing(&mut self, forward: Vector3) {
+        if let Some(forward) = dvec3(forward).try_normalize() {
+            self.input.facing = forward;
+        }
+    }
+
     /// Applies the input described since the last commit: runs the tool, grabs, and
     /// button actions. Returns what the device should do in response, as dictionaries
     /// with a `type` of "haptic" (`main`, `strength`, `seconds`), "sound" (`name`),

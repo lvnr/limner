@@ -20,7 +20,8 @@ func test_a_twin_shows_where_mirrored_tools_also_act() -> void:
 	await frames(2)
 	check(cursor.visible, "the preview follows a hand that is there")
 	check_eq(cursor.mirror_position(), null, "no twin without a mirror")
-	# The paint layer's pivot is at the origin, so a mirror on X is the plane x = 0.
+	# Turned on, the mirror stands in front of the eyes, which look along -Z from x = 0,
+	# so a mirror on X is the plane x = 0.
 	run({"cmd": "set_tool_settings", "values": {"symmetry": "x"}})
 	await frames(2)
 	var twin: Variant = cursor.mirror_position()

@@ -1081,6 +1081,68 @@ fn the_other_hand_switches_to_selection_steps_frames_and_plays() {
 }
 
 #[test]
+fn turning_the_mirror_on_stands_it_in_front_of_the_viewer_unless_the_pivot_is_set() {
+    let (mut session, layer) = session();
+    // The viewer stands away from the room's middle, facing along +X.
+    let head = DVec3::new(2.0, 1.6, 1.0);
+    session.update(&InputFrame {
+        head,
+        facing: DVec3::new(1.0, -0.3, 0.0),
+        ..InputFrame::default()
+    });
+    session
+        .exec_json(&serde_json::json!({"cmd": "set_tool_settings", "values": {"symmetry": "x"}}))
+        .unwrap();
+    assert_eq!(session.history().undo_label(), Some("Place the mirror"));
+    let (on_plane, turn) = session.mirror_plane().expect("a mirror");
+    let ahead = DVec3::X;
+    let expected =
+        head + ahead * super::space::MIRROR_AHEAD - DVec3::Y * super::space::MIRROR_BELOW;
+    assert!(
+        (on_plane - expected).length() < 1e-9,
+        "in front of the eyes: {on_plane:?}"
+    );
+    // A mirror on X is square to the viewer's right, which facing +X is +Z (or -Z).
+    assert!(
+        (turn * DVec3::Z).dot(DVec3::Z).abs() > 1.0 - 1e-9,
+        "square to the viewer's right"
+    );
+
+    // A twin lands across that plane, beside the stroke, not across the room.
+    session.tools.paint.brush = BrushStyle::Ribbon;
+    drag(
+        &mut session,
+        expected + DVec3::new(0.0, 0.0, 0.1),
+        expected + DVec3::new(0.1, 0.0, 0.1),
+        10,
+    );
+    let drawn = strokes(&session, layer);
+    assert_eq!(drawn.len(), 2, "the stroke and its twin");
+    let twin_z = drawn
+        .iter()
+        .map(|stroke| stroke.points()[0].position().z as f64)
+        .fold(f64::INFINITY, f64::min);
+    assert!(
+        (twin_z - (expected.z - 0.1)).abs() < 1e-3,
+        "the twin the other side of the viewer: {twin_z}"
+    );
+
+    // Off and on again keeps the pivot it was given.
+    session
+        .exec_json(&serde_json::json!({"cmd": "set_tool_settings", "values": {"symmetry": "off"}}))
+        .unwrap();
+    session.update(&InputFrame::default());
+    session
+        .exec_json(&serde_json::json!({"cmd": "set_tool_settings", "values": {"symmetry": "y"}}))
+        .unwrap();
+    let (again, _) = session.mirror_plane().expect("a mirror");
+    assert!(
+        (again - expected).length() < 1e-9,
+        "a pivot that was set stays"
+    );
+}
+
+#[test]
 fn mirrored_working_paints_and_edits_on_both_sides_of_the_pivot_plane() {
     use crate::session::tools::Symmetry;
     let (mut session, layer) = session();
