@@ -453,6 +453,34 @@ func test_the_stick_pages_the_layer_rows_under_the_pointer() -> void:
 	check_near(after, before, "and did not resize the brush", 1e-6)
 
 
+func test_the_stick_zooms_and_moves_the_timeline_under_the_tip() -> void:
+	if not await _start():
+		return
+	var surface := await _open("Layers")
+	var panel: TimelinePanel = surface.content
+	var view := panel.view
+	var tracks := view.tracks_rect()
+	var spot := surface.world_point(surface.pixel_of(view) - view.size * 0.5 + tracks.get_center())
+	var zoom := view.axis.zoom
+	var size_before: float = world.scene.tool_settings()["paint"]["size"]
+	await sim.play([
+		{"time": 0.0, "right": {"tip": spot + _normal(surface) * 0.03}},
+		{"time": 0.1, "right": {"stick": Vector2(0.0, 1.0)}},
+		{"time": 0.4, "right": {"stick": Vector2.ZERO}},
+		{"time": 0.5},
+	])
+	check(view.axis.zoom > zoom * 1.5, "pushing the stick up over the tracks zooms in: %f to %f" % [zoom, view.axis.zoom])
+	var start := view.axis.start
+	await sim.play([
+		{"time": 0.0, "right": {"stick": Vector2(1.0, 0.0)}},
+		{"time": 0.3, "right": {"stick": Vector2.ZERO}},
+		{"time": 0.4},
+	])
+	check(view.axis.start > start, "and pushing it right moves on along time")
+	check_near(world.scene.tool_settings()["paint"]["size"], size_before, "the brush is not resized", 1e-6)
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
+
 func test_the_lower_button_over_a_panel_opens_nothing() -> void:
 	if not await _start():
 		return

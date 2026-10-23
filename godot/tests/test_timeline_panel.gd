@@ -383,6 +383,36 @@ func test_panel_fits_and_its_timeline_closes() -> void:
 	check(panel.view.is_visible_in_tree(), "shown again")
 
 
+func test_rows_and_tracks_line_up_in_both_interfaces_for_every_kind() -> void:
+	for headset: bool in [true, false]:
+		Kit.set_headset(headset)
+		var panel := TimelinePanel.new(editor)
+		mount(panel, panel.pixel_size() if headset else Vector2(1500, 420))
+		for kind: String in ["paint", "group", "sequence", "camera", "light", "viewpoint"]:
+			run({"cmd": "add_layer", "kind": kind})
+		await frames(3)
+		var ids: Array = [editor.get_rows()[0].id]
+		for row: Dictionary in editor.get_rows():
+			ids.append(row.id)
+		for id: Variant in ids:
+			run({"cmd": "select_layers", "layers": [int(id)]})
+			await frames(3)
+			var view := panel.view
+			var first_track := view.get_global_rect().position.y + view.ruler_height
+			var shown := panel.layer_rows.page_rows().size()
+			for index in shown:
+				var row: Control = panel.layer_rows._lines[index].row
+				var expected := first_track + index * view.row_height
+				if absf(row.get_global_rect().position.y - expected) > 1.0:
+					failures.append("%s, current layer %s: row %d is at %.1f, its track at %.1f" % ["headset" if headset else "desktop", id, index, row.get_global_rect().position.y, expected])
+					break
+			if headset:
+				check_fits(panel, "headset, current layer %s" % id)
+		panel.queue_free()
+		await frames(1)
+	Kit.set_headset(false)
+
+
 func test_in_a_headset_it_has_a_fixed_size_with_ten_rows() -> void:
 	Kit.set_headset(true)
 	var panel := TimelinePanel.new(editor)
@@ -403,6 +433,24 @@ func test_in_a_headset_it_has_a_fixed_size_with_ten_rows() -> void:
 
 
 # ---- frames ----
+
+func test_new_frames_are_made_over_the_layer_rows_with_the_timeline_closed() -> void:
+	var panel := await _panel()
+	var paint := _paint()
+	_press(panel, "collapse")
+	await frames(2)
+	check_eq(panel.collapsed, true, "the timeline is closed")
+	_press(panel, "new_frame")
+	await frames(2)
+	check_eq(panel.timeline[paint].paint.frames, [0, 1], "a blank key frame from the key over the rows")
+	_press(panel, "copy_frame")
+	await frames(2)
+	check_eq(panel.timeline[paint].paint.frames, [0, 1, 2], "and a copy")
+	run({"cmd": "add_layer", "kind": "group"})
+	await frames(2)
+	check((panel.controls.new_frame as Button).disabled, "a group has no frames to add")
+	check(messages.is_empty(), "no errors: %s" % [messages])
+
 
 func test_frame_commands_change_the_frames() -> void:
 	var panel := await _panel()

@@ -442,9 +442,11 @@ func pointer_context(pixel: Vector2) -> void:
 	wake()
 
 
-## One notch of scrolling at `pixel`, up or down.
-func pointer_scroll(pixel: Vector2, up: bool) -> void:
+## One notch of scrolling at `pixel`, up or down; `across`, right or left.
+func pointer_scroll(pixel: Vector2, up: bool, across := false) -> void:
 	var wheel := MOUSE_BUTTON_WHEEL_UP if up else MOUSE_BUTTON_WHEEL_DOWN
+	if across:
+		wheel = MOUSE_BUTTON_WHEEL_RIGHT if up else MOUSE_BUTTON_WHEEL_LEFT
 	_push_button(pixel, wheel, true)
 	_push_button(pixel, wheel, false)
 	wake()

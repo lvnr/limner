@@ -192,10 +192,14 @@ func _hover(tip: Transform3D, state: XRHandState, delta: float) -> void:
 			_press()
 	if state.lower and not _lower_was_down:
 		surface.pointer_context(pixel)
-	if absf(state.stick.y) > STICK_DEADZONE:
-		_scroll += state.stick.y * SCROLL_RATE * delta
+	# Up and down scroll. Left and right scroll across, but only up close: pointed
+	# from afar, they are undo and redo for the artwork.
+	var across := mode == Mode.POKE and absf(state.stick.x) > absf(state.stick.y)
+	var push := state.stick.x if across else state.stick.y
+	if absf(push) > STICK_DEADZONE:
+		_scroll += push * SCROLL_RATE * delta
 		while absf(_scroll) >= 1.0:
-			surface.pointer_scroll(pixel, _scroll > 0.0)
+			surface.pointer_scroll(pixel, _scroll > 0.0, across)
 			_scroll -= signf(_scroll)
 	else:
 		_scroll = 0.0

@@ -57,10 +57,9 @@ const MODIFIER := [
 ]
 ## What the drawing hand does on the gimbal.
 const GIMBAL := [
-	["Grip or trigger: arrow / square", "Move along that axis / in that plane."],
-	["Grip: ring", "Turn about that axis."],
-	["Trigger: ring", "Turn in snapped steps (Rotation snap steps, in Transform)."],
-	["Grip or trigger: centre", "Move freely."],
+	["Arrow / square", "Grip or trigger: move along that axis / in that plane."],
+	["Ring", "Grip: turn about that axis. Trigger: turn in snapped steps (Rotation snap steps, in Transform)."],
+	["Centre", "Grip or trigger: move freely."],
 	["Modifier + trigger", "On an arrow, a square or the centre: move the pivot; the thing stays."],
 ]
 ## How the panels are worked. These belong to the drawing hand.
@@ -69,6 +68,7 @@ const PANELS := [
 	["Pointing from afar", "A ray shows where. The trigger is the button; the grip still takes hold of the artwork."],
 	["Modifier held", "A press adds a key or a row to the selection."],
 	["Stick up / down", "Step the page of a list under the pointer: the layers, the files."],
+	["Stick on the timeline", "Up / down: zoom. Left / right, tip close: earlier / later."],
 	["Grip, tip close", "Pick the panel up and leave it anywhere in the room. The stick resizes it while held."],
 ]
 ## Names of the lower and upper face buttons on a left and on a right Touch controller.

@@ -61,6 +61,10 @@ var playhead := 0
 ## The height of a row, of the ruler, and of the scroll bars (0 without them). The
 ## Layers panel sets them so that its rows of keys and these tracks line up.
 var row_height := float(ROW)
+## How much larger than on the desktop keys and frame marks are drawn, and how far
+## from one a press still takes it: larger in a headset, where a tip is less exact
+## than a mouse and the first tester missed keys that were there.
+var mark_scale := 1.0
 var ruler_height := RULER
 var bar_size := BAR
 ## Whether the view draws its own column of layer names. Without it the tracks start
@@ -507,7 +511,7 @@ func _draw_frames(id: int, line: Dictionary, clip: Dictionary, bar: Rect2, start
 		if is_key and x >= bar.position.x:
 			draw_line(Vector2(x + 0.5, bar.position.y), Vector2(x + 0.5, bar.end.y), Color(0.0, 0.0, 0.0, 0.6 * strength), 1.0)
 			var dot := Vector2(x + minf(width, 16.0) * 0.5 + 0.5, middle + 4.5)
-			var radius := clampf(width * 0.3, 2.0, 3.2)
+			var radius := clampf(width * 0.3, 2.0, 3.2 * mark_scale)
 			if empty:
 				draw_arc(dot, radius, 0.0, TAU, 12, Color(1.0, 1.0, 1.0, 0.9 * strength), 1.4, true)
 			else:
@@ -575,11 +579,11 @@ func _draw_opacity_keys(id: int, line: Dictionary, top: float, area: Rect2, from
 			continue
 		drawn = at.x
 		if is_chosen:
-			draw_circle(at, 5.5, Color.WHITE)
-			draw_circle(at, 4.0, Kit.CHOSEN)
+			draw_circle(at, 5.5 * mark_scale, Color.WHITE)
+			draw_circle(at, 4.0 * mark_scale, Kit.CHOSEN)
 		else:
-			draw_circle(at, 4.2, Color(0.0, 0.0, 0.0, 0.7))
-			draw_circle(at, 3.0, Color(1.0, 1.0, 1.0, 1.0 if active else 0.6))
+			draw_circle(at, 4.2 * mark_scale, Color(0.0, 0.0, 0.0, 0.7))
+			draw_circle(at, 3.0 * mark_scale, Color(1.0, 1.0, 1.0, 1.0 if active else 0.6))
 
 
 ## Adds the stretch of an opacity curve between two keys, as far as it is in view.
@@ -622,7 +626,7 @@ func _draw_transform_keys(id: int, line: Dictionary, top: float, from: int, to: 
 	var origin := int(line.origin)
 	var active := panel.key_track == "transform"
 	var chosen := _chosen_times(id, "transform")
-	var reach := axis.duration_of(8.0)
+	var reach := axis.duration_of(8.0 * mark_scale)
 	var middle := top + row_height * 0.5
 	var drawn := -100.0
 	for number in range(first_at_or_after(keys, from - origin - reach), keys.size()):
@@ -636,11 +640,11 @@ func _draw_transform_keys(id: int, line: Dictionary, top: float, from: int, to: 
 			continue
 		drawn = x
 		if is_chosen:
-			_draw_diamond(Vector2(x, middle), 7.5, Color.WHITE)
-			_draw_diamond(Vector2(x, middle), 5.5, Kit.CHOSEN)
+			_draw_diamond(Vector2(x, middle), 7.5 * mark_scale, Color.WHITE)
+			_draw_diamond(Vector2(x, middle), 5.5 * mark_scale, Kit.CHOSEN)
 		else:
-			_draw_diamond(Vector2(x, middle), 6.5, Color(0.0, 0.0, 0.0, 0.75))
-			_draw_diamond(Vector2(x, middle), 4.8, Color(1.0, 1.0, 1.0, 1.0 if active else 0.6))
+			_draw_diamond(Vector2(x, middle), 6.5 * mark_scale, Color(0.0, 0.0, 0.0, 0.75))
+			_draw_diamond(Vector2(x, middle), 4.8 * mark_scale, Color(1.0, 1.0, 1.0, 1.0 if active else 0.6))
 
 
 ## The selected key times of a layer as a set, when `track` is the kind being selected.
@@ -880,7 +884,7 @@ func key_at(at: Vector2, index: int) -> Dictionary:
 		return {}
 	var origin := int(line.origin)
 	var time := time_at(at.x) - origin
-	var reach := axis.duration_of(KEY_REACH)
+	var reach := axis.duration_of(KEY_REACH * mark_scale)
 	var order := [panel.key_track]
 	for track: String in TRACKS:
 		if track != panel.key_track:
@@ -1055,12 +1059,19 @@ func _on_bar_input(event: InputEvent, bar: Control) -> void:
 
 
 ## The wheel pans along time; with Ctrl or Cmd it zooms about the pointer; with
-## Shift, or over the names, it scrolls the rows.
+## Shift, or over the names, it scrolls the rows. In a headset, where the wheel is
+## the stick, up and down zoom about the pointer and left and right pan.
 func _on_wheel(button: InputEventMouseButton) -> void:
 	var amount := button.factor if button.factor > 0.0 else 1.0
 	var back := button.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_LEFT]
 	var over_names := button.position.x < names_width
-	if (button.ctrl_pressed or button.meta_pressed) and not over_names:
+	var up_or_down := button.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]
+	if Kit.headset and not over_names:
+		if up_or_down:
+			zoom_at(button.position.x, pow(1.18, amount if back else -amount))
+		else:
+			pan_pixels((-1.0 if back else 1.0) * 48.0 * amount)
+	elif (button.ctrl_pressed or button.meta_pressed) and not over_names:
 		zoom_at(button.position.x, pow(1.18, amount if back else -amount))
 	elif button.shift_pressed or over_names:
 		scroll_rows((-1.0 if back else 1.0) * row_height * amount)

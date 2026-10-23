@@ -17,14 +17,19 @@ signal settings_requested(layer: int)
 signal import_requested
 
 ## The widths of the layers part and of the timeline part, the height of the band of
-## keys over the rows and over the tracks, and of the ruler, in design pixels.
+## keys over the rows and over the tracks (in a headset, where the timeline is
+## narrower and its keys wrap to one more line, and on the desktop), and of the
+## ruler, in design pixels.
 const LEFT_WIDTH := 620
 const TIMELINE_WIDTH := 900
-const BAND_HEIGHT := 136
+const BAND_HEIGHT := 176
+const DESKTOP_BAND_HEIGHT := 136
 const RULER_HEIGHT := 34
 ## How many layer rows a page shows in a headset; the desktop fits them to its dock.
 const HEADSET_ROWS := 10
 const DESKTOP_ROWS := 4
+## How much larger keys and frame marks are on the tracks in a headset.
+const HEADSET_MARKS := 1.7
 ## The height the desktop gives the panel at first, and the least, in pixels.
 const DEFAULT_HEIGHT := 360.0
 const MIN_HEIGHT := 260.0
@@ -84,6 +89,9 @@ var _tools: HFlowContainer
 var _context: HFlowContainer
 var _left: VBoxContainer
 var _right: VBoxContainer
+## The bands of keys over the rows and over the tracks.
+var _left_band: VBoxContainer
+var _right_band: VBoxContainer
 var _opacity: SliderRow
 ## The keys that add and arrange layers, by name.
 var _layer_keys := {}
@@ -145,11 +153,11 @@ func _init(limner_editor: LimnerEditor) -> void:
 	_left.name = "LayersPart"
 	_left.custom_minimum_size.x = Kit.u(LEFT_WIDTH)
 	body.add_child(_left)
-	var left_band := Kit.key_column()
-	left_band.name = "Band"
-	left_band.custom_minimum_size.y = Kit.u(BAND_HEIGHT)
-	_left.add_child(left_band)
-	_build_layer_keys(left_band)
+	_left_band = Kit.key_column()
+	_left_band.name = "Band"
+	_left_band.custom_minimum_size.y = _band_height()
+	_left.add_child(_left_band)
+	_build_layer_keys(_left_band)
 	layer_rows = LayerRows.new(editor, per_page)
 	layer_rows.header_height = Kit.u(RULER_HEIGHT)
 	layer_rows.settings_requested.connect(func(layer: int) -> void: settings_requested.emit(layer))
@@ -160,20 +168,25 @@ func _init(limner_editor: LimnerEditor) -> void:
 	_right.name = "TimelinePart"
 	_right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	body.add_child(_right)
-	var right_band := Kit.key_column()
-	right_band.name = "Band"
-	right_band.custom_minimum_size.y = Kit.u(BAND_HEIGHT)
-	_right.add_child(right_band)
+	_right_band = Kit.key_column()
+	_right_band.name = "Band"
+	_right_band.custom_minimum_size.y = _band_height()
+	_right.add_child(_right_band)
 	_tools = _flow()
-	right_band.add_child(_tools)
+	_right_band.add_child(_tools)
 	_build_options()
 	_context = _flow()
-	right_band.add_child(_context)
+	_right_band.add_child(_context)
 	_build_context()
+	# The rows line up with their tracks only while the bands over them are as tall,
+	# and the keys over the tracks change with the current layer: a band of more
+	# lines than planned, in a headset, once put every row a line above its track.
+	_right_band.minimum_size_changed.connect(_match_bands)
 	view = TimelineView.new(self)
 	view.show_names = false
 	view.bar_size = 0.0
 	view.row_height = LayerRows.pitch()
+	view.mark_scale = HEADSET_MARKS if Kit.headset else 1.0
 	view.ruler_height = Kit.u(RULER_HEIGHT)
 	view.custom_minimum_size = Vector2(Kit.u(200), view.ruler_height + view.row_height * per_page)
 	_right.add_child(view)
@@ -184,7 +197,8 @@ func _init(limner_editor: LimnerEditor) -> void:
 ## The panel's size in design pixels, with the timeline open or not and `per_page` rows.
 static func _design_size(open: bool, per_page: int) -> Vector2:
 	var rows := float(Kit.KEY + 4) * per_page
-	var height := Kit.KEY + Kit.SPACE + BAND_HEIGHT + Kit.SPACE + RULER_HEIGHT + rows + 4 + Kit.KEY + Kit.SPACE
+	var band := BAND_HEIGHT if Kit.headset else DESKTOP_BAND_HEIGHT
+	var height := Kit.KEY + Kit.SPACE + band + Kit.SPACE + RULER_HEIGHT + rows + 4 + Kit.KEY + Kit.SPACE
 	return Vector2(LEFT_WIDTH + (Kit.SPACE + TIMELINE_WIDTH if open else 0), height)
 
 
@@ -623,6 +637,13 @@ func _build_layer_keys(band: VBoxContainer) -> void:
 		var kind: String = entry[0]
 		_layer_key(adding, "add_" + kind, entry[1], entry[2], func() -> void: editor.run({"cmd": "add_layer", "kind": kind}))
 	_layer_key(adding, "import", "import", "Import a picture, a model, a sound or another project as a new layer", func() -> void: import_requested.emit())
+	# Frames are made here too, where they are found with the timeline closed; in a
+	# headset the first tester looked for them and did not find them.
+	var gap := Control.new()
+	gap.custom_minimum_size.x = Kit.u(Kit.SPACE * 2)
+	adding.add_child(gap)
+	_layer_key(adding, "new_frame", "tl_frame_blank", "New frame: a blank key frame after this one, on the current paint layer, to draw the next drawing on", func() -> void: _on_layer("add_frame", {"kind": "blank"}))
+	_layer_key(adding, "copy_frame", "tl_frame_duplicate", "Copy frame: a key frame after this one that starts as a copy of it", func() -> void: _on_layer("add_frame", {"kind": "duplicate"}))
 	band.add_child(adding)
 	var arranging := Kit.key_row()
 	_layer_key(arranging, "rename", "rename", "Rename the current layer", func() -> void: layer_rows.start_rename())
@@ -903,6 +924,8 @@ func _update_layer_keys() -> void:
 		(_layer_keys[key] as Button).disabled = not has or is_root
 	(_layer_keys.rename as Button).disabled = not has
 	(_layer_keys.merge as Button).disabled = not has or current.kind != "paint"
+	for key: String in ["new_frame", "copy_frame"]:
+		(_layer_keys[key] as Button).disabled = not has or current.kind != "paint" or current.locked
 	(_layer_keys.flatten as Button).disabled = not has or is_root or current.kind not in ["group", "sequence"]
 	_opacity.set_editable(has and not current.locked)
 	if has:
@@ -947,9 +970,24 @@ func set_collapsed(on: bool) -> void:
 func _show_collapsed(on: bool) -> void:
 	collapsed = on
 	_right.visible = not on
+	_match_bands()
 	design_size = _design_size(not on, layer_rows.pager.per_page) if Kit.headset else _desktop_size(not on, layer_rows.pager.per_page)
 	if Kit.headset:
 		custom_minimum_size = pixel_size()
+
+
+## The least height of the bands of keys over the rows and the tracks, in the
+## interface's pixels.
+static func _band_height() -> int:
+	return Kit.u(BAND_HEIGHT if Kit.headset else DESKTOP_BAND_HEIGHT)
+
+
+## Makes the band over the rows as tall as the one over the tracks, while that shows.
+func _match_bands() -> void:
+	var tallest := float(_band_height())
+	if _right.visible:
+		tallest = maxf(tallest, _right_band.get_combined_minimum_size().y)
+	_left_band.custom_minimum_size.y = tallest
 
 
 func _on_grip_input(event: InputEvent) -> void:

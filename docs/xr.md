@@ -134,7 +134,8 @@ Over a panel the drawing hand's controls mean something else, and the core sees 
 | Tip pushed 3 mm into a key, or 3 mm through the flat of the sheet | Press; pulled back 6 mm in front of the key's top: release. A short buzz on the press. The key goes down with the tip |
 | Pointing from farther off, up to 2 m | A ray and a dot; the trigger is the button. The grip, the stick's left and right and the upper button still work the artwork |
 | Modifier (the other hand's trigger) held | Presses come with Ctrl: a tap adds a key or a row to the selection, as a Ctrl click does |
-| Stick up / down | Scroll (or resize a panel that is being held) |
+| Stick up / down | Scroll (or resize a panel that is being held). Over the timeline's tracks: zoom |
+| Stick left / right, tip close | Scroll across. Over the timeline's tracks: earlier / later. Pointed from afar they stay undo and redo |
 | Lower button | The other mouse button: opens a context menu where there is one |
 | Grip, with the tip close | Pick the panel up; it stays where it is let go |
 
